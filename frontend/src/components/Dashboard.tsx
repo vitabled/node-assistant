@@ -4,6 +4,7 @@ import {
   AlertTriangle, XCircle, Server, Clock,
 } from "lucide-react";
 import { COUNTRIES } from "./CountrySelect";
+import { getFlagEmoji } from "../utils/format";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
 type TickStatus = "up" | "slow" | "down";
@@ -32,14 +33,18 @@ function extractFlag(s: string): string | null {
   }
   return null;
 }
+// Resolve a flag from a node's location group. xray-checker gives a free-form
+// groupName (a 2-letter code, a country name, or a string with an embedded
+// flag), so we try each and always route the final code through getFlagEmoji.
 function flagFor(group: string): string {
-  const embedded = extractFlag(group);
+  const embedded = extractFlag(group);          // already-a-flag emoji
   if (embedded) return embedded;
-  const g = group.trim().toLowerCase();
-  const exact = COUNTRIES.find(c => c.name.toLowerCase() === g || c.code.toLowerCase() === g);
-  if (exact) return exact.flag;
-  const sub = COUNTRIES.find(c => c.code !== "XX" && g.includes(c.name.toLowerCase()));
-  return sub ? sub.flag : "🏳️";
+  const g = group.trim();
+  if (/^[A-Za-z]{2}$/.test(g)) return getFlagEmoji(g);   // raw ISO code, e.g. "US"
+  const gl = g.toLowerCase();
+  const match = COUNTRIES.find(c =>
+    c.code !== "XX" && (c.name.toLowerCase() === gl || gl.includes(c.name.toLowerCase())));
+  return match ? getFlagEmoji(match.code) : "🌐";
 }
 function fmtDuration(sec: number): string {
   if (sec < 60) return `${sec} сек`;

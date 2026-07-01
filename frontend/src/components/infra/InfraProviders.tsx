@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Plus, Loader2, Pencil, Trash2, ExternalLink, RefreshCw, CreditCard } from "lucide-react";
 import { infraApi, type Provider } from "./api";
 import { toast } from "./Toast";
+import { getFlagEmoji } from "../../utils/format";
 
 const EMPTY = { name: "", favicon_link: "", login_url: "", balance: "0", currency: "RUB", low_balance_threshold: "0" };
 
@@ -72,6 +73,9 @@ export function InfraProviders() {
                         {p.faviconLink
                           ? <img src={p.faviconLink} alt="" className="w-4 h-4 rounded" onError={e => (e.currentTarget.style.display = "none")} />
                           : <span className="w-4 h-4 rounded bg-gray-700" />}
+                        {/* Geo flag — shown only when the provider carries a location code
+                            (Remnawave providers currently have none; future-ready). */}
+                        {p.countryCode && <span title={p.countryCode}>{getFlagEmoji(p.countryCode)}</span>}
                         <span className="text-gray-200">{p.name}</span>
                         {p.loginUrl && <a href={p.loginUrl} target="_blank" rel="noreferrer" className="text-gray-600 hover:text-blue-400"><ExternalLink size={11} /></a>}
                       </div>

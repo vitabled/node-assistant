@@ -28,6 +28,7 @@ export interface Provider {
   uuid: string; name: string; faviconLink: string; loginUrl: string; nodeCount: number;
   balance: number; currency: string; lowBalanceThreshold: number;
   status: string; apiTokenId: string; apiTokenName: string;
+  countryCode?: string;   // optional geo-location (rendered as a flag when present)
 }
 export interface Project {
   id: string; name: string; description: string; node_uuids: string[];
