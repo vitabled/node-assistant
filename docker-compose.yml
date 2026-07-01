@@ -1,0 +1,61 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: node-installer-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Shared docker network name — node-assistant attaches the xray-checker
+      # container to it and reaches the checker by container name.
+      - XRAY_CHECKER_NETWORK=node-assistant-net
+    volumes:
+      - node-data:/app/data
+      # Docker-out-of-Docker: manage the sibling xray-checker container via the
+      # host daemon. The backend runs as root, so it can read the socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "8000"
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE=/api
+        - VITE_WS_BASE=/ws
+    container_name: node-installer-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  app-net:
+    # Explicit name so node-assistant can attach the xray-checker container to
+    # this exact network (must match XRAY_CHECKER_NETWORK above).
+    name: node-assistant-net
+    driver: bridge
+
+volumes:
+  node-data:

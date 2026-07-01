@@ -1,0 +1,79 @@
+from __future__ import annotations
+from typing import Optional
+from pydantic import BaseModel
+
+
+class RemnavaveConfig(BaseModel):
+    panel_url: str = ""
+    api_token: str = ""
+    default_internal_squad_ids: list[str] = []
+    default_external_squad_ids: list[str] = []
+
+
+class DeployDefaults(BaseModel):
+    ssh_user: str = "root"
+    email: str = ""
+    cloudflare_api_key: str = ""
+    current_ssh_port: int = 22
+    new_ssh_port: int = 2222
+    open_ports: str = "80,443,8443"
+    change_ssh_port: bool = True
+    remnanode_port: int = 2222
+    xhttp_path: str = ""
+    # HAProxy relay defaults
+    haproxy_source_port: int = 443
+    haproxy_dest_port: int = 443
+    haproxy_maxconn: int = 200000
+    haproxy_log: str = "global"
+    haproxy_mode: str = "tcp"
+    haproxy_timeout_connect: str = "5s"
+    haproxy_timeout_client: str = "50s"
+    haproxy_timeout_server: str = "50s"
+    haproxy_timeout_tunnel: str = "1h"
+
+
+class OptimizationSettings(BaseModel):
+    network_tuning: bool = True
+    bbr: bool = True
+    system_limits: bool = True
+    dns: bool = True
+    dns_servers: str = "1.1.1.1,8.8.8.8"
+
+
+class XrayCheckerConfig(BaseModel):
+    """Config for the headless xray-checker container that node-assistant
+    supervises. `subscription_url` is the Remnawave subscription the checker
+    probes; the rest map 1:1 to the checker's env vars."""
+    enabled: bool = False
+    subscription_url: str = ""
+    check_interval: int = 300          # PROXY_CHECK_INTERVAL (seconds)
+    check_method: str = "ip"           # PROXY_CHECK_METHOD: ip|status|download
+    metrics_port: int = 2112           # METRICS_PORT (host port we scrape)
+    image: str = "kutovoys/xray-checker:latest"
+    poll_interval: int = 60            # how often node-assistant samples the checker
+
+
+class AppSettings(BaseModel):
+    remnawave: RemnavaveConfig = RemnavaveConfig()
+    deploy_defaults: DeployDefaults = DeployDefaults()
+    optimization: OptimizationSettings = OptimizationSettings()
+    xray_checker: XrayCheckerConfig = XrayCheckerConfig()
+
+
+class Template(BaseModel):
+    id: str
+    name: str
+    config: str
+    is_default: bool = False
+
+
+class TemplateCreate(BaseModel):
+    name: str
+    config: str
+    is_default: bool = False
+
+
+class TemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    config: Optional[str] = None
+    is_default: Optional[bool] = None

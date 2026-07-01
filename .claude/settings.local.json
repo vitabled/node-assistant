@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) or print\\('OK:', f\\) for f in ['backend/app/api/certs.py','backend/app/api/deploy.py','backend/app/models/deploy.py','backend/app/services/task_store.py','backend/app/main.py','backend/app/config.py']]\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/services/pipeline.py'\\).read\\(\\)\\); print\\('pipeline.py: valid Python'\\)\")"
+    ]
+  }
+}

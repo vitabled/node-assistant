@@ -1,0 +1,736 @@
+import { useState, useEffect, useRef } from "react";
+import { Rocket, Loader2, Eye, EyeOff, AlertCircle, ChevronDown, Zap } from "lucide-react";
+import { MultiSelect, type SelectOption } from "./MultiSelect";
+import { CountrySelect } from "./CountrySelect";
+
+export type DeployMode = "remnanode" | "haproxy";
+
+export interface FormData {
+  mode:                DeployMode;
+  ip:                  string;
+  ssh_user:            string;
+  ssh_password:        string;
+  domain:              string;
+  cloudflare_api_key:  string;
+  email:               string;
+  remnanode_token:     string;
+  bandwidth_mbps:      string;
+  open_ports:          string;
+  current_ssh_port:    string;
+  new_ssh_port:        string;
+  change_ssh_port:     boolean;
+  remnanode_port:      string;
+  xhttp_path:          string;
+  country_code:        string;
+  behind_cdn:          boolean;
+  install_warp:        boolean;
+  update_system:       boolean;
+  create_in_remnawave: boolean;
+  internal_squad_ids:  string[];
+  external_squad_ids:  string[];
+  plugin_uuid:         string;
+  template_id:         string;
+  // OS optimization (node-accelerator)
+  optimize:            boolean;
+  opt_network_tuning:  boolean;
+  opt_bbr:             boolean;
+  opt_system_limits:   boolean;
+  opt_dns:             boolean;
+  opt_dns_servers:     string;
+  // HAProxy relay mode
+  haproxy_source_port:     string;
+  haproxy_dest_ip:         string;
+  haproxy_dest_port:       string;
+  haproxy_maxconn:         string;
+  haproxy_log:             string;
+  haproxy_mode:            string;
+  haproxy_timeout_connect: string;
+  haproxy_timeout_client:  string;
+  haproxy_timeout_server:  string;
+  haproxy_timeout_tunnel:  string;
+}
+
+interface Template { id: string; name: string; is_default: boolean }
+
+export const FORM_DEFAULT: FormData = {
+  mode:                "remnanode",
+  ip:                  "",
+  ssh_user:            "root",
+  ssh_password:        "",
+  domain:              "",
+  cloudflare_api_key:  "",
+  email:               "",
+  remnanode_token:     "",
+  bandwidth_mbps:      "100",
+  open_ports:          "80,443,8443",
+  current_ssh_port:    "22",
+  new_ssh_port:        "2222",
+  change_ssh_port:     true,
+  remnanode_port:      "2222",
+  xhttp_path:          "",
+  country_code:        "",
+  behind_cdn:          false,
+  install_warp:        false,
+  update_system:       false,
+  create_in_remnawave: false,
+  internal_squad_ids:  [],
+  external_squad_ids:  [],
+  plugin_uuid:         "",
+  template_id:         "",
+  optimize:            true,
+  opt_network_tuning:  true,
+  opt_bbr:             true,
+  opt_system_limits:   true,
+  opt_dns:             true,
+  opt_dns_servers:     "1.1.1.1,8.8.8.8",
+  haproxy_source_port:     "443",
+  haproxy_dest_ip:         "",
+  haproxy_dest_port:       "443",
+  haproxy_maxconn:         "200000",
+  haproxy_log:             "global",
+  haproxy_mode:            "tcp",
+  haproxy_timeout_connect: "5s",
+  haproxy_timeout_client:  "50s",
+  haproxy_timeout_server:  "50s",
+  haproxy_timeout_tunnel:  "1h",
+};
+
+// ── Validators ────────────────────────────────────────────────
+const IPv4   = /^(\d{1,3}\.){3}\d{1,3}$/;
+const DOMAIN = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validatePorts(s: string): string | null {
+  const parts = s.split(",").map(p => p.trim()).filter(Boolean);
+  if (!parts.length) return "Укажите хотя бы один порт";
+  for (const p of parts) {
+    const n = parseInt(p, 10);
+    if (isNaN(n) || n < 1 || n > 65535) return `Неверный порт: ${p}`;
+  }
+  return null;
+}
+
+function validateForm(f: FormData): Partial<Record<keyof FormData, string>> {
+  const e: Partial<Record<keyof FormData, string>> = {};
+  // ── Shared fields (both modes) ──
+  if (!IPv4.test(f.ip) || f.ip.split(".").some(o => parseInt(o) > 255)) e.ip = "Неверный IPv4";
+  if (!f.ssh_user.trim())  e.ssh_user  = "Обязательное поле";
+  if (!f.ssh_password)     e.ssh_password = "Обязательное поле";
+  const portsErr = validatePorts(f.open_ports);
+  if (portsErr) e.open_ports = portsErr;
+  const cur = parseInt(f.current_ssh_port, 10);
+  if (isNaN(cur) || cur < 1 || cur > 65535) e.current_ssh_port = "1–65535";
+  if (f.change_ssh_port) {
+    const nxt = parseInt(f.new_ssh_port, 10);
+    if (isNaN(nxt) || nxt < 1024 || nxt > 65535) e.new_ssh_port = "1024–65535";
+  }
+
+  if (f.mode === "haproxy") {
+    // ── HAProxy mode ──
+    const sp = parseInt(f.haproxy_source_port, 10);
+    if (isNaN(sp) || sp < 1 || sp > 65535) e.haproxy_source_port = "1–65535";
+    if (!f.haproxy_dest_ip.trim()) e.haproxy_dest_ip = "Обязательное поле";
+    const dp = parseInt(f.haproxy_dest_port, 10);
+    if (isNaN(dp) || dp < 1 || dp > 65535) e.haproxy_dest_port = "1–65535";
+    const mc = parseInt(f.haproxy_maxconn, 10);
+    if (isNaN(mc) || mc < 1) e.haproxy_maxconn = "≥ 1";
+  } else {
+    // ── Remnanode mode ──
+    if (!DOMAIN.test(f.domain)) e.domain = "Неверный домен";
+    if (!f.cloudflare_api_key.trim()) e.cloudflare_api_key = "Обязательное поле";
+    if (!EMAIL_RE.test(f.email)) e.email = "Неверный email";
+    if (!f.create_in_remnawave && !f.remnanode_token.trim())
+      e.remnanode_token = "Обязательное поле";
+    if (f.create_in_remnawave && !f.template_id)
+      e.template_id = "Выберите шаблон конфигурации";
+    const np = parseInt(f.remnanode_port, 10);
+    if (isNaN(np) || np < 1 || np > 65535) e.remnanode_port = "1–65535";
+    if (!f.country_code || f.country_code.length !== 2) e.country_code = "Выберите страну";
+  }
+  return e;
+}
+
+// ── Field components ──────────────────────────────────────────
+
+interface FieldProps {
+  label:       string;
+  name:        keyof FormData;
+  value:       string;
+  onChange:    (n: keyof FormData, v: string) => void;
+  error?:      string;
+  type?:       string;
+  placeholder?: string;
+  disabled?:   boolean;
+  secret?:     boolean;
+  hint?:       string;
+}
+
+function Field({ label, name, value, onChange, error, type = "text",
+                 placeholder, disabled, secret, hint }: FieldProps) {
+  const [show, setShow] = useState(false);
+  const inputType = secret ? (show ? "text" : "password") : type;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+        {label}
+      </label>
+      <div className={secret ? "relative" : undefined}>
+        <input
+          type={inputType}
+          value={value}
+          onChange={e => onChange(name, e.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          autoComplete="off"
+          spellCheck={false}
+          className={`w-full bg-gray-900/80 border rounded-md px-3 py-2 text-sm text-gray-100
+                     focus:outline-none focus:ring-1 transition-colors
+                     placeholder:text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed
+                     ${secret ? "pr-9" : ""}
+                     ${error
+                       ? "border-red-600/70 focus:border-red-500 focus:ring-red-500/20"
+                       : "border-gray-700/80 focus:border-blue-500/70 focus:ring-blue-500/20"
+                     }`}
+        />
+        {secret && (
+          <button type="button" tabIndex={-1} onClick={() => setShow(v => !v)}
+            className="absolute inset-y-0 right-0 flex items-center px-2.5
+                       text-gray-600 hover:text-gray-300 transition-colors">
+            {show ? <EyeOff size={13} /> : <Eye size={13} />}
+          </button>
+        )}
+      </div>
+      {hint  && !error && <p className="text-[11px] text-gray-600">{hint}</p>}
+      {error && <p className="text-[11px] text-red-400 mt-0.5">{error}</p>}
+    </div>
+  );
+}
+
+function Toggle({ label, checked, onChange, disabled }: {
+  label: string; checked: boolean; onChange: () => void; disabled?: boolean;
+}) {
+  return (
+    <label className={`flex items-center gap-3 cursor-pointer select-none group mt-1
+                       ${disabled ? "opacity-40 pointer-events-none" : ""}`}>
+      <button type="button" role="switch" aria-checked={checked} onClick={onChange}
+        className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none
+                    focus:ring-2 focus:ring-blue-500/40
+                    ${checked ? "bg-blue-600" : "bg-gray-700"}`}>
+        <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow
+                          transition-transform duration-200 ${checked ? "translate-x-4" : "translate-x-0"}`} />
+      </button>
+      <span className="text-sm text-gray-400 group-hover:text-gray-200 transition-colors">{label}</span>
+    </label>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────
+
+interface Props {
+  onSubmit:   (data: FormData) => Promise<void>;
+  onCancel?:  () => void;
+  initial?:   Partial<FormData>;
+}
+
+export function DeployForm({ onSubmit, onCancel, initial }: Props) {
+  const [form,       setForm]       = useState<FormData>({ ...FORM_DEFAULT, ...initial });
+  const [errors,     setErrors]     = useState<Partial<Record<keyof FormData, string>>>({});
+  const [touched,    setTouched]    = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [apiError,   setApiError]   = useState<string | null>(null);
+
+  // Remnawave state
+  const [squadsInt,      setSquadsInt]      = useState<SelectOption[]>([]);
+  const [squadsExt,      setSquadsExt]      = useState<SelectOption[]>([]);
+  const [plugins,        setPlugins]        = useState<SelectOption[]>([]);
+  const [templates,      setTemplates]      = useState<Template[]>([]);
+  const [remnavaveReady, setRemnavaveReady] = useState(false);
+  const [squadsLoading,  setSquadsLoading]  = useState(false);
+  const [optOpen,        setOptOpen]        = useState(false);
+  // Tracks the "intended" new_ssh_port so toggling change_ssh_port off and
+  // back on restores the original value rather than staying at current_ssh_port.
+  const intendedNewPort = useRef(initial?.new_ssh_port ?? FORM_DEFAULT.new_ssh_port);
+
+  useEffect(() => {
+    fetch("/api/settings")
+      .then(r => r.json())
+      .then(data => {
+        const d = data.deploy_defaults ?? {};
+        const r = data.remnawave ?? {};
+        // Only apply settings defaults when no `initial` override
+        if (!initial) {
+          const opt = data.optimization ?? {};
+          // Sync ref so toggle restore uses the settings value (default: 2222)
+          if (d.new_ssh_port) intendedNewPort.current = String(d.new_ssh_port);
+          setForm(prev => ({
+            ...prev,
+            ssh_user:           d.ssh_user            || prev.ssh_user,
+            email:              d.email               || prev.email,
+            cloudflare_api_key: d.cloudflare_api_key  || prev.cloudflare_api_key,
+            open_ports:         d.open_ports           || prev.open_ports,
+            current_ssh_port:   d.current_ssh_port     ? String(d.current_ssh_port) : prev.current_ssh_port,
+            new_ssh_port:       d.new_ssh_port         ? String(d.new_ssh_port)     : prev.new_ssh_port,
+            change_ssh_port:    d.change_ssh_port      ?? prev.change_ssh_port,
+            remnanode_port:     d.remnanode_port       ? String(d.remnanode_port)   : prev.remnanode_port,
+            xhttp_path:         d.xhttp_path           ?? prev.xhttp_path,
+            internal_squad_ids: r.default_internal_squad_ids ?? prev.internal_squad_ids,
+            external_squad_ids: r.default_external_squad_ids ?? prev.external_squad_ids,
+            // Inherit global optimization defaults
+            opt_network_tuning: opt.network_tuning ?? prev.opt_network_tuning,
+            opt_bbr:            opt.bbr            ?? prev.opt_bbr,
+            opt_system_limits:  opt.system_limits  ?? prev.opt_system_limits,
+            opt_dns:            opt.dns            ?? prev.opt_dns,
+            opt_dns_servers:    opt.dns_servers    || prev.opt_dns_servers,
+            // Inherit HAProxy defaults
+            haproxy_source_port:     d.haproxy_source_port     ? String(d.haproxy_source_port) : prev.haproxy_source_port,
+            haproxy_dest_port:       d.haproxy_dest_port       ? String(d.haproxy_dest_port)   : prev.haproxy_dest_port,
+            haproxy_maxconn:         d.haproxy_maxconn         ? String(d.haproxy_maxconn)     : prev.haproxy_maxconn,
+            haproxy_log:             d.haproxy_log             ?? prev.haproxy_log,
+            haproxy_mode:            d.haproxy_mode            ?? prev.haproxy_mode,
+            haproxy_timeout_connect: d.haproxy_timeout_connect ?? prev.haproxy_timeout_connect,
+            haproxy_timeout_client:  d.haproxy_timeout_client  ?? prev.haproxy_timeout_client,
+            haproxy_timeout_server:  d.haproxy_timeout_server  ?? prev.haproxy_timeout_server,
+            haproxy_timeout_tunnel:  d.haproxy_timeout_tunnel  ?? prev.haproxy_timeout_tunnel,
+          }));
+        }
+
+        const configured = !!(r.panel_url && r.api_token);
+        setRemnavaveReady(configured);
+
+        if (configured) {
+          setSquadsLoading(true);
+          const toOpts = (arr: unknown) =>
+            (Array.isArray(arr) ? arr : []).map((s: { uuid: string; name: string }) =>
+              ({ value: s.uuid, label: s.name }));
+          Promise.all([
+            fetch("/api/remnawave/squads/internal").then(r => r.json()).catch(() => []),
+            fetch("/api/remnawave/squads/external").then(r => r.json()).catch(() => []),
+            fetch("/api/remnawave/node-plugins").then(r => r.json()).catch(() => []),
+          ]).then(([int, ext, plug]) => {
+            setSquadsInt(toOpts(int));
+            setSquadsExt(toOpts(ext));
+            setPlugins(toOpts(plug));
+          }).finally(() => setSquadsLoading(false));
+        }
+      })
+      .catch(() => {});
+
+    fetch("/api/templates")
+      .then(r => r.json())
+      .then(list => {
+        if (!Array.isArray(list)) return;
+        setTemplates(list);
+        if (!initial?.template_id) {
+          const def = list.find((t: Template) => t.is_default);
+          if (def) setForm(prev => ({ ...prev, template_id: def.id }));
+        }
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const set = (name: keyof FormData, value: string | boolean | string[]) =>
+    setForm(f => {
+      const next = { ...f, [name]: value };
+      if (touched) setErrors(validateForm(next));
+      return next;
+    });
+
+  const toggleRemnawave = () =>
+    setForm(prev => {
+      const next = {
+        ...prev,
+        create_in_remnawave: !prev.create_in_remnawave,
+        remnanode_token: !prev.create_in_remnawave ? "" : prev.remnanode_token,
+      };
+      if (touched) setErrors(validateForm(next));
+      return next;
+    });
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTouched(true);
+    const errs = validateForm(form);
+    if (Object.keys(errs).length > 0) { setErrors(errs); return; }
+    setErrors({});
+    setApiError(null);
+    setSubmitting(true);
+    try {
+      await onSubmit(form);
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : "Ошибка сервера");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const f = submitting;
+
+  return (
+    <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3">
+
+      {/* ── Режим деплоя (горизонтальные вкладки) ── */}
+      <div className="flex gap-1 p-1 bg-gray-900 rounded-lg border border-gray-800">
+        {([
+          { id: "remnanode" as DeployMode, label: "Remnanode" },
+          { id: "haproxy"   as DeployMode, label: "HAProxy" },
+        ]).map(t => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setForm(prev => {
+              const updated = { ...prev, mode: t.id };
+              if (touched) setErrors(validateForm(updated));
+              return updated;
+            })}
+            disabled={f}
+            className={`flex-1 px-4 py-1.5 rounded-md text-sm font-medium transition-colors
+                        focus:outline-none disabled:opacity-50
+                        ${form.mode === t.id
+                          ? "bg-blue-600 text-white"
+                          : "text-gray-500 hover:text-gray-300"}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Сервер ── */}
+      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-1">Сервер</p>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="IP-адрес"  name="ip"       value={form.ip}       onChange={set}
+          placeholder="1.2.3.4" error={errors.ip} disabled={f} />
+        <Field label="SSH логин" name="ssh_user"  value={form.ssh_user} onChange={set}
+          placeholder="root" error={errors.ssh_user} disabled={f} />
+      </div>
+      <Field label="SSH пароль" name="ssh_password" value={form.ssh_password}
+        onChange={set} error={errors.ssh_password} disabled={f} secret />
+
+      {/* ── Домен и SSL (только Remnanode) ── */}
+      {form.mode === "remnanode" && (
+        <>
+          <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-2">Домен и SSL</p>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Домен ноды" name="domain" value={form.domain} onChange={set}
+              placeholder="node1.example.com" error={errors.domain} disabled={f} />
+            <Field label="Email (Let's Encrypt)" name="email" value={form.email}
+              onChange={set} type="email" placeholder="you@example.com" error={errors.email} disabled={f} />
+          </div>
+          <Field label="Cloudflare API токен" name="cloudflare_api_key"
+            value={form.cloudflare_api_key} onChange={set}
+            placeholder="DNS:Edit permission" error={errors.cloudflare_api_key} disabled={f} secret />
+        </>
+      )}
+
+      {/* ── Сеть ── */}
+      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-2">Сеть</p>
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="Полоса (Mbps)"    name="bandwidth_mbps"   value={form.bandwidth_mbps}
+          onChange={set} placeholder="100" disabled={f} />
+        <Field label="Текущий SSH порт" name="current_ssh_port" value={form.current_ssh_port}
+          onChange={(name, v) => {
+            set(name, v);
+            if (!form.change_ssh_port) set("new_ssh_port", v);
+          }}
+          placeholder="22" error={errors.current_ssh_port} disabled={f} />
+        <Field label="Новый SSH порт"   name="new_ssh_port"     value={form.new_ssh_port}
+          onChange={(name, v) => { set(name, v); intendedNewPort.current = v; }}
+          placeholder="2222" error={errors.new_ssh_port}
+          disabled={f || !form.change_ssh_port} />
+      </div>
+      <Toggle
+        label="Сменить порт SSH"
+        checked={form.change_ssh_port}
+        onChange={() => {
+          const next = !form.change_ssh_port;
+          setForm(prev => {
+            const updated = {
+              ...prev,
+              change_ssh_port: next,
+              new_ssh_port: next ? intendedNewPort.current : prev.current_ssh_port,
+            };
+            if (touched) setErrors(validateForm(updated));
+            return updated;
+          });
+        }}
+        disabled={f}
+      />
+      <Field label="Порты UFW" name="open_ports" value={form.open_ports}
+        onChange={set} placeholder="80,443" error={errors.open_ports} disabled={f} />
+
+      {/* ── Remnanode + Remnawave (только режим Remnanode) ── */}
+      {form.mode === "remnanode" && (
+      <>
+      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-2">Remnanode</p>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Порт remnanode" name="remnanode_port" value={form.remnanode_port}
+          onChange={set} placeholder="2222" error={errors.remnanode_port} disabled={f} />
+        <Field label="Путь XHTTP" name="xhttp_path" value={form.xhttp_path}
+          onChange={set} placeholder="/xray/" disabled={f}
+          hint="Опционально" />
+      </div>
+
+      <CountrySelect
+        label="Страна ноды"
+        value={form.country_code}
+        onChange={v => set("country_code", v)}
+        error={errors.country_code}
+        disabled={f}
+      />
+
+      <Toggle
+        label="Нода за CDN"
+        checked={form.behind_cdn}
+        onChange={() => set("behind_cdn", !form.behind_cdn)}
+        disabled={f}
+      />
+
+      <Field label="Токен Remnanode" name="remnanode_token" value={form.remnanode_token}
+        onChange={set} error={errors.remnanode_token}
+        disabled={f || form.create_in_remnawave} secret
+        hint={form.create_in_remnawave
+          ? "Токен будет получен автоматически из панели Remnawave"
+          : undefined} />
+
+      {/* Remnawave integration block */}
+      <div className={`rounded-lg border p-3 flex flex-col gap-3 ${
+        remnavaveReady
+          ? "border-gray-700/60 bg-gray-900/30"
+          : "border-gray-800/50 bg-gray-900/20 opacity-60"
+      }`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-widest">
+            Remnawave
+          </span>
+          {!remnavaveReady && (
+            <span className="flex items-center gap-1 text-[11px] text-amber-500">
+              <AlertCircle size={11} /> Не настроено
+            </span>
+          )}
+        </div>
+
+        <div
+          className="flex flex-col gap-3"
+          title={!remnavaveReady
+            ? "Для активации полей настройте валидное подключение в разделе Настройки → Remnawave"
+            : undefined}
+        >
+          <Toggle
+            label="Зарегистрировать ноду в панели Remnawave"
+            checked={form.create_in_remnawave}
+            onChange={toggleRemnawave}
+            disabled={f || !remnavaveReady}
+          />
+
+          {/* Template */}
+          <div className="flex flex-col gap-1">
+            <label className={`text-[11px] font-medium uppercase tracking-widest
+                               ${!remnavaveReady ? "text-gray-700" : "text-gray-500"}`}>
+              Шаблон конфигурации
+              {form.create_in_remnawave && remnavaveReady && (
+                <span className="text-red-500 ml-0.5">*</span>
+              )}
+            </label>
+            <select
+              value={form.template_id}
+              onChange={e => set("template_id", e.target.value)}
+              disabled={f || !remnavaveReady}
+              className={`w-full bg-gray-900/80 border rounded-md px-3 py-2 text-sm
+                          text-gray-100 focus:outline-none focus:ring-1 transition-colors
+                          disabled:opacity-40 disabled:cursor-not-allowed
+                          ${errors.template_id
+                            ? "border-red-600/70 focus:ring-red-500/20"
+                            : "border-gray-700/80 focus:border-blue-500/70 focus:ring-blue-500/20"
+                          }`}
+            >
+              <option value="">— выберите шаблон —</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+            {errors.template_id
+              ? <p className="text-[11px] text-red-400">{errors.template_id}</p>
+              : <p className="text-[11px] text-gray-600">Xray JSON с подстановкой $domain, $name, $privkey, $shortid</p>
+            }
+          </div>
+
+          {/* Internal squads multi-select */}
+          <MultiSelect
+            label="Внутренние сквады"
+            selected={form.internal_squad_ids}
+            onChange={v => set("internal_squad_ids", v)}
+            options={squadsInt}
+            placeholder={squadsLoading ? "Загрузка..." : "— без сквадов —"}
+            disabled={f || !remnavaveReady || squadsLoading}
+          />
+
+          {/* External squads multi-select */}
+          <MultiSelect
+            label="Внешние сквады"
+            selected={form.external_squad_ids}
+            onChange={v => set("external_squad_ids", v)}
+            options={squadsExt}
+            placeholder={squadsLoading ? "Загрузка..." : "— без сквадов —"}
+            disabled={f || !remnavaveReady || squadsLoading}
+          />
+
+          {/* Node plugin single-select */}
+          <div className="flex flex-col gap-1">
+            <label className={`text-[11px] font-medium uppercase tracking-widest
+                               ${!remnavaveReady ? "text-gray-700" : "text-gray-500"}`}>
+              Плагин ноды
+            </label>
+            <select
+              value={form.plugin_uuid}
+              onChange={e => set("plugin_uuid", e.target.value)}
+              disabled={f || !remnavaveReady || squadsLoading}
+              className="w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2
+                         text-sm text-gray-100 focus:outline-none focus:ring-1
+                         focus:border-blue-500/70 focus:ring-blue-500/20 transition-colors
+                         disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <option value="">{squadsLoading ? "Загрузка..." : "Не использовать плагин"}</option>
+              {plugins.map(p => (
+                <option key={p.value} value={p.value}>{p.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <Toggle label="Установить WARP Native"
+        checked={form.install_warp}
+        onChange={() => set("install_warp", !form.install_warp)} disabled={f} />
+      </>
+      )}
+
+      {/* ── HAProxy (только режим HAProxy) ── */}
+      {form.mode === "haproxy" && (
+      <>
+      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-2">HAProxy (реле)</p>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Порт HAProxy" name="haproxy_source_port" value={form.haproxy_source_port}
+          onChange={set} placeholder="443" error={errors.haproxy_source_port} disabled={f} />
+        <Field label="Целевой IP" name="haproxy_dest_ip" value={form.haproxy_dest_ip}
+          onChange={set} placeholder="10.0.0.5" error={errors.haproxy_dest_ip} disabled={f} />
+        <Field label="Целевой порт" name="haproxy_dest_port" value={form.haproxy_dest_port}
+          onChange={set} placeholder="443" error={errors.haproxy_dest_port} disabled={f} />
+        <Field label="Лимит подключений" name="haproxy_maxconn" value={form.haproxy_maxconn}
+          onChange={set} placeholder="200000" error={errors.haproxy_maxconn} disabled={f} />
+        <Field label="Тип лога" name="haproxy_log" value={form.haproxy_log}
+          onChange={set} placeholder="global" disabled={f} />
+        <Field label="Режим" name="haproxy_mode" value={form.haproxy_mode}
+          onChange={set} placeholder="tcp" disabled={f} />
+        <Field label="Timeout подключения" name="haproxy_timeout_connect" value={form.haproxy_timeout_connect}
+          onChange={set} placeholder="5s" disabled={f} />
+        <Field label="Timeout клиента" name="haproxy_timeout_client" value={form.haproxy_timeout_client}
+          onChange={set} placeholder="50s" disabled={f} />
+        <Field label="Timeout сервера" name="haproxy_timeout_server" value={form.haproxy_timeout_server}
+          onChange={set} placeholder="50s" disabled={f} />
+        <Field label="Timeout туннеля" name="haproxy_timeout_tunnel" value={form.haproxy_timeout_tunnel}
+          onChange={set} placeholder="1h" disabled={f} />
+      </div>
+      </>
+      )}
+
+      {/* Toggles (общие) */}
+      <Toggle label="Обновить систему перед стартом"
+        checked={form.update_system}
+        onChange={() => set("update_system", !form.update_system)} disabled={f} />
+
+      {/* ── Оптимизация ОС ── */}
+      <div className="rounded-lg border border-gray-800/50 bg-gray-900/20">
+        <button
+          type="button"
+          onClick={() => setOptOpen(v => !v)}
+          className="w-full flex items-center justify-between gap-2 px-3 py-2.5
+                     text-left hover:bg-gray-800/30 transition-colors rounded-lg"
+        >
+          <span className="flex items-center gap-2 text-[11px] font-semibold text-gray-500 uppercase tracking-widest">
+            <Zap size={12} className={form.optimize ? "text-yellow-500" : "text-gray-600"} />
+            Оптимизация ОС
+          </span>
+          <ChevronDown
+            size={14}
+            className={`text-gray-600 transition-transform duration-200 ${optOpen ? "rotate-180" : ""}`}
+          />
+        </button>
+
+        {optOpen && (
+          <div className="px-3 pb-3 flex flex-col gap-3 border-t border-gray-800/50 pt-3">
+            <Toggle
+              label="Применить оптимизацию ОС"
+              checked={form.optimize}
+              onChange={() => set("optimize", !form.optimize)}
+              disabled={f}
+            />
+            <div className={`flex flex-col gap-2 ${!form.optimize ? "opacity-40 pointer-events-none" : ""}`}>
+              <Toggle
+                label="BBR (TCP congestion control)"
+                checked={form.opt_bbr}
+                onChange={() => set("opt_bbr", !form.opt_bbr)}
+                disabled={f || !form.optimize}
+              />
+              <Toggle
+                label="TCP/UDP буферы (network tuning)"
+                checked={form.opt_network_tuning}
+                onChange={() => set("opt_network_tuning", !form.opt_network_tuning)}
+                disabled={f || !form.optimize}
+              />
+              <Toggle
+                label="Системные лимиты (nofile 1 000 000)"
+                checked={form.opt_system_limits}
+                onChange={() => set("opt_system_limits", !form.opt_system_limits)}
+                disabled={f || !form.optimize}
+              />
+              <Toggle
+                label="DNS-серверы (переписать /etc/resolv.conf)"
+                checked={form.opt_dns}
+                onChange={() => set("opt_dns", !form.opt_dns)}
+                disabled={f || !form.optimize}
+              />
+              {form.opt_dns && form.optimize && (
+                <Field
+                  label="DNS-серверы"
+                  name="opt_dns_servers"
+                  value={form.opt_dns_servers}
+                  onChange={set}
+                  placeholder="1.1.1.1,8.8.8.8"
+                  disabled={f}
+                  hint="Через запятую, например: 1.1.1.1,8.8.8.8"
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {apiError && (
+        <div className="mt-2 px-3 py-2 rounded-md bg-red-950/50 border border-red-800/50
+                        text-xs text-red-400">{apiError}</div>
+      )}
+
+      <div className="mt-3 flex gap-2">
+        <button type="submit" disabled={submitting}
+          className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg
+                     font-semibold text-sm transition-all bg-blue-600 hover:bg-blue-500
+                     active:bg-blue-700 disabled:bg-blue-900/50 disabled:cursor-not-allowed
+                     focus:outline-none focus:ring-2 focus:ring-blue-500/50">
+          {submitting
+            ? <><Loader2 size={15} className="animate-spin" /> Запуск...</>
+            : <><Rocket size={15} /> Запустить деплой</>
+          }
+        </button>
+        {onCancel && !submitting && (
+          <button type="button" onClick={onCancel}
+            className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-400
+                       hover:text-gray-200 hover:bg-gray-800 transition-colors
+                       focus:outline-none focus:ring-1 focus:ring-gray-700">
+            Отмена
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
