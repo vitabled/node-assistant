@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import {
   X, Square, Server, CheckCircle2, XCircle, Loader2,
   Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck,
+  Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
 } from "lucide-react";
 import { StepProgress, DEPLOY_STEPS } from "./StepProgress";
 import { TerminalOutput } from "./TerminalOutput";
@@ -59,10 +60,12 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
     }
   }, [stepStatus.status, job.taskId, onStatusChange]);
 
-  // ── Security stats poll (SUCCESS nodes only) ──────────────
-  // Poll the per-node stats endpoint every 2.5 min using the node's own SSH
-  // creds from savedForm (used per-request, never stored server-side).
+  // ── Node stats poll (SUCCESS nodes only) ──────────────────
+  // One endpoint returns both security + traffic. Polled every 5 min (vnstat
+  // updates its DB discretely, so more frequent polling adds no value). Uses the
+  // node's own SSH creds from savedForm — per-request, never stored server-side.
   const [security, setSecurity] = useState<SecurityStats | null>(null);
+  const [traffic,  setTraffic]  = useState<TrafficStats | null>(null);
   useEffect(() => {
     if (stepStatus.status !== "success") return;
     const f = job.savedForm;
@@ -80,11 +83,13 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
           }),
         });
         const d = await res.json();
-        if (alive && d.online && d.securityStats) setSecurity(d.securityStats);
+        if (!alive || !d.online) return;
+        if (d.securityStats) setSecurity(d.securityStats);
+        if (d.trafficStats)  setTraffic(d.trafficStats);
       } catch { /* keep last */ }
     };
     fetchStats();
-    const id = setInterval(fetchStats, 150_000);   // 2.5 min
+    const id = setInterval(fetchStats, 300_000);   // 5 min
     return () => { alive = false; clearInterval(id); };
   }, [stepStatus.status, job.savedForm]);
 
@@ -180,9 +185,12 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
           )}
         </div>
 
-        {/* Security block — only for SUCCESS nodes */}
+        {/* Security + traffic blocks — only for SUCCESS nodes */}
         {stepStatus.status === "success" && (
-          <SecurityBlock stats={security} />
+          <>
+            <SecurityBlock stats={security} />
+            <TrafficBlock stats={traffic} />
+          </>
         )}
 
         {/* Footer */}
@@ -337,6 +345,70 @@ function SecurityBlock({ stats }: { stats: SecurityStats | null }) {
             <span className={`px-1.5 py-0.5 rounded border tabular-nums ${tgActiveCls}`}>
               {stats.trafficGuardActive} заблокировано
             </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Network-traffic block (vnstat) — SUCCESS nodes ────────────
+function fmtBytes(b: number): string {
+  const gb = b / 1073741824;
+  if (gb >= 1) return `${gb.toFixed(2)} ГБ`;
+  return `${(b / 1048576).toFixed(2)} МБ`;
+}
+
+const PERIOD_LABEL: Record<TrafficPeriod, string> = {
+  today: "За сегодня", week: "За неделю", month: "За месяц",
+};
+
+function TrafficBlock({ stats }: { stats: TrafficStats | null }) {
+  const [period, setPeriod] = useState<TrafficPeriod>("today");
+  const b = stats ? stats[period] : null;
+
+  return (
+    <div className="mx-4 mb-3 rounded-lg border border-gray-800/70 bg-gray-950/40 px-3 py-2.5">
+      <div className="flex items-center gap-1.5 mb-2">
+        <Network size={12} className="text-gray-500" />
+        <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
+          Сетевой трафик
+        </span>
+        <select
+          value={period}
+          onChange={e => setPeriod(e.target.value as TrafficPeriod)}
+          onClick={e => e.stopPropagation()}
+          className="ml-auto bg-gray-900/80 border border-gray-700/60 rounded px-1.5 py-0.5
+                     text-[10px] text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500/30"
+        >
+          {(["today", "week", "month"] as TrafficPeriod[]).map(p => (
+            <option key={p} value={p}>{PERIOD_LABEL[p]}</option>
+          ))}
+        </select>
+      </div>
+      {b === null ? (
+        <p className="text-[11px] text-gray-600 flex items-center gap-1.5">
+          <Loader2 size={10} className="animate-spin" /> Чтение vnstat…
+        </p>
+      ) : (
+        <div className="flex flex-col gap-1.5 text-[11px]">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-500 flex items-center gap-1.5">
+              <ArrowDownToLine size={11} className="text-blue-400" /> Входящий (RX)
+            </span>
+            <span className="text-gray-200 tabular-nums">{fmtBytes(b.rx)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-gray-500 flex items-center gap-1.5">
+              <ArrowUpFromLine size={11} className="text-green-400" /> Исходящий (TX)
+            </span>
+            <span className="text-gray-200 tabular-nums">{fmtBytes(b.tx)}</span>
+          </div>
+          <div className="flex items-center justify-between pt-1 border-t border-gray-800/50">
+            <span className="text-gray-400 flex items-center gap-1.5">
+              <Sigma size={11} className="text-gray-500" /> Всего (Total)
+            </span>
+            <span className="text-white font-medium tabular-nums">{fmtBytes(b.total)}</span>
           </div>
         </div>
       )}
