@@ -1,13 +1,15 @@
 import { useState } from "react";
 import {
   Menu, LayoutDashboard, Rocket, RefreshCw, FileCode2, Settings2, Gauge,
-  Wallet, ChevronDown, CreditCard, Boxes, ReceiptText, PieChart,
+  Wallet, ChevronDown, CreditCard, ReceiptText, PieChart,
+  FolderKanban, Server as ServerIcon, SlidersHorizontal, LogIn, KeyRound,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "settings" | "traffic"
-  | "infra-providers" | "infra-nodes" | "infra-history" | "infra-analytics";
+  | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
+  | "infra-payments" | "infra-settings" | "infra-signin" | "infra-tokens";
 
 const STORAGE_KEY = "sidebar_collapsed";
 
@@ -29,10 +31,14 @@ const NODE_ITEMS: NavItemDef[] = [
 ];
 
 const INFRA_ITEMS: NavItemDef[] = [
-  { tab: "infra-providers", label: "Провайдеры хостинга", Icon: CreditCard  },
-  { tab: "infra-nodes",     label: "Узлы биллинга",       Icon: Boxes       },
-  { tab: "infra-history",   label: "История и Инвойсы",   Icon: ReceiptText },
-  { tab: "infra-analytics", label: "Аналитика расходов",  Icon: PieChart    },
+  { tab: "infra-dashboard", label: "Dashboard",           Icon: PieChart          },
+  { tab: "infra-providers", label: "Провайдеры",          Icon: CreditCard        },
+  { tab: "infra-projects",  label: "Проекты",             Icon: FolderKanban      },
+  { tab: "infra-services",  label: "Услуги и Тарифы",     Icon: ServerIcon        },
+  { tab: "infra-payments",  label: "Платежи",             Icon: ReceiptText       },
+  { tab: "infra-settings",  label: "Настройки биллинга",  Icon: SlidersHorizontal },
+  { tab: "infra-signin",    label: "Sign-in",             Icon: LogIn             },
+  { tab: "infra-tokens",    label: "API токены",          Icon: KeyRound          },
 ];
 
 const BOTTOM_ITEMS: NavItemDef[] = [
@@ -197,7 +203,7 @@ function InfraGroup({
       </button>
       {/* Smooth expand/collapse */}
       <div className={`overflow-hidden transition-[max-height] duration-200 ease-in-out
-                       ${open ? "max-h-64" : "max-h-0"}`}>
+                       ${open ? "max-h-[26rem]" : "max-h-0"}`}>
         <div className="flex flex-col gap-0.5 pl-1 pt-0.5">
           {INFRA_ITEMS.map(item => (
             <NavBtn key={item.tab} item={item} active={activeTab === item.tab}

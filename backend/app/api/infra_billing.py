@@ -1,18 +1,22 @@
 """
-Infra-billing API — merges Remnawave's InfraBillingController with our local
-metadata store (balances/cost/currency) and computes analytics + burn-rate.
+Infra-billing API — full 8-tab subsystem.
 
-All routes are under /api/infra-billing and are OUR backend endpoints (the SPA
-calls these; we in turn call Remnawave + the local store). Remnawave errors are
-surfaced as HTTP errors with a clear `detail` → shown as toasts on the client.
+Providers/nodes/history proxy Remnawave's InfraBillingController (+ local meta);
+projects/services/payments/settings/api-tokens/dashboard are LOCAL (node-assistant
+owns them — Remnawave has no such endpoints). See services/infra_billing_store.py.
+
+Session gate: verify-session issues an in-memory token; protected routes
+(payments, api-tokens) require the `X-Billing-Session` header when a PIN is set.
+Remnawave errors surface as HTTP errors → toasts on the client.
 """
 from __future__ import annotations
 
+import secrets as _secrets
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, Field, field_validator
 
 from app.services import storage
@@ -22,6 +26,9 @@ from app.models.settings import AppSettings
 from app.services.remnawave_client import RemnavaveClient, RemnavaveError
 
 router = APIRouter(prefix="/api/infra-billing")
+
+# In-memory set of valid session tokens (single-process backend).
+_SESSIONS: set[str] = set()
 
 
 def _client() -> RemnavaveClient:
@@ -37,7 +44,26 @@ def _wrap_rw(exc: Exception) -> HTTPException:
     return HTTPException(502, str(exc))
 
 
+def _convert(amount: float, frm: str, to: str, rates: dict) -> float:
+    """Convert `amount` from currency `frm` to `to` using RUB-anchored rates
+    (rates[X] = value of 1 X in RUB)."""
+    anchor = amount * rates.get(frm, 1.0)
+    return anchor / rates.get(to, 1.0)
+
+
+async def _require_session(x_billing_session: Optional[str]) -> None:
+    """Protect sensitive routes when a Sign-in PIN is configured."""
+    s = await store.get_settings()
+    if not s["pinSet"]:
+        return  # no gate
+    if not x_billing_session or x_billing_session not in _SESSIONS:
+        raise HTTPException(401, "Требуется вход в финансовый контур (раздел Sign-in).")
+
+
 # ── Request models (client + server validation) ───────────────
+def _money(v: float) -> float:
+    return round(float(v), 2)   # normalise to 2 dp; handles 0 fine
+
 
 class ProviderCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
@@ -46,6 +72,7 @@ class ProviderCreate(BaseModel):
     balance: float = Field(default=0, ge=0)
     currency: str = Field(default="RUB", min_length=1, max_length=8)
     low_balance_threshold: float = Field(default=0, ge=0)
+    api_token_id: str = ""
 
 
 class ProviderUpdate(BaseModel):
@@ -55,58 +82,156 @@ class ProviderUpdate(BaseModel):
     balance: Optional[float] = Field(default=None, ge=0)
     currency: Optional[str] = None
     low_balance_threshold: Optional[float] = Field(default=None, ge=0)
+    api_token_id: Optional[str] = None
 
 
-class BillingNodeCreate(BaseModel):
-    provider_uuid: str
-    node_uuid: str
-    name: str = Field(..., min_length=1)
-    next_billing_at: str  # ISO date-time
-    monthly_cost: float = Field(default=0, ge=0)
+class ProjectBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str = ""
+    node_uuids: list[str] = Field(default_factory=list)
 
 
-class BillingNodeUpdate(BaseModel):
-    uuids: list[str] = Field(..., min_length=1)
-    next_billing_at: str
-    monthly_cost: Optional[float] = Field(default=None, ge=0)
+class ServiceBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    kind: str = "vps"
+    node_uuid: str = ""
+    provider_uuid: str = ""
+    project_id: str = ""
+    billing_type: str = "fixed"     # fixed | hourly
+    cost: float = Field(default=0, ge=0)
+    next_billing_at: str = ""
+
+    @field_validator("billing_type")
+    @classmethod
+    def _bt(cls, v: str) -> str:
+        if v not in ("fixed", "hourly"):
+            raise ValueError("billing_type должен быть fixed или hourly")
+        return v
 
 
-class HistoryCreate(BaseModel):
-    provider_uuid: str
+class PaymentBody(BaseModel):
+    provider_uuid: str = ""
+    project_id: str = ""
+    type: str = "charge"            # charge | topup | adjustment
     amount: float
-    billed_at: str
+    currency: str = "RUB"
+    status: str = "success"         # success | pending | error
+    note: str = ""
 
     @field_validator("amount")
     @classmethod
     def _amt(cls, v: float) -> float:
         if v == 0:
             raise ValueError("amount не может быть 0")
-        return v
+        return _money(v)
 
 
-# ── Providers ─────────────────────────────────────────────────
+class SettingsBody(BaseModel):
+    base_currency: Optional[str] = None
+    fx_rates: Optional[dict] = None
+    low_balance_threshold: Optional[float] = Field(default=None, ge=0)
+    refresh_interval: Optional[str] = None
+    pin: Optional[str] = None        # "" clears the gate
 
+
+class ApiTokenCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    provider_kind: str = "generic"
+    secret: str = Field(..., min_length=1)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 1. Dashboard summary
+# ═══════════════════════════════════════════════════════════════
+@router.get("/dashboard/summary")
+async def dashboard_summary():
+    """Aggregated balance (converted to base currency), burn-rate + charts."""
+    client = _client()
+    try:
+        rw_providers = await client.infra_list_providers()
+    except Exception as exc:
+        raise _wrap_rw(exc)
+
+    pmeta = await store.provider_meta_all()
+    svc = await store.services()
+    pays = await store.payments()
+    s = await store.get_settings()
+    base, rates = s["baseCurrency"], s["fxRates"]
+    pname = {p["uuid"]: p["name"] for p in rw_providers}
+
+    # Total balance across providers, converted to base currency.
+    total_balance = 0.0
+    per_provider_balance = {}
+    for uuid, m in pmeta.items():
+        conv = _convert(m.get("balance", 0) or 0, m.get("currency", base), base, rates)
+        per_provider_balance[uuid] = conv
+        total_balance += conv
+
+    # Monthly cost from services (hourly → *730h/mo). Converted to base.
+    monthly_cost = 0.0
+    cost_by_provider: dict[str, float] = defaultdict(float)
+    for sv in svc:
+        c = sv["cost"] * (730 if sv["billing_type"] == "hourly" else 1)
+        cost_by_provider[sv["provider_uuid"]] += c
+        monthly_cost += c
+
+    daily = monthly_cost / 30.0
+    hourly = monthly_cost / 730.0
+    days_left = round(total_balance / daily, 1) if daily > 0 else None
+
+    # Charts: pie of cost by provider; line of payments by month.
+    pie = [{"provider": pname.get(u, "—"), "total": _money(t)} for u, t in sorted(cost_by_provider.items(), key=lambda x: -x[1]) if t > 0]
+    by_month: dict[str, float] = defaultdict(float)
+    for p in pays:
+        if p["type"] in ("charge", "adjustment"):
+            month = datetime.fromtimestamp(p["ts"], tz=timezone.utc).strftime("%Y-%m")
+            by_month[month] += p["amount"]
+    line = [{"month": m, "total": _money(t)} for m, t in sorted(by_month.items())]
+
+    # Fire low-balance notification hook.
+    alerts = await infra_notify.check_low_balances([
+        {"name": pname.get(u, "—"), "balance": per_provider_balance.get(u, 0),
+         "currency": base, "lowBalanceThreshold": s["lowBalanceThreshold"]}
+        for u in pmeta
+    ])
+
+    return {
+        "baseCurrency": base,
+        "totalBalance": _money(total_balance),
+        "burnRate": {
+            "hourly": _money(hourly), "daily": _money(daily), "monthly": _money(monthly_cost),
+            "daysLeft": days_left, "critical": days_left is not None and days_left < 7,
+        },
+        "spendByProvider": pie,
+        "spendByMonth": line,
+        "alertsCount": len(alerts),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# 2. Providers  (Remnawave + local meta)
+# ═══════════════════════════════════════════════════════════════
 @router.get("/providers")
 async def list_providers():
-    """Remnawave providers merged with local balance/currency/threshold + node count."""
     client = _client()
     try:
         providers = await client.infra_list_providers()
     except Exception as exc:
         raise _wrap_rw(exc)
     meta = await store.provider_meta_all()
+    tokens = {t["id"]: t for t in await store.api_tokens()}
     out = []
     for p in providers:
         m = meta.get(p["uuid"], {})
+        tid = m.get("api_token_id", "")
         out.append({
-            "uuid": p["uuid"],
-            "name": p["name"],
-            "faviconLink": p.get("faviconLink", ""),
-            "loginUrl": p.get("loginUrl", ""),
+            "uuid": p["uuid"], "name": p["name"],
+            "faviconLink": p.get("faviconLink", ""), "loginUrl": p.get("loginUrl", ""),
             "nodeCount": len(p.get("billingNodes", []) or []),
-            "balance": m.get("balance", 0),
-            "currency": m.get("currency", "RUB"),
+            "balance": m.get("balance", 0), "currency": m.get("currency", "RUB"),
             "lowBalanceThreshold": m.get("low_balance_threshold", 0),
+            "status": m.get("status", "active"),
+            "apiTokenId": tid, "apiTokenName": tokens.get(tid, {}).get("name", ""),
         })
     return out
 
@@ -116,47 +241,40 @@ async def create_provider(body: ProviderCreate):
     client = _client()
     try:
         created = await client.infra_create_provider(
-            name=body.name, favicon_link=body.favicon_link, login_url=body.login_url,
-        )
+            name=body.name, favicon_link=body.favicon_link, login_url=body.login_url)
     except Exception as exc:
         raise _wrap_rw(exc)
     await store.upsert_provider_meta(
-        created["uuid"], balance=body.balance, currency=body.currency,
-        threshold=body.low_balance_threshold,
-    )
+        created["uuid"], balance=_money(body.balance), currency=body.currency,
+        low_balance_threshold=_money(body.low_balance_threshold), api_token_id=body.api_token_id)
     return {"ok": True, "uuid": created["uuid"]}
 
 
 @router.patch("/providers/{uuid}")
 async def update_provider(uuid: str, body: ProviderUpdate):
     client = _client()
-    # Only push identity fields to Remnawave when provided.
     if any(v is not None for v in (body.name, body.favicon_link, body.login_url)):
         try:
-            await client.infra_update_provider(
-                uuid, name=body.name, favicon_link=body.favicon_link, login_url=body.login_url,
-            )
+            await client.infra_update_provider(uuid, name=body.name, favicon_link=body.favicon_link, login_url=body.login_url)
         except Exception as exc:
             raise _wrap_rw(exc)
     await store.upsert_provider_meta(
-        uuid, balance=body.balance, currency=body.currency, threshold=body.low_balance_threshold,
-    )
+        uuid,
+        balance=_money(body.balance) if body.balance is not None else None,
+        currency=body.currency,
+        low_balance_threshold=_money(body.low_balance_threshold) if body.low_balance_threshold is not None else None,
+        api_token_id=body.api_token_id)
     return {"ok": True}
 
 
 @router.delete("/providers/{uuid}")
 async def delete_provider(uuid: str, force: bool = False):
-    """Cascade guard: refuse if the provider still has billing nodes unless ?force=true."""
     client = _client()
     try:
         providers = await client.infra_list_providers()
         target = next((p for p in providers if p["uuid"] == uuid), None)
         if target and (target.get("billingNodes") or []) and not force:
-            raise HTTPException(
-                409,
-                f"К провайдеру привязано узлов: {len(target['billingNodes'])}. "
-                "Сначала отвяжите их или используйте принудительное удаление.",
-            )
+            raise HTTPException(409, f"К провайдеру привязано узлов: {len(target['billingNodes'])}. Отвяжите их или удалите принудительно.")
         await client.infra_delete_provider(uuid)
     except HTTPException:
         raise
@@ -166,182 +284,158 @@ async def delete_provider(uuid: str, force: bool = False):
     return {"ok": True}
 
 
-# ── Billing nodes ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# 3. Projects  (local)
+# ═══════════════════════════════════════════════════════════════
+@router.get("/projects")
+async def list_projects():
+    projects = await store.projects()
+    svc = await store.services()
+    # cost per project = sum of its services' monthly cost.
+    cost_by_project: dict[str, float] = defaultdict(float)
+    for sv in svc:
+        cost_by_project[sv["project_id"]] += sv["cost"] * (730 if sv["billing_type"] == "hourly" else 1)
+    for p in projects:
+        p["nodeCount"] = len(p["node_uuids"])
+        p["monthlyCost"] = _money(cost_by_project.get(p["id"], 0))
+    return projects
 
-@router.get("/nodes")
-async def list_nodes():
-    """Billing nodes (+ local monthly cost), available nodes, and Remnawave stats."""
-    client = _client()
-    try:
-        data = await client.infra_list_nodes()
-    except Exception as exc:
-        raise _wrap_rw(exc)
-    costs = await store.node_meta_all()
-    billing = []
-    for n in data.get("billingNodes", []) or []:
-        billing.append({**n, "monthlyCost": costs.get(n["uuid"], 0)})
+
+@router.post("/projects", status_code=201)
+async def create_project(body: ProjectBody):
+    pid = await store.create_project(body.name, body.description, body.node_uuids)
+    return {"ok": True, "id": pid}
+
+
+@router.patch("/projects/{pid}")
+async def update_project(pid: str, body: ProjectBody):
+    await store.update_project(pid, name=body.name, description=body.description, node_uuids=body.node_uuids)
+    return {"ok": True}
+
+
+@router.delete("/projects/{pid}")
+async def delete_project(pid: str):
+    await store.delete_project(pid)
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 4. Services  (local)
+# ═══════════════════════════════════════════════════════════════
+@router.get("/services")
+async def list_services():
+    return await store.services()
+
+
+@router.post("/services", status_code=201)
+async def create_service(body: ServiceBody):
+    sid = await store.create_service(**{**body.model_dump(), "cost": _money(body.cost)})
+    return {"ok": True, "id": sid}
+
+
+@router.patch("/services/{sid}")
+async def update_service(sid: str, body: ServiceBody):
+    await store.update_service(sid, **{**body.model_dump(), "cost": _money(body.cost)})
+    return {"ok": True}
+
+
+@router.delete("/services/{sid}")
+async def delete_service(sid: str):
+    await store.delete_service(sid)
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 5. Payments  (local, protected)
+# ═══════════════════════════════════════════════════════════════
+@router.get("/payments")
+async def list_payments(x_billing_session: Optional[str] = Header(default=None)):
+    await _require_session(x_billing_session)
+    return await store.payments()
+
+
+@router.post("/payments", status_code=201)
+async def create_payment(body: PaymentBody, x_billing_session: Optional[str] = Header(default=None)):
+    await _require_session(x_billing_session)
+    pid = await store.create_payment(**body.model_dump())
+    return {"ok": True, "id": pid}
+
+
+@router.delete("/payments/{pid}")
+async def delete_payment(pid: str, x_billing_session: Optional[str] = Header(default=None)):
+    await _require_session(x_billing_session)
+    await store.delete_payment(pid)
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 6. Settings  (local)
+# ═══════════════════════════════════════════════════════════════
+@router.get("/settings")
+async def get_settings():
+    return await store.get_settings()
+
+
+@router.put("/settings")
+async def put_settings(body: SettingsBody):
+    await store.put_settings(
+        base_currency=body.base_currency, fx_rates=body.fx_rates,
+        low_balance_threshold=body.low_balance_threshold,
+        refresh_interval=body.refresh_interval, pin=body.pin)
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 7. Sign-in  (session verification)
+# ═══════════════════════════════════════════════════════════════
+class VerifySession(BaseModel):
+    pin: str = ""
+
+
+@router.post("/auth/verify-session")
+async def verify_session(body: VerifySession):
+    if not await store.verify_pin(body.pin):
+        raise HTTPException(401, "Неверный PIN финансового контура.")
+    token = _secrets.token_urlsafe(24)
+    _SESSIONS.add(token)
+    return {"ok": True, "token": token}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 8. Api tokens  (encrypted vault, protected)
+# ═══════════════════════════════════════════════════════════════
+@router.get("/api-tokens")
+async def list_api_tokens(x_billing_session: Optional[str] = Header(default=None)):
+    await _require_session(x_billing_session)
+    return await store.api_tokens()   # masked only — never the plaintext secret
+
+
+@router.post("/api-tokens", status_code=201)
+async def create_api_token(body: ApiTokenCreate, x_billing_session: Optional[str] = Header(default=None)):
+    await _require_session(x_billing_session)
+    tid = await store.create_api_token(body.name, body.provider_kind, body.secret)
+    return {"ok": True, "id": tid}
+
+
+@router.delete("/api-tokens/{tid}")
+async def delete_api_token(tid: str, x_billing_session: Optional[str] = Header(default=None)):
+    await _require_session(x_billing_session)
+    await store.delete_api_token(tid)
+    return {"ok": True}
+
+
+@router.post("/api-tokens/{tid}/verify")
+async def verify_api_token(tid: str, x_billing_session: Optional[str] = Header(default=None)):
+    """Validate a stored token. NOTE: per-hosting-provider adapters (Selectel,
+    Hetzner, …) are not implemented — this checks the secret decrypts and is
+    non-empty. Returns a clear 'not verified against provider' status."""
+    await _require_session(x_billing_session)
+    secret = await store.get_api_token_secret(tid)
+    if not secret:
+        raise HTTPException(404, "Токен не найден или не расшифровывается.")
     return {
-        "billingNodes": billing,
-        "availableBillingNodes": data.get("availableBillingNodes", []) or [],
-        "stats": data.get("stats", {}),
-    }
-
-
-@router.post("/nodes", status_code=201)
-async def create_node(body: BillingNodeCreate):
-    client = _client()
-    try:
-        created = await client.infra_create_node(
-            provider_uuid=body.provider_uuid, node_uuid=body.node_uuid,
-            name=body.name, next_billing_at=body.next_billing_at,
-        )
-    except Exception as exc:
-        raise _wrap_rw(exc)
-    # The created billing-node uuid may be nested; find it best-effort.
-    new_uuid = created.get("uuid") if isinstance(created, dict) else None
-    if new_uuid and body.monthly_cost:
-        await store.set_node_cost(new_uuid, body.monthly_cost)
-    return {"ok": True}
-
-
-@router.patch("/nodes")
-async def update_nodes(body: BillingNodeUpdate):
-    client = _client()
-    try:
-        await client.infra_update_nodes(body.uuids, next_billing_at=body.next_billing_at)
-    except Exception as exc:
-        raise _wrap_rw(exc)
-    if body.monthly_cost is not None:
-        for u in body.uuids:
-            await store.set_node_cost(u, body.monthly_cost)
-    return {"ok": True}
-
-
-@router.delete("/nodes/{uuid}")
-async def delete_node(uuid: str):
-    client = _client()
-    try:
-        await client.infra_delete_node(uuid)
-    except Exception as exc:
-        raise _wrap_rw(exc)
-    await store.delete_node_meta(uuid)
-    return {"ok": True}
-
-
-# ── History ───────────────────────────────────────────────────
-
-@router.get("/history")
-async def list_history():
-    client = _client()
-    try:
-        records = await client.infra_list_history()
-    except Exception as exc:
-        raise _wrap_rw(exc)
-    return records
-
-
-@router.post("/history", status_code=201)
-async def create_history(body: HistoryCreate):
-    client = _client()
-    try:
-        await client.infra_create_history(
-            provider_uuid=body.provider_uuid, amount=body.amount, billed_at=body.billed_at,
-        )
-    except Exception as exc:
-        raise _wrap_rw(exc)
-    return {"ok": True}
-
-
-@router.delete("/history/{uuid}")
-async def delete_history(uuid: str):
-    client = _client()
-    try:
-        await client.infra_delete_history(uuid)
-    except Exception as exc:
-        raise _wrap_rw(exc)
-    return {"ok": True}
-
-
-# ── Analytics + burn-rate ─────────────────────────────────────
-
-@router.get("/analytics")
-async def analytics():
-    """Spend-by-provider (pie), monthly spend (line), and burn-rate per provider +
-    globally. Also fires the low-balance notification hook."""
-    client = _client()
-    try:
-        providers = await client.infra_list_providers()
-        history = await client.infra_list_history()
-        nodes_data = await client.infra_list_nodes()
-    except Exception as exc:
-        raise _wrap_rw(exc)
-
-    pmeta = await store.provider_meta_all()
-    costs = await store.node_meta_all()
-    pname = {p["uuid"]: p["name"] for p in providers}
-
-    # Spend by provider (sum of history amounts).
-    by_provider: dict[str, float] = defaultdict(float)
-    by_month: dict[str, float] = defaultdict(float)
-    for r in history:
-        by_provider[r.get("providerUuid", "")] += float(r.get("amount", 0))
-        billed = r.get("billedAt", "")
-        month = billed[:7] if len(billed) >= 7 else "?"   # YYYY-MM
-        by_month[month] += float(r.get("amount", 0))
-
-    pie = [
-        {"provider": pname.get(uuid, uuid[:8]), "total": round(total, 2)}
-        for uuid, total in sorted(by_provider.items(), key=lambda x: -x[1])
-    ]
-    line = [{"month": m, "total": round(t, 2)} for m, t in sorted(by_month.items())]
-
-    # Per-provider monthly cost = sum of its billing nodes' local costs.
-    provider_monthly_cost: dict[str, float] = defaultdict(float)
-    for n in nodes_data.get("billingNodes", []) or []:
-        provider_monthly_cost[n.get("providerUuid", "")] += costs.get(n["uuid"], 0)
-
-    burn = []
-    merged_for_alert = []
-    total_balance = total_monthly = 0.0
-    for p in providers:
-        uuid = p["uuid"]
-        m = pmeta.get(uuid, {})
-        balance = m.get("balance", 0) or 0
-        currency = m.get("currency", "RUB")
-        threshold = m.get("low_balance_threshold", 0) or 0
-        monthly = provider_monthly_cost.get(uuid, 0)
-        daily = monthly / 30.0
-        days_left = round(balance / daily, 1) if daily > 0 else None
-        burn.append({
-            "provider": p["name"], "balance": round(balance, 2), "currency": currency,
-            "monthlyCost": round(monthly, 2), "daysLeft": days_left,
-            "critical": days_left is not None and days_left < 7,
-        })
-        merged_for_alert.append({
-            "name": p["name"], "balance": balance, "currency": currency,
-            "lowBalanceThreshold": threshold,
-        })
-        total_balance += balance
-        total_monthly += monthly
-
-    # Fire the notification stub for any provider below its threshold.
-    alerts = await infra_notify.check_low_balances(merged_for_alert)
-
-    global_daily = total_monthly / 30.0
-    global_days_left = round(total_balance / global_daily, 1) if global_daily > 0 else None
-
-    return {
-        "spendByProvider": pie,
-        "spendByMonth": line,
-        "burnRate": {
-            "perProvider": burn,
-            "global": {
-                "totalBalance": round(total_balance, 2),
-                "totalMonthlyCost": round(total_monthly, 2),
-                "daysLeft": global_days_left,
-                "critical": global_days_left is not None and global_days_left < 7,
-            },
-        },
-        "stats": nodes_data.get("stats", {}),
-        "alertsCount": len(alerts),
+        "ok": True,
+        "detail": "Секрет корректно расшифрован. Реальная проверка у провайдера "
+                  "не реализована (нужен адаптер API конкретного хостинга).",
+        "verifiedAgainstProvider": False,
     }

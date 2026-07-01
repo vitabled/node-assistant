@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { ChevronDown, Search } from "lucide-react";
+import { getFlagEmoji } from "../utils/format";
 
 // ISO 3166-1 alpha-2 → { name, flag }. Mirrors the country picker in the
 // Remnawave panel. "XX" is the panel's "unknown" sentinel.
@@ -136,7 +137,7 @@ export function CountrySelect({
       >
         {selected ? (
           <span className="flex-1 text-gray-100">
-            <span className="mr-1.5">{selected.flag}</span>
+            <span className="mr-1.5">{getFlagEmoji(selected.code)}</span>
             {selected.name}
             <span className="text-gray-600 ml-1">({selected.code})</span>
           </span>
@@ -182,7 +183,7 @@ export function CountrySelect({
                                hover:bg-gray-800 transition-colors select-none
                                ${active ? "bg-gray-800/60" : ""}`}
                   >
-                    <span>{c.flag}</span>
+                    <span>{getFlagEmoji(c.code)}</span>
                     <span className={`text-sm ${active ? "text-blue-300" : "text-gray-300"}`}>
                       {c.name}
                     </span>

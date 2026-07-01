@@ -1,14 +1,23 @@
-// Thin fetch wrapper for the /api/infra-billing endpoints. On error it throws an
-// Error whose message is the backend `detail` (surfaced as a toast by callers).
+// Typed fetch wrapper for /api/infra-billing. Errors throw with the backend
+// `detail` (shown as toasts). Sensitive routes send the X-Billing-Session token
+// (obtained from the Sign-in tab, kept in sessionStorage).
+
+const SESSION_KEY = "infra_billing_session";
+export const session = {
+  get: () => sessionStorage.getItem(SESSION_KEY) || "",
+  set: (t: string) => sessionStorage.setItem(SESSION_KEY, t),
+  clear: () => sessionStorage.removeItem(SESSION_KEY),
+};
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api/infra-billing${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const s = session.get();
+  if (s) headers["X-Billing-Session"] = s;
+  const res = await fetch(`/api/infra-billing${path}`, { headers, ...init });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+    const msg = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail);
+    throw Object.assign(new Error(msg), { status: res.status });
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -16,48 +25,65 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ── Types ─────────────────────────────────────────────────────
 export interface Provider {
-  uuid: string; name: string; faviconLink: string; loginUrl: string;
-  nodeCount: number; balance: number; currency: string; lowBalanceThreshold: number;
+  uuid: string; name: string; faviconLink: string; loginUrl: string; nodeCount: number;
+  balance: number; currency: string; lowBalanceThreshold: number;
+  status: string; apiTokenId: string; apiTokenName: string;
 }
-export interface BillingNode {
-  uuid: string; nodeUuid: string; name: string; providerUuid: string;
-  provider?: { name?: string }; nextBillingAt: string; monthlyCost: number;
+export interface Project {
+  id: string; name: string; description: string; node_uuids: string[];
+  nodeCount: number; monthlyCost: number; created_at: number;
 }
-export interface AvailableNode { uuid: string; name: string; countryCode: string }
-export interface NodesResp {
-  billingNodes: BillingNode[]; availableBillingNodes: AvailableNode[];
-  stats: { upcomingNodesCount?: number; currentMonthPayments?: number; totalSpent?: number };
+export interface Service {
+  id: string; name: string; kind: string; node_uuid: string; provider_uuid: string;
+  project_id: string; billing_type: string; cost: number; next_billing_at: string; created_at: number;
 }
-export interface HistoryRecord {
-  uuid: string; providerUuid: string; amount: number; billedAt: string;
-  provider?: { name?: string };
+export interface Payment {
+  id: string; ts: number; provider_uuid: string; project_id: string;
+  type: string; amount: number; currency: string; status: string; note: string;
 }
-export interface Analytics {
+export interface ApiToken { id: string; name: string; providerKind: string; masked: string; createdAt: number }
+export interface BillingSettings {
+  baseCurrency: string; fxRates: Record<string, number>;
+  lowBalanceThreshold: number; refreshInterval: string; pinSet: boolean;
+}
+export interface DashboardSummary {
+  baseCurrency: string; totalBalance: number;
+  burnRate: { hourly: number; daily: number; monthly: number; daysLeft: number | null; critical: boolean };
   spendByProvider: { provider: string; total: number }[];
   spendByMonth: { month: string; total: number }[];
-  burnRate: {
-    perProvider: { provider: string; balance: number; currency: string; monthlyCost: number; daysLeft: number | null; critical: boolean }[];
-    global: { totalBalance: number; totalMonthlyCost: number; daysLeft: number | null; critical: boolean };
-  };
-  stats: { upcomingNodesCount?: number; currentMonthPayments?: number; totalSpent?: number };
   alertsCount: number;
 }
 
 // ── Endpoints ─────────────────────────────────────────────────
 export const infraApi = {
+  dashboard: () => req<DashboardSummary>("/dashboard/summary"),
+
   listProviders: () => req<Provider[]>("/providers"),
   createProvider: (b: unknown) => req("/providers", { method: "POST", body: JSON.stringify(b) }),
   updateProvider: (uuid: string, b: unknown) => req(`/providers/${uuid}`, { method: "PATCH", body: JSON.stringify(b) }),
   deleteProvider: (uuid: string, force = false) => req(`/providers/${uuid}?force=${force}`, { method: "DELETE" }),
 
-  listNodes: () => req<NodesResp>("/nodes"),
-  createNode: (b: unknown) => req("/nodes", { method: "POST", body: JSON.stringify(b) }),
-  updateNodes: (b: unknown) => req("/nodes", { method: "PATCH", body: JSON.stringify(b) }),
-  deleteNode: (uuid: string) => req(`/nodes/${uuid}`, { method: "DELETE" }),
+  listProjects: () => req<Project[]>("/projects"),
+  createProject: (b: unknown) => req("/projects", { method: "POST", body: JSON.stringify(b) }),
+  updateProject: (id: string, b: unknown) => req(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+  deleteProject: (id: string) => req(`/projects/${id}`, { method: "DELETE" }),
 
-  listHistory: () => req<HistoryRecord[]>("/history"),
-  createHistory: (b: unknown) => req("/history", { method: "POST", body: JSON.stringify(b) }),
-  deleteHistory: (uuid: string) => req(`/history/${uuid}`, { method: "DELETE" }),
+  listServices: () => req<Service[]>("/services"),
+  createService: (b: unknown) => req("/services", { method: "POST", body: JSON.stringify(b) }),
+  updateService: (id: string, b: unknown) => req(`/services/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+  deleteService: (id: string) => req(`/services/${id}`, { method: "DELETE" }),
 
-  analytics: () => req<Analytics>("/analytics"),
+  listPayments: () => req<Payment[]>("/payments"),
+  createPayment: (b: unknown) => req("/payments", { method: "POST", body: JSON.stringify(b) }),
+  deletePayment: (id: string) => req(`/payments/${id}`, { method: "DELETE" }),
+
+  getSettings: () => req<BillingSettings>("/settings"),
+  putSettings: (b: unknown) => req("/settings", { method: "PUT", body: JSON.stringify(b) }),
+
+  verifySession: (pin: string) => req<{ ok: boolean; token: string }>("/auth/verify-session", { method: "POST", body: JSON.stringify({ pin }) }),
+
+  listTokens: () => req<ApiToken[]>("/api-tokens"),
+  createToken: (b: unknown) => req("/api-tokens", { method: "POST", body: JSON.stringify(b) }),
+  deleteToken: (id: string) => req(`/api-tokens/${id}`, { method: "DELETE" }),
+  verifyToken: (id: string) => req<{ ok: boolean; detail: string; verifiedAgainstProvider: boolean }>(`/api-tokens/${id}/verify`, { method: "POST" }),
 };

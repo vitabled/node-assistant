@@ -7,10 +7,14 @@ import { Settings }                        from "./components/Settings";
 import { Templates }                       from "./components/Templates";
 import { CertsForm, type CertsFormData }  from "./components/CertsForm";
 import { TrafficRules }                   from "./components/TrafficRules";
+import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
-import { InfraBillingNodes }              from "./components/infra/InfraBillingNodes";
-import { InfraHistory }                   from "./components/infra/InfraHistory";
-import { InfraAnalytics }                 from "./components/infra/InfraAnalytics";
+import { InfraProjects }                  from "./components/infra/InfraProjects";
+import { InfraServices }                  from "./components/infra/InfraServices";
+import { InfraPayments }                  from "./components/infra/InfraPayments";
+import { InfraSettings }                  from "./components/infra/InfraSettings";
+import { InfraSignIn }                    from "./components/infra/InfraSignIn";
+import { InfraApiTokens }                 from "./components/infra/InfraApiTokens";
 import { Toaster }                        from "./components/infra/Toast";
 import { StepProgress, RENEW_STEPS }       from "./components/StepProgress";
 import { TerminalOutput }                  from "./components/TerminalOutput";
@@ -111,11 +115,15 @@ export default function App() {
         {/* ── Traffic Rules ── */}
         {tab === "traffic" && <TrafficRules />}
 
-        {/* ── Инфра-биллинг ── */}
+        {/* ── Инфра-биллинг (8 вкладок) ── */}
+        {tab === "infra-dashboard" && <InfraDashboard />}
         {tab === "infra-providers" && <InfraProviders />}
-        {tab === "infra-nodes"     && <InfraBillingNodes />}
-        {tab === "infra-history"   && <InfraHistory />}
-        {tab === "infra-analytics" && <InfraAnalytics />}
+        {tab === "infra-projects"  && <InfraProjects />}
+        {tab === "infra-services"  && <InfraServices />}
+        {tab === "infra-payments"  && <InfraPayments />}
+        {tab === "infra-settings"  && <InfraSettings />}
+        {tab === "infra-signin"    && <InfraSignIn />}
+        {tab === "infra-tokens"    && <InfraApiTokens />}
 
         {/* ── Certs ── */}
         {tab === "certs" && (

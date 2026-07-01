@@ -23,7 +23,9 @@ class DeployRequest(BaseModel):
     change_ssh_port: bool = Field(default=True)
     remnanode_port: int = Field(default=2222, ge=1, le=65535)
     xhttp_path: str = Field(default="")
-    country_code: str = Field(default="XX", min_length=2, max_length=2)
+    # No field-level length constraint: in haproxy mode the form sends "".
+    # The 2-char requirement is enforced only for remnanode mode (validator below).
+    country_code: str = Field(default="XX", max_length=2)
     behind_cdn: bool = Field(default=False)
     install_warp: bool = Field(default=False)
     update_system: bool = Field(default=False)
@@ -71,6 +73,8 @@ class DeployRequest(BaseModel):
                 raise ValueError(
                     "template_id is required when create_in_remnawave is True"
                 )
+            if len(self.country_code) != 2:
+                raise ValueError("country_code must be a 2-letter code in remnanode mode")
         else:  # haproxy
             if not self.haproxy_dest_ip.strip():
                 raise ValueError("haproxy_dest_ip is required in haproxy mode")
