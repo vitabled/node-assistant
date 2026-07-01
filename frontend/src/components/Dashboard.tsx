@@ -4,7 +4,6 @@ import {
   AlertTriangle, XCircle, Server, Clock,
 } from "lucide-react";
 import { COUNTRIES } from "./CountrySelect";
-import { flagFromLocation } from "../utils/format";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
 type TickStatus = "up" | "slow" | "down";
@@ -25,10 +24,22 @@ interface Incident {
 }
 
 // ── Helpers ───────────────────────────────────────────────────
-// Node/group location → flag emoji. Handles embedded flags, 2-letter codes
-// (via getFlagEmoji) and country names; neutral globe when nothing matches.
+function extractFlag(s: string): string | null {
+  const arr = Array.from(s);
+  for (let i = 0; i < arr.length - 1; i++) {
+    const a = arr[i].codePointAt(0)!, b = arr[i + 1].codePointAt(0)!;
+    if (a >= 0x1F1E6 && a <= 0x1F1FF && b >= 0x1F1E6 && b <= 0x1F1FF) return arr[i] + arr[i + 1];
+  }
+  return null;
+}
 function flagFor(group: string): string {
-  return flagFromLocation(group, COUNTRIES) || "🌐";
+  const embedded = extractFlag(group);
+  if (embedded) return embedded;
+  const g = group.trim().toLowerCase();
+  const exact = COUNTRIES.find(c => c.name.toLowerCase() === g || c.code.toLowerCase() === g);
+  if (exact) return exact.flag;
+  const sub = COUNTRIES.find(c => c.code !== "XX" && g.includes(c.name.toLowerCase()));
+  return sub ? sub.flag : "🏳️";
 }
 function fmtDuration(sec: number): string {
   if (sec < 60) return `${sec} сек`;
