@@ -1,216 +1,116 @@
 import { useState } from "react";
 import {
-  Menu, LayoutDashboard, Rocket, RefreshCw, FileCode2, Settings2, Gauge,
-  Wallet, ChevronDown, CreditCard, ReceiptText, PieChart,
-  FolderKanban, Server as ServerIcon, SlidersHorizontal, LogIn, KeyRound,
+  Activity, Rocket, RefreshCw, FileCode2, Gauge, Settings2, Server,
+  PieChart, Lock, ChevronDown, CreditCard, FolderKanban, ReceiptText,
+  KeyRound, SlidersHorizontal, LogIn,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
-  | "dashboard" | "deploy" | "certs" | "templates" | "settings" | "traffic"
+  | "dashboard" | "deploy" | "certs" | "templates" | "traffic" | "settings"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-signin" | "infra-tokens";
 
-const STORAGE_KEY = "sidebar_collapsed";
+interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon }
 
-interface NavItemDef {
-  tab: Tab;
-  label: string;
-  Icon: LucideIcon;
-}
-
-const TOP_ITEMS: NavItemDef[] = [
-  { tab: "dashboard", label: "Дешборд", Icon: LayoutDashboard },
+const NAV_MAIN: NavItemDef[] = [
+  { tab: "dashboard", label: "Дешборд",      Icon: Activity  },
+  { tab: "deploy",    label: "Деплой ноды",  Icon: Rocket    },
+  { tab: "certs",     label: "Обновить SSL", Icon: RefreshCw },
+  { tab: "templates", label: "Шаблоны",      Icon: FileCode2 },
+  { tab: "traffic",   label: "Трафик",       Icon: Gauge     },
+  { tab: "settings",  label: "Настройки",    Icon: Settings2 },
 ];
 
-const NODE_ITEMS: NavItemDef[] = [
-  { tab: "deploy",     label: "Деплой ноды",         Icon: Rocket    },
-  { tab: "certs",      label: "Обновить SSL",         Icon: RefreshCw },
-  { tab: "templates",  label: "Шаблоны",              Icon: FileCode2 },
-  { tab: "traffic",    label: "Ограничение трафика",  Icon: Gauge     },
-];
-
-const INFRA_ITEMS: NavItemDef[] = [
-  { tab: "infra-dashboard", label: "Dashboard",           Icon: PieChart          },
-  { tab: "infra-providers", label: "Провайдеры",          Icon: CreditCard        },
-  { tab: "infra-projects",  label: "Проекты",             Icon: FolderKanban      },
-  { tab: "infra-services",  label: "Услуги и Тарифы",     Icon: ServerIcon        },
-  { tab: "infra-payments",  label: "Платежи",             Icon: ReceiptText       },
-  { tab: "infra-settings",  label: "Настройки биллинга",  Icon: SlidersHorizontal },
-  { tab: "infra-signin",    label: "Sign-in",             Icon: LogIn             },
-  { tab: "infra-tokens",    label: "API токены",          Icon: KeyRound          },
-];
-
-const BOTTOM_ITEMS: NavItemDef[] = [
-  { tab: "settings", label: "Настройки", Icon: Settings2 },
+const INFRA_TABS: NavItemDef[] = [
+  { tab: "infra-dashboard", label: "Dashboard",          Icon: PieChart          },
+  { tab: "infra-providers", label: "Провайдеры",         Icon: CreditCard        },
+  { tab: "infra-projects",  label: "Проекты",            Icon: FolderKanban      },
+  { tab: "infra-services",  label: "Услуги и тарифы",    Icon: Server            },
+  { tab: "infra-payments",  label: "Платежи",            Icon: ReceiptText       },
+  { tab: "infra-settings",  label: "Настройки биллинга", Icon: SlidersHorizontal },
+  { tab: "infra-signin",    label: "Sign-in",            Icon: LogIn             },
+  { tab: "infra-tokens",    label: "API токены",         Icon: KeyRound          },
 ];
 
 interface Props {
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
-  collapsed: boolean;
+  collapsed: boolean;    // "rail" mode in the design
   onToggle: () => void;
 }
 
-export function Sidebar({ activeTab, onTabChange, collapsed, onToggle }: Props) {
+export function Sidebar({ activeTab, onTabChange }: Props) {
+  const isInfra = activeTab.startsWith("infra-");
+  const [infraOpen, setInfraOpen] = useState(isInfra);
+
+  const NavBtn = ({ item, nested }: { item: NavItemDef; nested?: boolean }) => {
+    const { Icon, label } = item;
+    const active = activeTab === item.tab;
+    return (
+      <button
+        className={`navitem ${active ? "active" : ""}`}
+        onClick={() => onTabChange(item.tab)}
+        style={{ paddingLeft: nested ? 30 : undefined }}
+      >
+        <Icon size={16} style={{ flex: "none" }} />
+        <span className="trunc">{label}</span>
+      </button>
+    );
+  };
+
   return (
     <aside
-      className={`shrink-0 flex flex-col h-full border-r border-gray-800/80 bg-gray-950
-                  transition-[width] duration-200 ease-in-out
-                  ${collapsed ? "w-14" : "w-52"}`}
+      style={{
+        width: 224, flex: "none", background: "var(--bg1)",
+        borderRight: "1px solid var(--line-soft)", display: "flex",
+        flexDirection: "column", padding: "16px 12px 12px",
+      }}
     >
-      {/* Header / Hamburger */}
-      <div className="h-11 flex items-center border-b border-gray-800/80 px-2.5 gap-2.5 shrink-0">
-        <button
-          onClick={onToggle}
-          className="w-8 h-8 flex items-center justify-center rounded-md shrink-0
-                     text-gray-500 hover:text-gray-200 hover:bg-gray-800
-                     transition-colors focus:outline-none focus:ring-1 focus:ring-gray-700"
-          aria-label={collapsed ? "Развернуть панель" : "Свернуть панель"}
-        >
-          <Menu size={16} />
+      {/* brand */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 4px 4px", minHeight: 34 }}>
+        <span style={{
+          width: 30, height: 30, borderRadius: 8, background: "var(--accent)",
+          color: "var(--accent-ink)", display: "grid", placeItems: "center", flex: "none",
+          boxShadow: "0 2px 10px var(--accent-dim)",
+        }}>
+          <Server size={17} />
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <p style={{ fontSize: 13, fontWeight: 700, color: "var(--t-hi)", lineHeight: 1.2 }}>Node Installer</p>
+          <p style={{ fontSize: 10, color: "var(--t-low)", letterSpacing: ".04em" }}>remnawave ops</p>
+        </div>
+      </div>
+
+      {/* nav */}
+      <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", display: "flex", flexDirection: "column", gap: 2, paddingTop: 8 }}>
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Управление</p>
+        {NAV_MAIN.map(item => <NavBtn key={item.tab} item={item} />)}
+
+        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Инфраструктура</p>
+
+        {/* Infra accordion group */}
+        <button className={`navitem ${isInfra && !infraOpen ? "active" : ""}`} onClick={() => setInfraOpen(v => !v)}>
+          <PieChart size={16} style={{ flex: "none" }} />
+          <span className="trunc" style={{ flex: 1 }}>Инфра-биллинг</span>
+          <ChevronDown size={13} style={{ color: "var(--t-low)", transform: infraOpen ? "none" : "rotate(-90deg)", transition: "transform .15s" }} />
         </button>
-        {!collapsed && (
-          <span className="text-sm font-semibold text-white tracking-tight truncate">
-            Node Installer
-          </span>
+        {infraOpen && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
+            {INFRA_TABS.map(item => <NavBtn key={item.tab} item={item} nested />)}
+          </div>
         )}
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-2 px-2 flex flex-col gap-0.5">
-        {TOP_ITEMS.map(item => (
-          <NavBtn
-            key={item.tab}
-            item={item}
-            active={activeTab === item.tab}
-            collapsed={collapsed}
-            onClick={() => onTabChange(item.tab)}
-          />
-        ))}
-
-        {/* Nodes group */}
-        <div className="mt-3">
-          {collapsed
-            ? <div className="border-t border-gray-800/50 my-1.5 mx-1" />
-            : <p className="px-2 py-1 text-[10px] font-semibold text-gray-600
-                            uppercase tracking-widest select-none">
-                Ноды
-              </p>
-          }
-          <div className="flex flex-col gap-0.5">
-            {NODE_ITEMS.map(item => (
-              <NavBtn
-                key={item.tab}
-                item={item}
-                active={activeTab === item.tab}
-                collapsed={collapsed}
-                onClick={() => onTabChange(item.tab)}
-              />
-            ))}
-          </div>
+      {/* footer status */}
+      <div style={{ padding: "10px 10px 2px", borderTop: "1px solid var(--line-soft)", marginTop: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+          <span className="dot" style={{ background: "var(--ok)" }} />
+          <span className="dim">Remnawave</span>
+          <span className="chip ok" style={{ marginLeft: "auto", padding: "1px 7px", fontSize: 10 }}>онлайн</span>
         </div>
-
-        {/* Инфра-биллинг — collapsible group */}
-        <InfraGroup activeTab={activeTab} collapsed={collapsed} onTabChange={onTabChange} />
-
-        {/* Settings at bottom */}
-        <div className="mt-auto pt-3">
-          {collapsed
-            ? <div className="border-t border-gray-800/50 my-1.5 mx-1" />
-            : <div className="border-t border-gray-800/50 my-1.5" />
-          }
-          {BOTTOM_ITEMS.map(item => (
-            <NavBtn
-              key={item.tab}
-              item={item}
-              active={activeTab === item.tab}
-              collapsed={collapsed}
-              onClick={() => onTabChange(item.tab)}
-            />
-          ))}
-        </div>
-      </nav>
+      </div>
     </aside>
-  );
-}
-
-
-function NavBtn({
-  item, active, collapsed, onClick,
-}: {
-  item: NavItemDef;
-  active: boolean;
-  collapsed: boolean;
-  onClick: () => void;
-}) {
-  const { Icon, label } = item;
-  return (
-    <button
-      onClick={onClick}
-      title={collapsed ? label : undefined}
-      className={`w-full flex items-center gap-2.5 rounded-md text-sm
-                  transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/30
-                  ${collapsed ? "px-0 justify-center py-2" : "px-2.5 py-2"}
-                  ${active
-                    ? "bg-blue-600/15 text-blue-400 border border-blue-700/40"
-                    : "text-gray-400 hover:text-gray-200 hover:bg-gray-800/60 border border-transparent"
-                  }`}
-    >
-      <Icon size={16} className="shrink-0" />
-      {!collapsed && <span className="truncate">{label}</span>}
-    </button>
-  );
-}
-
-
-// Collapsible "Инфра-биллинг" accordion group. Collapsed by default unless the
-// active tab is inside the group. In icon-only mode the sub-items render directly.
-function InfraGroup({
-  activeTab, collapsed, onTabChange,
-}: {
-  activeTab: Tab; collapsed: boolean; onTabChange: (t: Tab) => void;
-}) {
-  const insideGroup = INFRA_ITEMS.some(i => i.tab === activeTab);
-  const [open, setOpen] = useState(insideGroup);
-
-  // Icon-only sidebar: show items directly under a divider (accordion has no room).
-  if (collapsed) {
-    return (
-      <div className="mt-3">
-        <div className="border-t border-gray-800/50 my-1.5 mx-1" />
-        <div className="flex flex-col gap-0.5">
-          {INFRA_ITEMS.map(item => (
-            <NavBtn key={item.tab} item={item} active={activeTab === item.tab}
-              collapsed onClick={() => onTabChange(item.tab)} />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="mt-3">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-[10px] font-semibold
-                    uppercase tracking-widest transition-colors focus:outline-none
-                    ${insideGroup ? "text-blue-400" : "text-gray-600 hover:text-gray-400"}`}
-      >
-        <Wallet size={13} className="shrink-0" />
-        <span className="flex-1 text-left">Инфра-биллинг</span>
-        <ChevronDown size={13} className={`transition-transform duration-200 ${open ? "" : "-rotate-90"}`} />
-      </button>
-      {/* Smooth expand/collapse */}
-      <div className={`overflow-hidden transition-[max-height] duration-200 ease-in-out
-                       ${open ? "max-h-[26rem]" : "max-h-0"}`}>
-        <div className="flex flex-col gap-0.5 pl-1 pt-0.5">
-          {INFRA_ITEMS.map(item => (
-            <NavBtn key={item.tab} item={item} active={activeTab === item.tab}
-              collapsed={false} onClick={() => onTabChange(item.tab)} />
-          ))}
-        </div>
-      </div>
-    </div>
   );
 }
