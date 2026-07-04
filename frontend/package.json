@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
+    "test": "node tests/Dashboard.test.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

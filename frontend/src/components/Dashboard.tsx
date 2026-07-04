@@ -118,7 +118,11 @@ export function Dashboard() {
 
   const g = data?.global;
   const running = data?.container === "running";
-  const state: GState = running && g ? g.state : "unknown";
+  // The checker can be `running` yet unreachable → backend returns `global: {}`
+  // (an incomplete object, not the declared full `Global`). Gate on `g.state`
+  // being present so an empty global degrades to "unknown" instead of indexing
+  // BANNER with undefined and crashing the whole tree.
+  const state: GState = running && g?.state ? g.state : "unknown";
   const banner = BANNER[state];
 
   // Group nodes by country (groupName).
@@ -170,15 +174,15 @@ export function Dashboard() {
           <div className="flex-1">
             <p className="text-lg font-semibold">{banner.text}</p>
             <p className="text-xs opacity-70 mt-0.5">
-              {running && g
+              {running && g?.state
                 ? `${g.online} из ${g.total} узлов онлайн`
                 : loading ? "Загрузка…" : "xray-checker не запущен — настройте его в Настройки → Деплой"}
             </p>
           </div>
           <div className="flex items-center gap-6 text-right">
             <Stat label="Аптайм 30 дней" value={g?.uptime30d != null ? `${g.uptime30d}%` : "—"} />
-            <Stat label="Активных протоколов" value={g ? String(g.protocols.length) : "—"}
-              sub={g?.protocols.join(", ")} />
+            <Stat label="Активных протоколов" value={g?.protocols ? String(g.protocols.length) : "—"}
+              sub={g?.protocols?.join(", ")} />
           </div>
         </div>
 
