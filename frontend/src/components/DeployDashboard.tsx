@@ -2,8 +2,7 @@ import { useState } from "react";
 import { Plus, Rocket, X } from "lucide-react";
 import { DeployCard } from "./DeployCard";
 import { DeployForm, type FormData } from "./DeployForm";
-
-const JOBS_KEY = "deploy_jobs";
+import { deployJobsKey } from "../auth/store";
 
 export interface DeployJobSummary {
   taskId:     string;
@@ -16,12 +15,12 @@ export interface DeployJobSummary {
 }
 
 function loadJobs(): DeployJobSummary[] {
-  try { return JSON.parse(localStorage.getItem(JOBS_KEY) ?? "[]"); }
+  try { return JSON.parse(localStorage.getItem(deployJobsKey()) ?? "[]"); }
   catch { return []; }
 }
 
 function saveJobs(jobs: DeployJobSummary[]) {
-  try { localStorage.setItem(JOBS_KEY, JSON.stringify(jobs)); }
+  try { localStorage.setItem(deployJobsKey(), JSON.stringify(jobs)); }
   catch {}
 }
 

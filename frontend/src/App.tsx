@@ -15,12 +15,13 @@ import { InfraProjects }                  from "./components/infra/InfraProjects
 import { InfraServices }                  from "./components/infra/InfraServices";
 import { InfraPayments }                  from "./components/infra/InfraPayments";
 import { InfraSettings }                  from "./components/infra/InfraSettings";
-import { InfraSignIn }                    from "./components/infra/InfraSignIn";
 import { InfraApiTokens }                 from "./components/infra/InfraApiTokens";
 import { Toaster }                        from "./components/infra/Toast";
 import { StepProgress, RENEW_STEPS }       from "./components/StepProgress";
 import { TerminalOutput }                  from "./components/TerminalOutput";
 import { useTaskStream, type StatusFrame } from "./hooks/useTaskStream";
+import { AccountMenu }                     from "./auth/AccountMenu";
+import { tabKey }                          from "./auth/store";
 import {
   ACCENTS, type AccentKey, type Density,
   applyAccent, applyDensity, loadAccent, loadDensity, saveAccent, saveDensity,
@@ -46,12 +47,21 @@ const CRUMB: Record<Tab, [string, string]> = {
   "infra-services":  ["Инфра-биллинг", "Услуги и тарифы"],
   "infra-payments":  ["Инфра-биллинг", "Платежи"],
   "infra-settings":  ["Инфра-биллинг", "Настройки биллинга"],
-  "infra-signin":    ["Инфра-биллинг", "Sign-in"],
   "infra-tokens":    ["Инфра-биллинг", "API токены"],
 };
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("dashboard");
+  // Restore the last-open tab for THIS account (per-account, survives reload).
+  const [tab, setTab] = useState<Tab>(() => {
+    try {
+      const stored = localStorage.getItem(tabKey());
+      if (stored && stored in CRUMB) return stored as Tab;
+    } catch {}
+    return "dashboard";
+  });
+  useEffect(() => {
+    try { localStorage.setItem(tabKey(), tab); } catch {}
+  }, [tab]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem(SIDEBAR_KEY) === "1"; } catch { return false; }
   });
@@ -169,6 +179,7 @@ export default function App() {
                 </div>
               )}
             </div>
+            <AccountMenu />
           </div>
         </header>
 
@@ -186,7 +197,6 @@ export default function App() {
           {tab === "infra-services"  && <InfraServices />}
           {tab === "infra-payments"  && <InfraPayments />}
           {tab === "infra-settings"  && <InfraSettings />}
-          {tab === "infra-signin"    && <InfraSignIn />}
           {tab === "infra-tokens"    && <InfraApiTokens />}
 
           {tab === "certs" && (

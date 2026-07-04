@@ -1,18 +1,9 @@
 // Typed fetch wrapper for /api/infra-billing. Errors throw with the backend
-// `detail` (shown as toasts). Sensitive routes send the X-Billing-Session token
-// (obtained from the Sign-in tab, kept in sessionStorage).
-
-const SESSION_KEY = "infra_billing_session";
-export const session = {
-  get: () => sessionStorage.getItem(SESSION_KEY) || "",
-  set: (t: string) => sessionStorage.setItem(SESSION_KEY, t),
-  clear: () => sessionStorage.removeItem(SESSION_KEY),
-};
+// `detail` (shown as toasts). The account bearer token is attached globally by
+// the auth fetch interceptor (src/auth/apiClient.ts) — no per-call auth here.
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const s = session.get();
-  if (s) headers["X-Billing-Session"] = s;
   const res = await fetch(`/api/infra-billing${path}`, { headers, ...init });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -45,7 +36,7 @@ export interface Payment {
 export interface ApiToken { id: string; name: string; providerKind: string; masked: string; createdAt: number }
 export interface BillingSettings {
   baseCurrency: string; fxRates: Record<string, number>;
-  lowBalanceThreshold: number; refreshInterval: string; pinSet: boolean;
+  lowBalanceThreshold: number; refreshInterval: string;
 }
 export interface DashboardSummary {
   baseCurrency: string; totalBalance: number;
@@ -80,8 +71,6 @@ export const infraApi = {
 
   getSettings: () => req<BillingSettings>("/settings"),
   putSettings: (b: unknown) => req("/settings", { method: "PUT", body: JSON.stringify(b) }),
-
-  verifySession: (pin: string) => req<{ ok: boolean; token: string }>("/auth/verify-session", { method: "POST", body: JSON.stringify({ pin }) }),
 
   listTokens: () => req<ApiToken[]>("/api-tokens"),
   createToken: (b: unknown) => req("/api-tokens", { method: "POST", body: JSON.stringify(b) }),

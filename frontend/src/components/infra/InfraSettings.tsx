@@ -10,8 +10,6 @@ export function InfraSettings() {
   const [s, setS] = useState<BillingSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [pin, setPin] = useState("");        // "" = unchanged; whitespace-only handled below
-  const [pinTouched, setPinTouched] = useState(false);
 
   useEffect(() => { infraApi.getSettings().then(setS).catch(e => toast((e as Error).message, "error")); }, []);
 
@@ -24,11 +22,9 @@ export function InfraSettings() {
       low_balance_threshold: s.lowBalanceThreshold,
       refresh_interval: s.refreshInterval,
     };
-    if (pinTouched) body.pin = pin;  // only change PIN when the field was edited ("" clears the gate)
     try {
       await infraApi.putSettings(body);
       setSaved(true); setTimeout(() => setSaved(false), 2000);
-      setPin(""); setPinTouched(false);
       setS(await infraApi.getSettings());
     } catch (e) { toast((e as Error).message, "error"); }
     setSaving(false);
@@ -42,7 +38,7 @@ export function InfraSettings() {
   return (
     <Page>
       <PageHeader icon={<SlidersHorizontal size={16} className="text-blue-400" />} title="Настройки биллинга"
-        subtitle="Базовая валюта, курсы, пороги и защита" />
+        subtitle="Базовая валюта, курсы и пороги" />
 
       <div className="max-w-lg flex flex-col gap-5">
         <SelectField label="Базовая валюта системы" value={s.baseCurrency}
@@ -67,15 +63,6 @@ export function InfraSettings() {
         <SelectField label="Интервал авто-обновления балансов" value={s.refreshInterval}
           onChange={v => setS({ ...s, refreshInterval: v })}
           options={[{ v: "hourly", l: "Раз в час" }, { v: "daily", l: "Раз в сутки" }]} />
-
-        <div className="flex flex-col gap-1 pt-3 border-t border-gray-800">
-          <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
-            PIN финансового контура {s.pinSet && <span className="text-green-500">· установлен</span>}
-          </label>
-          <input type="password" value={pin} onChange={e => { setPin(e.target.value); setPinTouched(true); }}
-            placeholder={s.pinSet ? "новый PIN (пусто = снять защиту)" : "задать PIN для разделов Платежи/Токены"} className={inputCls} />
-          <p className="text-[11px] text-gray-600">Защищает Платежи и API токены. Пустое значение при сохранении снимает защиту.</p>
-        </div>
 
         <button onClick={save} disabled={saving}
           className="self-start flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50">

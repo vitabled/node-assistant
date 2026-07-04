@@ -6,3 +6,5 @@ pydantic==2.7.1
 pydantic-settings==2.2.1
 cryptography==42.0.7
 python-multipart==0.0.9
+PyJWT==2.13.0
+bcrypt==5.0.0

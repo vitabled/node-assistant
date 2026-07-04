@@ -17,8 +17,8 @@ import asyncio
 import base64
 import hashlib
 import json
-import os
 import sqlite3
+import threading
 import time
 import uuid as _uuid
 from pathlib import Path
@@ -27,10 +27,15 @@ from typing import Any, Optional
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import settings
+from app.services import accounts
 
-DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-_DB = DATA_DIR / "infra_billing.db"
+
+def _db_path() -> Path:
+    """Per-account infra-billing DB path (resolved from the request's account)."""
+    aid = accounts.current_account.get()
+    if not aid:
+        raise RuntimeError("No active account in context")
+    return accounts.data_dir(aid) / "infra_billing.db"
 
 
 # ── Encryption (Fernet key derived from the app encryption key) ──
@@ -66,15 +71,28 @@ def _id() -> str:
     return str(_uuid.uuid4())
 
 
+# DB paths whose schema has already been ensured this process (per account).
+_initialised: set[str] = set()
+_init_lock = threading.Lock()
+
+
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_DB, timeout=10)
+    path = _db_path()
+    _ensure_schema(path)
+    conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def _init() -> None:
-    with _connect() as conn:
-        conn.executescript(
+def _ensure_schema(path: Path) -> None:
+    key = str(path)
+    if key in _initialised:
+        return
+    with _init_lock:
+        if key in _initialised:
+            return
+        with sqlite3.connect(path, timeout=10) as conn:
+            conn.executescript(
             """
             -- Local financial metadata for Remnawave providers.
             CREATE TABLE IF NOT EXISTS provider_meta (
@@ -137,10 +155,8 @@ def _init() -> None:
                 v TEXT
             );
             """
-        )
-
-
-_init()  # idempotent migration on import
+            )
+        _initialised.add(key)
 
 
 # ── Generic helpers ───────────────────────────────────────────
@@ -290,7 +306,6 @@ _SETTINGS_DEFAULTS = {
     "fx_rates": json.dumps({"RUB": 1.0, "USD": 90.0, "EUR": 98.0}),  # 1 unit = X base
     "low_balance_threshold": "1000",
     "refresh_interval": "daily",   # hourly | daily
-    "admin_pin_hash": "",          # sha256 of the Sign-in PIN, "" = no gate
 }
 
 def _get_settings() -> dict[str, Any]:
@@ -301,11 +316,10 @@ def _get_settings() -> dict[str, Any]:
         "fxRates": json.loads(merged["fx_rates"]),
         "lowBalanceThreshold": float(merged["low_balance_threshold"] or 0),
         "refreshInterval": merged["refresh_interval"],
-        "pinSet": bool(merged["admin_pin_hash"]),
     }
 
 def _put_settings(base_currency=None, fx_rates=None, low_balance_threshold=None,
-                  refresh_interval=None, pin=None) -> None:
+                  refresh_interval=None) -> None:
     def _set(k, v):
         _exec("INSERT INTO billing_settings (k, v) VALUES (?, ?) "
               "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
@@ -313,14 +327,6 @@ def _put_settings(base_currency=None, fx_rates=None, low_balance_threshold=None,
     if fx_rates is not None:              _set("fx_rates", json.dumps(fx_rates))
     if low_balance_threshold is not None: _set("low_balance_threshold", str(low_balance_threshold))
     if refresh_interval is not None:      _set("refresh_interval", refresh_interval)
-    if pin is not None:                   _set("admin_pin_hash", hashlib.sha256(pin.encode()).hexdigest() if pin else "")
-
-def _verify_pin(pin: str) -> bool:
-    row = _one("SELECT v FROM billing_settings WHERE k='admin_pin_hash'")
-    stored = row["v"] if row else ""
-    if not stored:
-        return True  # no gate configured
-    return hashlib.sha256(pin.encode()).hexdigest() == stored
 
 
 # ── Async wrappers (all blocking sqlite calls run in a thread) ──
@@ -352,4 +358,3 @@ async def delete_api_token(tid):                   await asyncio.to_thread(_dele
 
 async def get_settings():                          return await asyncio.to_thread(_get_settings)
 async def put_settings(**f):                       await asyncio.to_thread(lambda: _put_settings(**f))
-async def verify_pin(pin):                         return await asyncio.to_thread(_verify_pin, pin)

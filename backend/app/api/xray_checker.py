@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException
 from app.services import xray_checker as xc
 from app.services import metrics_store
 from app.services import storage
+from app.services import accounts
 from app.models.settings import AppSettings
 
 router = APIRouter(prefix="/api/checker")
@@ -184,14 +185,26 @@ async def _sample_once() -> int:
 
 
 async def poller_loop() -> None:
-    """Runs for the app's lifetime; samples the checker on its poll interval.
-    Skips work when the checker is disabled or not running."""
+    """Runs for the app's lifetime; samples the (shared) checker on its poll
+    interval. The xray-checker container + metrics store are global; each
+    account's xray config is per-account, so we scan all accounts and sample
+    whenever ANY account has the checker enabled and the container is running.
+    Interval = the smallest enabled poll_interval (min 15s)."""
     while True:
+        interval = 60
         try:
-            cfg = AppSettings(**storage.load_settings()).xray_checker
-            interval = max(15, cfg.poll_interval)
-            if cfg.enabled and await xc.container_state() == "running":
-                await _sample_once()
+            enabled_intervals = []
+            for acc in accounts.list_accounts():
+                try:
+                    cfg = AppSettings(**storage.load_settings(acc["id"])).xray_checker
+                except Exception:
+                    continue
+                if cfg.enabled:
+                    enabled_intervals.append(max(15, cfg.poll_interval))
+            if enabled_intervals:
+                interval = min(enabled_intervals)
+                if await xc.container_state() == "running":
+                    await _sample_once()
         except Exception:
             interval = 60  # back off on unexpected errors
         await asyncio.sleep(interval)
