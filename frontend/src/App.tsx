@@ -23,8 +23,9 @@ import { useTaskStream, type StatusFrame } from "./hooks/useTaskStream";
 import { AccountMenu }                     from "./auth/AccountMenu";
 import { tabKey }                          from "./auth/store";
 import {
-  ACCENTS, type AccentKey, type Density,
-  applyAccent, applyDensity, loadAccent, loadDensity, saveAccent, saveDensity,
+  ACCENTS, THEMES, type AccentKey, type Density, type ThemeKey,
+  applyAccent, applyDensity, applyTheme, loadAccent, loadDensity, loadTheme,
+  saveAccent, saveDensity, saveTheme,
 } from "./theme/tweaks";
 
 const SIDEBAR_KEY = "sidebar_collapsed";
@@ -75,10 +76,12 @@ export default function App() {
   // ── Appearance tweaks ──────────────────────────────────────
   const [accent, setAccent]   = useState<AccentKey>(loadAccent);
   const [density, setDensity] = useState<Density>(loadDensity);
+  const [themeK, setThemeK]   = useState<ThemeKey>(loadTheme);
   const [tweaksOpen, setTweaksOpen] = useState(false);
   const tweaksRef = useRef<HTMLDivElement>(null);
   useEffect(() => { applyAccent(accent); saveAccent(accent); }, [accent]);
   useEffect(() => { applyDensity(density); saveDensity(density); }, [density]);
+  useEffect(() => { applyTheme(themeK); saveTheme(themeK); }, [themeK]);
   useEffect(() => {
     if (!tweaksOpen) return;
     const h = (e: MouseEvent) => { if (tweaksRef.current && !tweaksRef.current.contains(e.target as Node)) setTweaksOpen(false); };
@@ -132,7 +135,7 @@ export default function App() {
         {/* Topbar */}
         <header style={{
           height: 52, flex: "none", borderBottom: "1px solid var(--line-soft)",
-          background: "rgba(13,17,25,.7)", backdropFilter: "blur(8px)",
+          background: "var(--topbar-bg)", backdropFilter: "blur(var(--glass-blur))",
           display: "flex", alignItems: "center", gap: 12, padding: "0 20px",
         }}>
           <nav style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, minWidth: 0 }}>
@@ -152,7 +155,7 @@ export default function App() {
               {tweaksOpen && (
                 <div className="panel" style={{
                   position: "absolute", top: "calc(100% + 8px)", right: 0, zIndex: 50, width: 232,
-                  padding: 14, boxShadow: "0 18px 48px rgba(0,0,0,.5)", display: "flex", flexDirection: "column", gap: 14,
+                  padding: 14, boxShadow: "var(--shadow-pop)", display: "flex", flexDirection: "column", gap: 14,
                 }}>
                   <div>
                     <p className="micro" style={{ marginBottom: 8 }}>Акцентный цвет</p>
@@ -175,6 +178,12 @@ export default function App() {
                       <button className={density === "comfortable" ? "on" : ""} onClick={() => setDensity("comfortable")}>Обычная</button>
                       <button className={density === "compact" ? "on" : ""} onClick={() => setDensity("compact")}>Плотная</button>
                     </div>
+                  </div>
+                  <div>
+                    <p className="micro" style={{ marginBottom: 8 }}>Тема</p>
+                    <select className="selectbox" value={themeK} onChange={e => setThemeK(e.target.value as ThemeKey)}>
+                      {THEMES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+                    </select>
                   </div>
                 </div>
               )}

@@ -90,7 +90,7 @@ export function AuthScreen({ overlay, onClose }: { overlay?: boolean; onClose?: 
     );
   }
 
-  return <div className="fixed inset-0 flex items-center justify-center p-4" style={{ background: "var(--bg0, #0b0e14)" }}>{shell}</div>;
+  return <div className="fixed inset-0 flex items-center justify-center p-4" style={{ background: "var(--bg0)" }}>{shell}</div>;
 }
 
 // ── Account chooser ───────────────────────────────────────────

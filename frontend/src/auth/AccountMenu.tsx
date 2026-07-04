@@ -42,7 +42,7 @@ export function AccountMenu() {
       {open && (
         <div className="panel" style={{
           position: "absolute", top: "calc(100% + 8px)", right: 0, zIndex: 60, width: 264,
-          padding: 8, boxShadow: "0 18px 48px rgba(0,0,0,.5)", display: "flex", flexDirection: "column", gap: 2,
+          padding: 8, boxShadow: "var(--shadow-pop)", display: "flex", flexDirection: "column", gap: 2,
         }}>
           {/* Active account */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px" }}>

@@ -3,6 +3,13 @@
 
 export type AccentKey = "blue" | "green" | "violet" | "amber" | "cyan";
 export type Density = "comfortable" | "compact";
+export type ThemeKey = "console" | "apple-light" | "apple-dark";
+
+export const THEMES: { key: ThemeKey; label: string }[] = [
+  { key: "console",     label: "Console" },
+  { key: "apple-light", label: "Apple Light" },
+  { key: "apple-dark",  label: "Apple Dark" },
+];
 
 export const ACCENTS: Record<AccentKey, { base: string; hi: string; ink: string }> = {
   blue:   { base: "#4C8DFF", hi: "#82AEFF", ink: "#0A0E16" },
@@ -31,8 +38,16 @@ export function applyDensity(d: Density): void {
   document.body.dataset.density = d;
 }
 
+export function applyTheme(t: ThemeKey): void {
+  // Console is the default (:root) skin — no data-theme attribute; the Apple
+  // skins set body[data-theme="apple-*"], which re-points the surface tokens.
+  if (t === "console") delete document.body.dataset.theme;
+  else document.body.dataset.theme = t;
+}
+
 const ACCENT_KEY = "ni_accent";
 const DENSITY_KEY = "ni_density";
+const THEME_KEY = "ni_theme";
 
 export function loadAccent(): AccentKey {
   const v = localStorage.getItem(ACCENT_KEY);
@@ -41,5 +56,10 @@ export function loadAccent(): AccentKey {
 export function loadDensity(): Density {
   return localStorage.getItem(DENSITY_KEY) === "compact" ? "compact" : "comfortable";
 }
+export function loadTheme(): ThemeKey {
+  const v = localStorage.getItem(THEME_KEY);
+  return v === "apple-light" || v === "apple-dark" ? v : "console";
+}
 export function saveAccent(k: AccentKey): void { localStorage.setItem(ACCENT_KEY, k); }
 export function saveDensity(d: Density): void { localStorage.setItem(DENSITY_KEY, d); }
+export function saveTheme(t: ThemeKey): void { localStorage.setItem(THEME_KEY, t); }

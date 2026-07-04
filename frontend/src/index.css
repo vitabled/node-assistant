@@ -22,7 +22,15 @@
   --r-sm:6px; --r-md:9px; --r-lg:13px;
   /* density-scaled */
   --row-py:9px; --card-p:18px; --ctl-py:8px; --nav-py:7px;
-  --font:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  /* themeable surfaces — the Apple theme re-points these, so component CSS
+     references THESE names (not raw hex) to stay theme-agnostic. */
+  --raised:rgba(13,17,25,.6); --row-hover:rgba(26,34,51,.45); --overlay:rgba(4,6,10,.72);
+  --topbar-bg:rgba(13,17,25,.7); --sidebar-bg:var(--bg1); --term-bg:#070A0F; --scroll-thumb:#232C3E;
+  --brand-ink:var(--accent-ink); --nav-active-bg:var(--accent-dim); --nav-active-fg:var(--accent-hi);
+  --primary-ink:var(--accent-ink); --glass-blur:8px;
+  --shadow-pop:0 16px 44px rgba(0,0,0,.5); --shadow-modal:0 24px 70px rgba(0,0,0,.55);
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --font:var(--mono);
 }
 body[data-density="compact"]{ --row-py:5px; --card-p:13px; --ctl-py:6px; --nav-py:5px; }
 
@@ -35,12 +43,12 @@ body{
 }
 ::selection{background:rgba(76,141,255,.30); color:#fff}
 ::-webkit-scrollbar{width:9px;height:9px}
-::-webkit-scrollbar-thumb{background:#232C3E;border-radius:5px;border:2px solid var(--bg0)}
+::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:5px;border:2px solid var(--bg0)}
 ::-webkit-scrollbar-thumb:hover{background:#2E3A52}
 ::-webkit-scrollbar-corner{background:transparent}
 a{color:var(--accent-hi);text-decoration:none}
 a:hover{text-decoration:underline}
-code{color:var(--accent-hi);font-size:.92em}
+code{color:var(--accent-hi);font-size:.92em;font-family:var(--mono)}
 strong{color:var(--t-hi);font-weight:600}
 
 /* ── type helpers ── */
@@ -58,7 +66,7 @@ strong{color:var(--t-hi);font-weight:600}
   border:1px solid transparent;white-space:nowrap;font-family:var(--font);cursor:pointer}
 .btn:focus-visible{outline:2px solid var(--accent-line);outline-offset:1px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
-.btn-primary{background:var(--accent);color:var(--accent-ink)}
+.btn-primary{background:var(--accent);color:var(--primary-ink)}
 .btn-primary:hover:not(:disabled){background:var(--accent-hi)}
 .btn-soft{background:var(--bg3);color:var(--t-mid);border-color:var(--line)}
 .btn-soft:hover:not(:disabled){background:#212B40;color:var(--t-hi)}
@@ -117,12 +125,12 @@ strong{color:var(--t-hi);font-weight:600}
 /* ── tables ── */
 table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl thead th{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
-  color:var(--t-low);text-align:left;padding:calc(var(--row-py) + 1px) 14px;background:rgba(13,17,25,.6);
+  color:var(--t-low);text-align:left;padding:calc(var(--row-py) + 1px) 14px;background:var(--raised);
   border-bottom:1px solid var(--line-soft)}
 .tbl tbody td{padding:var(--row-py) 14px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
 .tbl tbody tr:last-child td{border-bottom:none}
 .tbl tbody tr{transition:background .1s}
-.tbl tbody tr:hover{background:rgba(26,34,51,.45)}
+.tbl tbody tr:hover{background:var(--row-hover)}
 .tbl .r{text-align:right} .tbl .c{text-align:center}
 
 /* ── nav ── */
@@ -131,7 +139,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   border:1px solid transparent;transition:background .12s,color .12s;position:relative;text-align:left;
   background:none;cursor:pointer;font-family:var(--font)}
 .navitem:hover{color:var(--t-hi);background:var(--bg3)}
-.navitem.active{color:var(--accent-hi);background:var(--accent-dim);border-color:transparent}
+.navitem.active{color:var(--nav-active-fg);background:var(--nav-active-bg);border-color:transparent}
 .navitem.active::before{content:"";position:absolute;left:-8px;top:6px;bottom:6px;width:3px;
   border-radius:3px;background:var(--accent)}
 .navitem:focus-visible{outline:2px solid var(--accent-line)}
@@ -163,10 +171,10 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 /* ── modal ── */
 @keyframes ni-fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes ni-riseIn{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
-.overlay{position:fixed;inset:0;z-index:60;background:rgba(4,6,10,.72);backdrop-filter:blur(3px);
+.overlay{position:fixed;inset:0;z-index:60;background:var(--overlay);backdrop-filter:blur(3px);
   display:flex;align-items:center;justify-content:center;padding:20px;animation:ni-fadeIn .14s ease-out}
 .modal{background:var(--bg1);border:1px solid var(--line);border-radius:14px;width:100%;
-  box-shadow:0 24px 70px rgba(0,0,0,.55);animation:ni-riseIn .16s ease-out;display:flex;flex-direction:column;
+  box-shadow:var(--shadow-modal);animation:ni-riseIn .16s ease-out;display:flex;flex-direction:column;
   max-height:calc(100vh - 48px)}
 
 /* ── toast ── */
@@ -179,8 +187,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .toast.info{background:rgba(18,24,38,.94);border-color:var(--line);color:var(--t-mid)}
 
 /* ── terminal ── */
-.term{background:#070A0F;border:1px solid var(--line-soft);border-radius:var(--r-md);
-  font-size:12px;line-height:1.75;overflow-y:auto;padding:12px 14px;height:100%}
+.term{background:var(--term-bg);border:1px solid var(--line-soft);border-radius:var(--r-md);
+  font-family:var(--mono);font-size:12px;line-height:1.75;overflow-y:auto;padding:12px 14px;height:100%}
 .term .ln{white-space:pre-wrap;word-break:break-all}
 .term .lt{color:#4A5568;user-select:none}
 .term .ok{color:#5BDBA3} .term .err{color:#F58E8B} .term .warn{color:#F0C674}
@@ -202,3 +210,69 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 /* xterm.js overrides */
 .xterm-viewport::-webkit-scrollbar{width:6px}
 .xterm-viewport::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
+
+/* ════════ Apple theme (System Settings skin) ════════
+   Optional alternate skin selectable from the appearance/Tweaks panel. Re-points
+   the themeable surface tokens + rounds controls. --font uses the system San
+   Francisco stack (-apple-system / system-ui) — the SF Pro .otf binaries are
+   NOT vendored here (Apple-licensed); code + terminal stay JetBrains Mono. */
+body[data-theme^="apple"]{
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",system-ui,sans-serif;
+  --r-sm:7px; --r-md:10px; --r-lg:14px;
+  /* Apple uses a FILLED accent nav pill; keep ink = the per-accent readable ink
+     (set by applyAccent), NOT a hardcoded #fff — the app has light accents
+     (amber/cyan) where white text on the fill would be unreadable. */
+  --primary-ink:var(--accent-ink); --brand-ink:var(--accent-ink);
+  --nav-active-bg:var(--accent); --nav-active-fg:var(--accent-ink);
+  --glass-blur:22px;
+  font-size:13px; letter-spacing:-.006em;
+}
+body[data-theme^="apple"] .navitem{font-weight:450;border-radius:8px}
+body[data-theme^="apple"] .navitem.active{font-weight:600}
+body[data-theme^="apple"] .navitem.active::before{display:none}
+body[data-theme^="apple"] .btn{font-weight:590;border-radius:8px}
+body[data-theme^="apple"] .btn-primary{box-shadow:0 1px 2px rgba(0,0,0,.14)}
+body[data-theme^="apple"] .iconbtn{border-radius:7px}
+body[data-theme^="apple"] .switch{width:38px;height:22px}
+body[data-theme^="apple"] .switch::after{width:16px;height:16px}
+body[data-theme^="apple"] .switch.on{background:#34C759;border-color:#34C759}
+body[data-theme^="apple"] .switch.on::after{transform:translateX(16px);background:#fff}
+body[data-theme^="apple"] .seg{border-radius:9px}
+body[data-theme^="apple"] .seg button{border-radius:7px;font-weight:530}
+body[data-theme^="apple"] .seg button.on{box-shadow:0 1px 3px rgba(0,0,0,.14)}
+body[data-theme^="apple"] .tag{border-radius:6px;text-transform:none;letter-spacing:.01em}
+body[data-theme^="apple"] .term .lt{color:#6B6B72}
+
+/* ── Apple · Light ── */
+body[data-theme="apple-light"]{
+  --bg0:#ECECEF; --bg1:#F7F7F9; --bg2:#FFFFFF; --bg3:#E7E7EC;
+  --line:#D7D7DD; --line-soft:#E7E7EC;
+  --t-hi:#1D1D1F; --t-mid:#3E3E46; --t-low:#6E6E77; --t-faint:#A6A6AE;
+  --ok:#28A745; --ok-dim:rgba(52,199,89,.13); --ok-line:rgba(40,167,69,.28);
+  --warn:#B25E00; --warn-dim:rgba(255,149,0,.14); --warn-line:rgba(178,94,0,.26);
+  --err:#D70015; --err-dim:rgba(255,59,48,.10); --err-line:rgba(215,0,21,.26);
+  --raised:#F1F1F4; --row-hover:rgba(0,0,0,.035); --overlay:rgba(0,0,0,.26);
+  --topbar-bg:rgba(247,247,249,.72); --sidebar-bg:rgba(240,240,243,.72);
+  --term-bg:#1C1C1E;
+  --shadow-pop:0 12px 34px rgba(0,0,0,.14); --shadow-modal:0 20px 60px rgba(0,0,0,.22);
+  --scroll-thumb:rgba(0,0,0,.22);
+}
+body[data-theme="apple-light"] .card{box-shadow:0 1px 2px rgba(0,0,0,.05)}
+body[data-theme="apple-light"] .toast.ok{background:rgba(240,250,243,.94);color:#1B7A34}
+body[data-theme="apple-light"] .toast.err{background:rgba(253,240,240,.94);color:#C11}
+body[data-theme="apple-light"] .toast.info{background:rgba(248,248,250,.96);color:var(--t-mid)}
+
+/* ── Apple · Dark ── */
+body[data-theme="apple-dark"]{
+  --bg0:#1C1C1E; --bg1:#232325; --bg2:#2C2C2E; --bg3:#3A3A3C;
+  --line:#3A3A3C; --line-soft:#2E2E30;
+  --t-hi:#F5F5F7; --t-mid:#D0D0D6; --t-low:#98989F; --t-faint:#6A6A70;
+  --ok:#30D158; --ok-dim:rgba(48,209,88,.15); --ok-line:rgba(48,209,88,.32);
+  --warn:#FF9F0A; --warn-dim:rgba(255,159,10,.15); --warn-line:rgba(255,159,10,.32);
+  --err:#FF453B; --err-dim:rgba(255,69,58,.14); --err-line:rgba(255,69,58,.34);
+  --raised:rgba(255,255,255,.045); --row-hover:rgba(255,255,255,.05); --overlay:rgba(0,0,0,.55);
+  --topbar-bg:rgba(30,30,32,.72); --sidebar-bg:rgba(35,35,37,.72);
+  --term-bg:#151517;
+  --shadow-pop:0 14px 40px rgba(0,0,0,.5); --shadow-modal:0 24px 64px rgba(0,0,0,.6);
+  --scroll-thumb:rgba(255,255,255,.18);
+}

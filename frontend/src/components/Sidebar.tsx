@@ -61,7 +61,7 @@ export function Sidebar({ activeTab, onTabChange }: Props) {
   return (
     <aside
       style={{
-        width: 224, flex: "none", background: "var(--bg1)",
+        width: 224, flex: "none", background: "var(--sidebar-bg)",
         borderRight: "1px solid var(--line-soft)", display: "flex",
         flexDirection: "column", padding: "16px 12px 12px",
       }}
