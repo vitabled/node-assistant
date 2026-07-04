@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { deployJobsKey } from "../../auth/store";
 
 // Shared dark-theme primitives for the infra-billing pages (Status-Page style).
 
@@ -88,7 +89,7 @@ export const fmtDateShort = (iso: string) => {
 // localStorage (deploy_jobs), avoiding an extra backend round-trip.
 export function loadDeployNodes(): { value: string; label: string }[] {
   try {
-    const jobs = JSON.parse(localStorage.getItem("deploy_jobs") || "[]");
+    const jobs = JSON.parse(localStorage.getItem(deployJobsKey()) || "[]");
     return (Array.isArray(jobs) ? jobs : []).map((j: { taskId: string; domain: string; ip: string }) =>
       ({ value: j.taskId, label: `${j.domain} (${j.ip})` }));
   } catch { return []; }

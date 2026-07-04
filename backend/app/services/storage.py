@@ -1,15 +1,22 @@
-"""Simple JSON-file persistence for settings and templates."""
+"""Per-account JSON-file persistence for settings, templates and traffic rules.
+
+Each account's files live under `DATA_DIR/accounts/<id>/`. The account is
+resolved from the `current_account` ContextVar (set per-request by the
+`require_account` dependency); background callers with no request context (e.g.
+the xray-checker poller) pass an explicit `account_id`.
+"""
 import json
-import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+from app.services import accounts
 
-_SETTINGS_FILE       = DATA_DIR / "settings.json"
-_TEMPLATES_FILE      = DATA_DIR / "templates.json"
-_TRAFFIC_RULES_FILE  = DATA_DIR / "traffic_rules.json"
+
+def _dir(account_id: Optional[str]) -> Path:
+    aid = account_id or accounts.current_account.get()
+    if not aid:
+        raise RuntimeError("No active account in context")
+    return accounts.data_dir(aid)
 
 
 def _read(path: Path) -> dict:
@@ -25,26 +32,26 @@ def _write(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_settings() -> dict:
-    return _read(_SETTINGS_FILE)
+def load_settings(account_id: Optional[str] = None) -> dict:
+    return _read(_dir(account_id) / "settings.json")
 
 
-def save_settings(data: dict) -> None:
-    _write(_SETTINGS_FILE, data)
+def save_settings(data: dict, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "settings.json", data)
 
 
-def load_templates() -> list:
-    return _read(_TEMPLATES_FILE).get("templates", [])
+def load_templates(account_id: Optional[str] = None) -> list:
+    return _read(_dir(account_id) / "templates.json").get("templates", [])
 
 
-def save_templates(templates: list) -> None:
-    _write(_TEMPLATES_FILE, {"templates": templates})
+def save_templates(templates: list, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "templates.json", {"templates": templates})
 
 
-def load_traffic_rules() -> list:
-    raw = _read(_TRAFFIC_RULES_FILE)
+def load_traffic_rules(account_id: Optional[str] = None) -> list:
+    raw = _read(_dir(account_id) / "traffic_rules.json")
     return raw if isinstance(raw, list) else []
 
 
-def save_traffic_rules(rules: list) -> None:
-    _write(_TRAFFIC_RULES_FILE, rules)
+def save_traffic_rules(rules: list, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "traffic_rules.json", rules)

@@ -1,15 +1,15 @@
 import { useState } from "react";
 import {
   Activity, Rocket, RefreshCw, FileCode2, Gauge, Settings2, Server,
-  PieChart, Lock, ChevronDown, CreditCard, FolderKanban, ReceiptText,
-  KeyRound, SlidersHorizontal, LogIn,
+  PieChart, ChevronDown, CreditCard, FolderKanban, ReceiptText,
+  KeyRound, SlidersHorizontal,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "traffic" | "settings"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
-  | "infra-payments" | "infra-settings" | "infra-signin" | "infra-tokens";
+  | "infra-payments" | "infra-settings" | "infra-tokens";
 
 interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon }
 
@@ -29,7 +29,6 @@ const INFRA_TABS: NavItemDef[] = [
   { tab: "infra-services",  label: "Услуги и тарифы",    Icon: Server            },
   { tab: "infra-payments",  label: "Платежи",            Icon: ReceiptText       },
   { tab: "infra-settings",  label: "Настройки биллинга", Icon: SlidersHorizontal },
-  { tab: "infra-signin",    label: "Sign-in",            Icon: LogIn             },
   { tab: "infra-tokens",    label: "API токены",         Icon: KeyRound          },
 ];
 

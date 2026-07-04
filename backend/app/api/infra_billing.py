@@ -5,18 +5,17 @@ Providers/nodes/history proxy Remnawave's InfraBillingController (+ local meta);
 projects/services/payments/settings/api-tokens/dashboard are LOCAL (node-assistant
 owns them — Remnawave has no such endpoints). See services/infra_billing_store.py.
 
-Session gate: verify-session issues an in-memory token; protected routes
-(payments, api-tokens) require the `X-Billing-Session` header when a PIN is set.
+All routes are gated by the panel-wide account auth (require_account) and read
+the ACTIVE account's isolated billing DB. There is no separate PIN gate.
 Remnawave errors surface as HTTP errors → toasts on the client.
 """
 from __future__ import annotations
 
-import secrets as _secrets
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.services import storage
@@ -26,9 +25,6 @@ from app.models.settings import AppSettings
 from app.services.remnawave_client import RemnavaveClient, RemnavaveError
 
 router = APIRouter(prefix="/api/infra-billing")
-
-# In-memory set of valid session tokens (single-process backend).
-_SESSIONS: set[str] = set()
 
 
 def _client() -> RemnavaveClient:
@@ -49,15 +45,6 @@ def _convert(amount: float, frm: str, to: str, rates: dict) -> float:
     (rates[X] = value of 1 X in RUB)."""
     anchor = amount * rates.get(frm, 1.0)
     return anchor / rates.get(to, 1.0)
-
-
-async def _require_session(x_billing_session: Optional[str]) -> None:
-    """Protect sensitive routes when a Sign-in PIN is configured."""
-    s = await store.get_settings()
-    if not s["pinSet"]:
-        return  # no gate
-    if not x_billing_session or x_billing_session not in _SESSIONS:
-        raise HTTPException(401, "Требуется вход в финансовый контур (раздел Sign-in).")
 
 
 # ── Request models (client + server validation) ───────────────
@@ -131,7 +118,6 @@ class SettingsBody(BaseModel):
     fx_rates: Optional[dict] = None
     low_balance_threshold: Optional[float] = Field(default=None, ge=0)
     refresh_interval: Optional[str] = None
-    pin: Optional[str] = None        # "" clears the gate
 
 
 class ApiTokenCreate(BaseModel):
@@ -349,21 +335,18 @@ async def delete_service(sid: str):
 # 5. Payments  (local, protected)
 # ═══════════════════════════════════════════════════════════════
 @router.get("/payments")
-async def list_payments(x_billing_session: Optional[str] = Header(default=None)):
-    await _require_session(x_billing_session)
+async def list_payments():
     return await store.payments()
 
 
 @router.post("/payments", status_code=201)
-async def create_payment(body: PaymentBody, x_billing_session: Optional[str] = Header(default=None)):
-    await _require_session(x_billing_session)
+async def create_payment(body: PaymentBody):
     pid = await store.create_payment(**body.model_dump())
     return {"ok": True, "id": pid}
 
 
 @router.delete("/payments/{pid}")
-async def delete_payment(pid: str, x_billing_session: Optional[str] = Header(default=None)):
-    await _require_session(x_billing_session)
+async def delete_payment(pid: str):
     await store.delete_payment(pid)
     return {"ok": True}
 
@@ -381,55 +364,35 @@ async def put_settings(body: SettingsBody):
     await store.put_settings(
         base_currency=body.base_currency, fx_rates=body.fx_rates,
         low_balance_threshold=body.low_balance_threshold,
-        refresh_interval=body.refresh_interval, pin=body.pin)
+        refresh_interval=body.refresh_interval)
     return {"ok": True}
 
 
 # ═══════════════════════════════════════════════════════════════
-# 7. Sign-in  (session verification)
-# ═══════════════════════════════════════════════════════════════
-class VerifySession(BaseModel):
-    pin: str = ""
-
-
-@router.post("/auth/verify-session")
-async def verify_session(body: VerifySession):
-    if not await store.verify_pin(body.pin):
-        raise HTTPException(401, "Неверный PIN финансового контура.")
-    token = _secrets.token_urlsafe(24)
-    _SESSIONS.add(token)
-    return {"ok": True, "token": token}
-
-
-# ═══════════════════════════════════════════════════════════════
-# 8. Api tokens  (encrypted vault, protected)
+# 7. Api tokens  (encrypted vault)
 # ═══════════════════════════════════════════════════════════════
 @router.get("/api-tokens")
-async def list_api_tokens(x_billing_session: Optional[str] = Header(default=None)):
-    await _require_session(x_billing_session)
+async def list_api_tokens():
     return await store.api_tokens()   # masked only — never the plaintext secret
 
 
 @router.post("/api-tokens", status_code=201)
-async def create_api_token(body: ApiTokenCreate, x_billing_session: Optional[str] = Header(default=None)):
-    await _require_session(x_billing_session)
+async def create_api_token(body: ApiTokenCreate):
     tid = await store.create_api_token(body.name, body.provider_kind, body.secret)
     return {"ok": True, "id": tid}
 
 
 @router.delete("/api-tokens/{tid}")
-async def delete_api_token(tid: str, x_billing_session: Optional[str] = Header(default=None)):
-    await _require_session(x_billing_session)
+async def delete_api_token(tid: str):
     await store.delete_api_token(tid)
     return {"ok": True}
 
 
 @router.post("/api-tokens/{tid}/verify")
-async def verify_api_token(tid: str, x_billing_session: Optional[str] = Header(default=None)):
+async def verify_api_token(tid: str):
     """Validate a stored token. NOTE: per-hosting-provider adapters (Selectel,
     Hetzner, …) are not implemented — this checks the secret decrypts and is
     non-empty. Returns a clear 'not verified against provider' status."""
-    await _require_session(x_billing_session)
     secret = await store.get_api_token_secret(tid)
     if not secret:
         raise HTTPException(404, "Токен не найден или не расшифровывается.")
