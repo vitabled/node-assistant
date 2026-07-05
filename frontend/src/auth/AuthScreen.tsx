@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import {
-  LogIn, UserPlus, Loader2, KeyRound, Copy, Check, Server, X, Plus, ArrowLeft, Trash2,
+  LogIn, UserPlus, Loader2, KeyRound, Copy, Check, Server, Plus, ArrowLeft, Trash2,
 } from "lucide-react";
 import { useAuth } from "./useAuth";
 import { addAccount, switchTo, forget, generatePassword, type DeviceAccount } from "./store";
@@ -74,19 +75,19 @@ export function AuthScreen({ overlay, onClose }: { overlay?: boolean; onClose?: 
   );
 
   if (overlay) {
-    return (
-      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+    // Portal to <body>: the topbar (where AccountMenu lives) has backdrop-filter,
+    // which would otherwise make this fixed overlay's containing block the 52px
+    // header instead of the viewport — pinning the form to the top and clipping
+    // the scrim to the header strip. Rendering into <body> escapes that.
+    return createPortal(
+      // Solid full-screen backdrop; click anywhere outside the form closes it
+      // (no explicit close button by design).
+      <div className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+        style={{ background: "var(--bg0)" }}
         onMouseDown={e => { if (e.target === e.currentTarget) onClose?.(); }}>
-        <div className="relative">
-          {onClose && (
-            <button onClick={onClose}
-              className="absolute -top-2 -right-2 p-1.5 rounded-full bg-gray-800 border border-gray-700 text-gray-400 hover:text-white z-10">
-              <X size={14} />
-            </button>
-          )}
-          {shell}
-        </div>
-      </div>
+        {shell}
+      </div>,
+      document.body,
     );
   }
 
