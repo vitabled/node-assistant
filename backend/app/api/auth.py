@@ -34,6 +34,8 @@ async def register(body: Credentials):
     login = body.login.strip()
     if not login:
         raise HTTPException(422, "Логин не может быть пустым")
+    if not body.password.strip():
+        raise HTTPException(422, "Пароль не может быть пустым")
     try:
         account = accounts.create_account(login, body.password)
     except ValueError:
