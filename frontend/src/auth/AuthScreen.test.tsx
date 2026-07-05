@@ -32,6 +32,36 @@ describe("AuthScreen", () => {
     expect(screen.getByPlaceholderText("Логин")).toBeInTheDocument();
   });
 
+  // Regression: the add-account overlay must portal to <body> (not render inside
+  // AccountMenu, whose topbar ancestor has backdrop-filter → a containing block
+  // that clipped the fixed scrim to the 52px header and pushed the form up).
+  it("portals the add-account overlay to document.body with a centered full-screen scrim", () => {
+    const { container } = render(<AuthScreen overlay onClose={() => {}} />);
+    expect(container.querySelector(".fixed")).toBeNull(); // nothing rendered in-place
+    const scrim = Array.from(document.body.children).find(
+      el => el.classList.contains("fixed") && el.classList.contains("inset-0"));
+    expect(scrim).toBeTruthy();
+    expect(scrim!.className).toContain("items-center");
+    expect(scrim!.className).toContain("justify-center");
+    // solid full-screen backdrop (matches the login gate)
+    expect(scrim!.getAttribute("style") || "").toContain("var(--bg0)");
+  });
+
+  it("has no explicit close button and dismisses only on a click outside the form", () => {
+    const onClose = vi.fn();
+    render(<AuthScreen overlay onClose={onClose} />);
+    const scrim = Array.from(document.body.children).find(
+      el => el.classList.contains("fixed") && el.classList.contains("inset-0"))!;
+    // no X / close button any more
+    expect(scrim.querySelector("button.rounded-full")).toBeNull();
+    // clicking inside the form must NOT close
+    fireEvent.mouseDown(screen.getByPlaceholderText("Логин"));
+    expect(onClose).not.toHaveBeenCalled();
+    // clicking the backdrop itself closes
+    fireEvent.mouseDown(scrim);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("validates empty fields without calling the API", () => {
     const fetchFn = mockFetch({ ok: true, body: {} });
     render(<AuthScreen />);
