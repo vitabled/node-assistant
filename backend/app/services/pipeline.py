@@ -749,6 +749,10 @@ async def step_ssh_dualport_verify(
     req: "DeployRequest",
     backend_ip: str,
 ) -> SSHSession:
+    # This former single step is now presented as THREE progress steps:
+    #   6 «Перезагрузка»            — poll for the box to come back online
+    #   7 «Проверка нового порта SSH» — SSH-connect on the new port (rollback/lockout here)
+    #   8 «Удаление старого порта SSH» — cleanup: drop the old port
     _begin_step(task, 6)
 
     async def _whitelist(sess: SSHSession) -> None:
@@ -763,8 +767,12 @@ async def step_ssh_dualport_verify(
         )
 
     # No port change → no reboot happened; keep Session #1, just whitelist.
+    # Advance through steps 6/7/8 so the progress bar still completes them.
     if not req.change_ssh_port:
         task.add_log("\x1b[90m[ssh-dualport] Смена порта отключена — перезагрузки не было.\x1b[0m")
+        _begin_step(task, 7)
+        task.add_log("\x1b[90m[ssh-dualport] Проверка порта не требуется.\x1b[0m")
+        _begin_step(task, 8)
         await _whitelist(ssh)
         return ssh
 
@@ -772,7 +780,7 @@ async def step_ssh_dualport_verify(
     old_port = req.current_ssh_port
     loop = asyncio.get_running_loop()
 
-    # ── Poll for the server to come back online after the reboot ──
+    # ── Step 6: poll for the server to come back online after the reboot ──
     task.add_log("\x1b[36m[ssh-dualport] Ожидание перезагрузки сервера...\x1b[0m")
     await asyncio.sleep(20)  # let the OS actually begin shutting down
 
@@ -794,7 +802,8 @@ async def step_ssh_dualport_verify(
     task.add_log("\x1b[32m[ssh-dualport] Сервер снова в сети — проверяю порты...\x1b[0m")
     await asyncio.sleep(3)  # give sshd a moment to finish binding
 
-    # ── SCENARIO А — new port works ──
+    # ── Step 7: verify the new port accepts SSH ──
+    _begin_step(task, 7)
     session_new = await _try_ssh_connect(req, new_port, timeout=12)
     if session_new is not None:
         old_reachable = await _tcp_reachable(req.ip, old_port)
@@ -803,7 +812,8 @@ async def step_ssh_dualport_verify(
             f"установлено (старый порт {old_port}: "
             f"{'доступен' if old_reachable else 'закрыт'}).\x1b[0m"
         )
-        # Finalize: keep only the new port everywhere
+        # ── Step 8: keep only the new port everywhere ──
+        _begin_step(task, 8)
         await session_new.run_script(
             _ssh_cleanup_newport_script(old_port, new_port), task, check=False
         )
@@ -853,7 +863,7 @@ async def step_ssl(
     server_ip: str,
     cert_provider: str = "cloudflare",
 ) -> None:
-    _begin_step(task, 7)
+    _begin_step(task, 9)
 
     # Only the Cloudflare provider can (and does) manage DNS for us via the CF
     # API. HTTP-01 providers (letsencrypt/zerossl) validate over port 80, so the
@@ -1110,7 +1120,7 @@ async def step_remnanode(
     node_port: int = 2222,
     xhttp_path: str = "",
 ) -> None:
-    _begin_step(task, 8)
+    _begin_step(task, 10)
 
     # The cert is issued per-FQDN (see step_ssl), so the cert identity IS the
     # node domain — not the root domain. All cert paths below key off the FQDN.
@@ -1204,7 +1214,7 @@ docker ps --filter "name=remnanode" --filter "name=remnawave-nginx" \
 # ──────────────────────────────────────────────────────────────
 
 async def step_warp(ssh: SSHSession, task: Task) -> None:
-    _begin_step(task, 9)
+    _begin_step(task, 12)
 
     warp_script = f"""\
 {_APT_WAIT}
@@ -1291,7 +1301,7 @@ async def step_certbot_ssl(
     domain: str,
     email: str,
 ) -> None:
-    _begin_step(task, 10)
+    _begin_step(task, 13)
 
     # ── 1. Provision the isolated certbot environment + issue the cert ──
     # The certbot/docker-compose.yml has no template vars (plain YAML). $domain
@@ -1449,7 +1459,7 @@ echo "[sni] Временные файлы удалены."
 
 
 # ──────────────────────────────────────────────────────────────
-# HAProxy relay mode (alternative to Steps 7–11)
+# HAProxy relay mode (alternative to Steps 9–13)
 # Installs HAProxy and configures a plain TCP relay from the source port to a
 # destination IP:port. No Remnawave/DNS/SSL/Xray involvement.
 # ──────────────────────────────────────────────────────────────
@@ -1491,8 +1501,8 @@ backend con_out
 
 
 async def step_haproxy_deploy(ssh: SSHSession, task: Task, req: "DeployRequest") -> None:
-    """HAProxy relay deploy — reuses step slot 7 (Steps 8–11 are skipped)."""
-    _begin_step(task, 7, "Установка HAProxy-реле")
+    """HAProxy relay deploy — reuses step slot 9 (Steps 10–13 are skipped)."""
+    _begin_step(task, 9, "Установка HAProxy-реле")
 
     task.add_log(
         f"\x1b[90m[haproxy] {req.haproxy_source_port} → "
@@ -1858,7 +1868,8 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         # session used for all later steps.
         ssh = await step_ssh_dualport_verify(ssh, task, req, backend_ip)
 
-        # ── Mode branch: haproxy relay vs full remnanode stack (Steps 7–11) ──
+        # ── Mode branch: haproxy relay (step 9, skips 10–13) vs full remnanode
+        #    stack (steps 9–13) ──
         if req.mode == "haproxy":
             await step_haproxy_deploy(ssh, task, req)
         else:
@@ -1883,6 +1894,12 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                 xhttp_path=req.xhttp_path,
             )
 
+            # ── Step 11: uniquize the masking decoy site — runs BEFORE WARP ──
+            # (masking mutates /var/www/html and must not be affected by WARP's
+            # routing changes; ordering: Remnanode → Masking → WARP → Hysteria2).
+            await step_sni_masking(ssh, task)
+
+            # ── Step 12: WARP Native (non-fatal) ──
             if req.install_warp:
                 try:
                     await step_warp(ssh, task)
@@ -1892,12 +1909,11 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                         f"Нода Remnawave продолжает работу.\x1b[0m"
                     )
             else:
+                _begin_step(task, 12)
                 task.add_log("\x1b[90m[skip] WARP не выбран.\x1b[0m")
 
+            # ── Step 13: Hysteria2 (Certbot standalone SSL — label only renamed) ──
             await step_certbot_ssl(ssh, task, req.domain, req.email)
-
-            # ── Step 11: uniquize the masking decoy site (final SSH action) ──
-            await step_sni_masking(ssh, task)
 
             # ── Remnawave post-deploy: assign users to squads ─────
             if req.create_in_remnawave:

@@ -13,6 +13,9 @@ import pytest
 # Stub asyncssh (imported transitively via ssh_manager) before importing pipeline.
 sys.modules.setdefault("asyncssh", types.ModuleType("asyncssh"))
 
+import os  # noqa: E402
+import re  # noqa: E402
+
 import app.services.pipeline as pipeline  # noqa: E402
 from app.services.pipeline import (  # noqa: E402
     _parse_ip_list,
@@ -20,6 +23,28 @@ from app.services.pipeline import (  # noqa: E402
     _firewall_extra_script,
     step_ssl,
 )
+from app.services.task_store import STEP_LABELS  # noqa: E402
+
+
+# ── Ф6 step-index consistency (guards against renumber desync) ────
+
+def test_every_step_index_is_begun_and_in_range():
+    """Every 1..len(STEP_LABELS) is emitted by some _begin_step call, none is out
+    of range, and no stray old index survives a future renumber."""
+    src = os.path.join(os.path.dirname(pipeline.__file__), "pipeline.py")
+    with open(src, encoding="utf-8") as fh:
+        used = sorted({int(m) for m in re.findall(r"_begin_step\(task, (\d+)", fh.read())})
+    assert used == list(range(1, len(STEP_LABELS) + 1)), (
+        f"begin_step indices {used} must exactly cover 1..{len(STEP_LABELS)}"
+    )
+
+
+def test_step_labels_count_and_key_renames():
+    assert len(STEP_LABELS) == 13
+    assert STEP_LABELS[8] == "Cloudflare DNS + SSL"     # step 9, standalone
+    assert STEP_LABELS[10] == "Уникализация маскировочного сайта"  # step 11 (before WARP)
+    assert STEP_LABELS[11] == "WARP Native"             # step 12
+    assert STEP_LABELS[12] == "Hysteria2"               # step 13 (renamed from SSL Certbot)
 
 
 class _Task:
