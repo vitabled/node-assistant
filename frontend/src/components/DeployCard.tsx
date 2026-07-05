@@ -185,11 +185,13 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
           )}
         </div>
 
-        {/* Security + traffic blocks — only for SUCCESS nodes */}
+        {/* Security + traffic blocks — only for SUCCESS nodes. The traffic block
+            is hidden when the node was deployed without vnstat (install_vnstat
+            defaults to true, so pre-existing cards keep showing it). */}
         {stepStatus.status === "success" && (
           <>
             <SecurityBlock stats={security} />
-            <TrafficBlock stats={traffic} />
+            {job.savedForm.install_vnstat !== false && <TrafficBlock stats={traffic} />}
           </>
         )}
 

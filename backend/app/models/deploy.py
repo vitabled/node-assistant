@@ -101,6 +101,35 @@ class DeployRequest(BaseModel):
             raise ValueError("Invalid IPv4 address octets")
         return v
 
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, v: str) -> str:
+        # Empty is allowed (haproxy mode); presence is enforced by mode validator.
+        # When present it MUST be a plain hostname — this doubles as a shell-safety
+        # guard, since `domain` is interpolated into root-run bash in step_ssl /
+        # step_certbot_ssl (only [A-Za-z0-9.-] can appear → no shell metacharacters).
+        if not v:
+            return v
+        pattern = (
+            r"^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+            r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$"
+        )
+        if not re.match(pattern, v):
+            raise ValueError("Invalid domain (hostname expected)")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        # Empty allowed (haproxy mode); presence enforced by mode validator. The
+        # charset is shell-safe (no quotes/;/$/backtick), so interpolating it into
+        # the acme.sh install / zerossl register commands can't break out.
+        if not v:
+            return v
+        if not re.match(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", v):
+            raise ValueError("Invalid email")
+        return v
+
     @field_validator("open_ports")
     @classmethod
     def validate_ports(cls, v: str) -> str:
