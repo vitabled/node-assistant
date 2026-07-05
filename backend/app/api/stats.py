@@ -11,13 +11,26 @@ Parses Fail2Ban (SSH jail) + na-ctguard/TrafficGuard iptables rules.
 """
 import asyncio
 import json
+import math
 import re
 from typing import Any, Optional
 
+import re as _re
+
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.services.ssh_manager import SSHSession
+
+# Hostname charset guard — `domain` is interpolated into a root SSH script in
+# `_cert_expiry`, so reject anything outside [A-Za-z0-9.-] (empty is allowed:
+# haproxy nodes have no cert and just skip the probe). Mirrors the Ф5 validator
+# on DeployRequest.domain — NodeStatsRequest is a separate model that also
+# reaches root bash.
+_HOSTNAME_RE = _re.compile(
+    r"^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+    r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$"
+)
 
 router = APIRouter(prefix="/api/stats")
 
@@ -32,6 +45,16 @@ class NodeStatsRequest(BaseModel):
     ssh_port: int = 22
     ssh_user: str = "root"
     ssh_password: str
+    domain: str = ""   # FQDN whose cert to probe; empty → skip cert check
+
+    @field_validator("domain")
+    @classmethod
+    def _validate_domain(cls, v: str) -> str:
+        if not v:
+            return v
+        if not _HOSTNAME_RE.match(v):
+            raise ValueError("Invalid domain (hostname expected)")
+        return v
 
 
 class SecurityStats(BaseModel):
@@ -52,11 +75,17 @@ class TrafficStats(BaseModel):
     month: TrafficBucket = TrafficBucket()
 
 
+class CertInfo(BaseModel):
+    daysLeft: int          # whole days until the cert's notAfter (may be negative = expired)
+    notAfter: str          # raw openssl notAfter string, e.g. "Jul 15 12:00:00 2026 GMT"
+
+
 class NodeStatsResponse(BaseModel):
     ip: str
     online: bool
     securityStats: Optional[SecurityStats] = None
     trafficStats: Optional[TrafficStats] = None
+    certInfo: Optional[CertInfo] = None
     error: Optional[str] = None
 
 
@@ -65,11 +94,12 @@ async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
     ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
     try:
         await ssh.connect(timeout=10)
-        # One SSH session, three read-only probes in parallel.
-        f2b, tg, traffic = await asyncio.gather(
+        # One SSH session, read-only probes in parallel.
+        f2b, tg, traffic, cert = await asyncio.gather(
             _fail2ban_sshd(ssh),
             _ctguard_rules(ssh),
             _vnstat_traffic(ssh),
+            _cert_expiry(ssh, req.domain),
             return_exceptions=True,
         )
         active, total = f2b if isinstance(f2b, tuple) else (0, 0)
@@ -82,6 +112,7 @@ async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
                 trafficGuardActive=tg if isinstance(tg, int) else 0,
             ),
             trafficStats=traffic if isinstance(traffic, TrafficStats) else None,
+            certInfo=cert if isinstance(cert, CertInfo) else None,
         )
     except Exception as exc:
         return NodeStatsResponse(ip=req.ip, online=False, error=str(exc)[:200])
@@ -139,3 +170,34 @@ async def _vnstat_traffic(ssh: SSHSession) -> TrafficStats:
         return TrafficBucket(rx=rx, tx=tx, total=rx + tx)
 
     return TrafficStats(today=_b(t_rx, t_tx), week=_b(w_rx, w_tx), month=_b(m_rx, m_tx))
+
+
+async def _cert_expiry(ssh: SSHSession, domain: str) -> Optional[CertInfo]:
+    """Days-until-expiry for the node's installed cert. Computes on the node
+    (openssl notAfter + date arithmetic) so no server-side clock/parse is needed.
+    Returns None when domain is empty, the cert is missing, or openssl fails —
+    the card then shows "неизвестно" rather than an error (degrade, never 500)."""
+    domain = (domain or "").strip()
+    if not domain:
+        return None
+    # Emit "<delta_seconds>|<notAfter>" or nothing (all failures → empty output).
+    # We floor the days in Python (bash `/` truncates toward zero, which would
+    # report a just-expired cert as "0 дн." instead of a negative day).
+    script = (
+        f'CERT="/etc/ssl/certs/{domain}_fullchain.pem"; '
+        'if [ -s "$CERT" ]; then '
+        'END=$(openssl x509 -enddate -noout -in "$CERT" 2>/dev/null | cut -d= -f2); '
+        'if [ -n "$END" ]; then '
+        'ETS=$(date -d "$END" +%s 2>/dev/null); NTS=$(date +%s); '
+        'if [ -n "$ETS" ]; then echo "$(( ETS - NTS ))|$END"; fi; '
+        'fi; fi'
+    )
+    raw = (await ssh.get_output(script)).strip()
+    if not raw or "|" not in raw:
+        return None
+    delta_str, _, not_after = raw.partition("|")
+    try:
+        days = math.floor(int(delta_str.strip()) / 86400)
+    except ValueError:
+        return None
+    return CertInfo(daysLeft=days, notAfter=not_after.strip())

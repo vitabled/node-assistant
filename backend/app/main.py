@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api import (
     auth, deploy, certs, ws, stats, settings as settings_router, traffic_rules,
-    xray_checker, infra_billing,
+    xray_checker, infra_billing, node_ops,
 )
 from app.api.auth import require_account
 
@@ -54,6 +54,7 @@ _auth = [Depends(require_account)]
 app.include_router(deploy.router, dependencies=_auth)
 app.include_router(certs.router, dependencies=_auth)
 app.include_router(stats.router, dependencies=_auth)
+app.include_router(node_ops.router, dependencies=_auth)
 app.include_router(settings_router.router, dependencies=_auth)
 app.include_router(traffic_rules.router, dependencies=_auth)
 app.include_router(xray_checker.router, dependencies=_auth)
