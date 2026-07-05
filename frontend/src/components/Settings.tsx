@@ -1,6 +1,12 @@
 import { useState, useEffect } from "react";
-import { Save, CheckCircle2, XCircle, Loader2, Wifi, Download } from "lucide-react";
+import { Save, CheckCircle2, XCircle, Loader2, Wifi, Download, Check, Sun, Moon, Monitor } from "lucide-react";
 import { MultiSelect, type SelectOption } from "./MultiSelect";
+import {
+  ACCENTS, THEME_MODES, type AccentKey, type Density, type ThemeMode,
+  applyAccent, applyDensity, applyThemeMode, loadAccent, loadDensity, loadThemeMode,
+  saveAccent, saveDensity, saveThemeMode,
+} from "../theme/tweaks";
+import { getActiveId } from "../auth/store";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -651,9 +657,81 @@ function OptimizationTab() {
 }
 
 
+// ── Theme tab ─────────────────────────────────────────────────
+// Mode is per-account (keyed by the active account); accent + density are
+// device-global. Controls apply + persist imperatively — App re-reads the
+// persisted values on mount / account switch (see App.tsx).
+
+const MODE_ICON: Record<ThemeMode, typeof Sun> = { system: Monitor, light: Sun, dark: Moon };
+
+export function ThemeTab() {
+  const accountId = getActiveId();
+  const [mode, setMode]       = useState<ThemeMode>(() => loadThemeMode(accountId));
+  const [accent, setAccent]   = useState<AccentKey>(loadAccent);
+  const [density, setDensity] = useState<Density>(loadDensity);
+
+  const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); };
+  const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); };
+  const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 26, maxWidth: 460 }}>
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Режим</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+          {THEME_MODES.map(m => {
+            const Icon = MODE_ICON[m.key];
+            const on = mode === m.key;
+            return (
+              <button key={m.key} onClick={() => pickMode(m.key)}
+                className="card"
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 7,
+                  padding: "16px 8px", cursor: "pointer",
+                  borderColor: on ? "var(--accent-line)" : "var(--line-soft)",
+                  background: on ? "var(--accent-dim)" : "var(--bg2)",
+                  color: on ? "var(--accent-hi)" : "var(--t-mid)",
+                }}>
+                <Icon size={20} />
+                <span style={{ fontSize: 12.5, fontWeight: 600 }}>{m.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="hint">«Системная» следует настройке светлой/тёмной темы вашей ОС и переключается на лету.</p>
+      </div>
+
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Акцентный цвет</p>
+        <div style={{ display: "flex", gap: 10 }}>
+          {(Object.keys(ACCENTS) as AccentKey[]).map(k => (
+            <button key={k} onClick={() => pickAccent(k)} title={k}
+              style={{
+                width: 30, height: 30, borderRadius: 8, background: ACCENTS[k].base, cursor: "pointer",
+                border: accent === k ? "2px solid var(--t-hi)" : "2px solid transparent",
+                display: "grid", placeItems: "center",
+              }}>
+              {accent === k && <Check size={15} color={ACCENTS[k].ink} strokeWidth={3} />}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Плотность</p>
+        <div className="seg" style={{ maxWidth: 260 }}>
+          <button className={density === "comfortable" ? "on" : ""} onClick={() => pickDensity("comfortable")}>Обычная</button>
+          <button className={density === "compact" ? "on" : ""} onClick={() => pickDensity("compact")}>Плотная</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization";
+type SubTab = "remnawave" | "defaults" | "optimization" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -662,6 +740,7 @@ export function Settings() {
     { id: "remnawave",   label: "Remnawave" },
     { id: "defaults",    label: "Деплой (умолчания)" },
     { id: "optimization", label: "Оптимизация ОС" },
+    { id: "theme",       label: "Тема" },
   ];
 
   return (
@@ -669,20 +748,13 @@ export function Settings() {
       <div className="max-w-4xl mx-auto px-6 py-6">
 
         <div className="mb-6">
-          <h1 className="text-base font-semibold text-white">Настройки</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Параметры подключения и значения по умолчанию</p>
+          <h1 className="h1">Настройки</h1>
+          <p className="sub">Параметры подключения и значения по умолчанию</p>
         </div>
 
-        <div className="flex gap-1 p-1 bg-gray-900 rounded-lg border border-gray-800 self-start
-                        w-fit mb-6">
+        <div className="seg" style={{ width: "fit-content", marginBottom: 24 }}>
           {tabs.map(t => (
-            <button key={t.id} onClick={() => setSub(t.id)}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors
-                          focus:outline-none focus:ring-1 focus:ring-blue-500/30
-                          ${sub === t.id
-                            ? "bg-gray-800 text-white"
-                            : "text-gray-500 hover:text-gray-300"
-                          }`}>
+            <button key={t.id} className={sub === t.id ? "on" : ""} onClick={() => setSub(t.id)}>
               {t.label}
             </button>
           ))}
@@ -691,6 +763,7 @@ export function Settings() {
         {sub === "remnawave"    && <RemnavaveTab />}
         {sub === "defaults"     && <DeployDefaultsTab />}
         {sub === "optimization" && <OptimizationTab />}
+        {sub === "theme"        && <ThemeTab />}
       </div>
     </div>
   );

@@ -53,7 +53,7 @@ function Field({ label, name, value, onChange, error, hint, type = "text", place
 
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+      <label className="label">
         {label}
       </label>
       <div className={secret ? "relative" : undefined}>
@@ -65,14 +65,7 @@ function Field({ label, name, value, onChange, error, hint, type = "text", place
           disabled={disabled}
           autoComplete="off"
           spellCheck={false}
-          className={`w-full bg-gray-900/80 border rounded-md px-3 py-2 text-sm text-gray-100
-                     focus:outline-none focus:ring-1 transition-colors
-                     placeholder:text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed
-                     ${secret ? "pr-9" : ""}
-                     ${error
-                       ? "border-red-600/70 focus:border-red-500 focus:ring-red-500/20"
-                       : "border-gray-700/80 focus:border-blue-500/70 focus:ring-blue-500/20"
-                     }`}
+          className={`input ${secret ? "pr-9" : ""} ${error ? "err" : ""}`}
         />
         {secret && (
           <button
@@ -80,14 +73,14 @@ function Field({ label, name, value, onChange, error, hint, type = "text", place
             tabIndex={-1}
             onClick={() => setShow(v => !v)}
             className="absolute inset-y-0 right-0 flex items-center px-2.5
-                       text-gray-600 hover:text-gray-300 transition-colors"
+                       text-[var(--t-faint)] hover:text-[var(--t-mid)] transition-colors"
           >
             {show ? <EyeOff size={13} /> : <Eye size={13} />}
           </button>
         )}
       </div>
-      {error && <p className="text-[11px] text-red-400 mt-0.5">{error}</p>}
-      {hint  && !error && <p className="text-[11px] text-gray-600 mt-0.5">{hint}</p>}
+      {error && <p className="errmsg">{error}</p>}
+      {hint  && !error && <p className="hint">{hint}</p>}
     </div>
   );
 }
@@ -123,7 +116,7 @@ export function CertsForm({ onSubmit, disabled }: Props) {
 
   return (
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3">
-      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-1">
+      <p className="text-[11px] font-semibold uppercase tracking-widest mt-1" style={{ color: "var(--t-faint)" }}>
         Подключение
       </p>
 
@@ -149,7 +142,7 @@ export function CertsForm({ onSubmit, disabled }: Props) {
         type="button"
         onClick={() => setShowAdv((v) => !v)}
         disabled={f}
-        className="flex items-center gap-1 text-[11px] text-gray-600 hover:text-gray-400
+        className="flex items-center gap-1 text-[11px] text-[var(--t-faint)] hover:text-[var(--t-low)]
                    transition-colors self-start disabled:opacity-40"
       >
         {showAdv ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
@@ -169,8 +162,8 @@ export function CertsForm({ onSubmit, disabled }: Props) {
         />
       )}
 
-      <div className="px-3 py-2.5 rounded-lg bg-amber-950/30 border border-amber-800/30
-                      text-xs text-amber-400/80 leading-relaxed">
+      <div className="px-3 py-2.5 rounded-lg border text-xs leading-relaxed"
+           style={{ background: "var(--warn-dim)", borderColor: "var(--warn-line)", color: "var(--warn)" }}>
         Обновление использует acme.sh и CF_Token, сохранённые при деплое.
         Откройте «Дополнительно» чтобы переопределить токен.
       </div>
@@ -181,8 +174,9 @@ export function CertsForm({ onSubmit, disabled }: Props) {
         className="mt-1 flex items-center justify-center gap-2 py-2.5 rounded-lg
                    font-semibold text-sm transition-all
                    bg-teal-700 hover:bg-teal-600 active:bg-teal-800
-                   disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed
+                   disabled:cursor-not-allowed
                    focus:outline-none focus:ring-2 focus:ring-teal-500/50"
+        style={disabled ? { background: "var(--bg3)", color: "var(--t-faint)" } : undefined}
       >
         {disabled
           ? <><Loader2 size={15} className="animate-spin" /> Выполняется...</>

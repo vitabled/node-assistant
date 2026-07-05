@@ -190,19 +190,20 @@ function DeployFormModal({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "var(--overlay)" }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-gray-950 border border-gray-700/60 rounded-xl w-full max-w-lg
-                      max-h-[90vh] overflow-y-auto shadow-2xl">
-        <div className="sticky top-0 flex items-center justify-between px-5 py-3.5
-                        border-b border-gray-800 bg-gray-950 z-10">
+      <div className="rounded-xl w-full max-w-lg
+                      max-h-[90vh] overflow-y-auto shadow-2xl"
+           style={{ background: "var(--bg1)", border: "1px solid var(--line)" }}>
+        <div className="sticky top-0 flex items-center justify-between px-5 py-3.5 z-10"
+             style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)" }}>
           <div className="flex items-center gap-2">
-            <Rocket size={14} className="text-blue-400" />
-            <h2 className="text-sm font-semibold text-white">{title}</h2>
+            <Rocket size={14} style={{ color: "var(--accent-hi)" }} />
+            <h2 className="text-sm font-semibold" style={{ color: "var(--t-hi)" }}>{title}</h2>
           </div>
-          <button onClick={onClose}
-            className="p-1 rounded text-gray-600 hover:text-gray-200 hover:bg-gray-800 transition-colors">
+          <button onClick={onClose} className="iconbtn">
             <X size={15} />
           </button>
         </div>
@@ -219,12 +220,11 @@ function DeployFormModal({
 function DeployEmptyState({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center py-24 text-center">
-      <Rocket size={40} className="text-gray-700 mb-4" />
-      <p className="text-gray-500 text-sm mb-1">Нет задач деплоя</p>
-      <p className="text-gray-700 text-xs mb-5">Нажмите «Добавить сервер» чтобы запустить деплой ноды</p>
+      <Rocket size={40} className="mb-4" style={{ color: "var(--t-faint)" }} />
+      <p className="text-sm mb-1" style={{ color: "var(--t-low)" }}>Нет задач деплоя</p>
+      <p className="text-xs mb-5" style={{ color: "var(--t-faint)" }}>Нажмите «Добавить сервер» чтобы запустить деплой ноды</p>
       <button onClick={onAdd}
-        className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm
-                   bg-blue-600 hover:bg-blue-500 text-white transition-colors">
+        className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm btn btn-primary">
         <Plus size={14} /> Добавить сервер
       </button>
     </div>

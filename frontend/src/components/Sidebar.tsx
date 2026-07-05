@@ -19,7 +19,6 @@ const NAV_MAIN: NavItemDef[] = [
   { tab: "certs",     label: "Обновить SSL", Icon: RefreshCw },
   { tab: "templates", label: "Шаблоны",      Icon: FileCode2 },
   { tab: "traffic",   label: "Трафик",       Icon: Gauge     },
-  { tab: "settings",  label: "Настройки",    Icon: Settings2 },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
@@ -102,13 +101,15 @@ export function Sidebar({ activeTab, onTabChange }: Props) {
         )}
       </div>
 
-      {/* footer status */}
-      <div style={{ padding: "10px 10px 2px", borderTop: "1px solid var(--line-soft)", marginTop: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
-          <span className="dot" style={{ background: "var(--ok)" }} />
-          <span className="dim">Remnawave</span>
-          <span className="chip ok" style={{ marginLeft: "auto", padding: "1px 7px", fontSize: 10 }}>онлайн</span>
-        </div>
+      {/* footer — Настройки (moved out of the main nav) */}
+      <div style={{ paddingTop: 8, borderTop: "1px solid var(--line-soft)", marginTop: 6 }}>
+        <button
+          className={`navitem ${activeTab === "settings" ? "active" : ""}`}
+          onClick={() => onTabChange("settings")}
+        >
+          <Settings2 size={16} style={{ flex: "none" }} />
+          <span className="trunc">Настройки</span>
+        </button>
       </div>
     </aside>
   );

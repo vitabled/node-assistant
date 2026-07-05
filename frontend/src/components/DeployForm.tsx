@@ -172,7 +172,7 @@ function Field({ label, name, value, onChange, error, type = "text",
 
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+      <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
         {label}
       </label>
       <div className={secret ? "relative" : undefined}>
@@ -184,25 +184,18 @@ function Field({ label, name, value, onChange, error, type = "text",
           disabled={disabled}
           autoComplete="off"
           spellCheck={false}
-          className={`w-full bg-gray-900/80 border rounded-md px-3 py-2 text-sm text-gray-100
-                     focus:outline-none focus:ring-1 transition-colors
-                     placeholder:text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed
-                     ${secret ? "pr-9" : ""}
-                     ${error
-                       ? "border-red-600/70 focus:border-red-500 focus:ring-red-500/20"
-                       : "border-gray-700/80 focus:border-blue-500/70 focus:ring-blue-500/20"
-                     }`}
+          className={`input transition-colors ${secret ? "pr-9" : ""} ${error ? "err" : ""}`}
         />
         {secret && (
           <button type="button" tabIndex={-1} onClick={() => setShow(v => !v)}
             className="absolute inset-y-0 right-0 flex items-center px-2.5
-                       text-gray-600 hover:text-gray-300 transition-colors">
+                       text-[var(--t-faint)] hover:text-[var(--t-mid)] transition-colors">
             {show ? <EyeOff size={13} /> : <Eye size={13} />}
           </button>
         )}
       </div>
-      {hint  && !error && <p className="text-[11px] text-gray-600">{hint}</p>}
-      {error && <p className="text-[11px] text-red-400 mt-0.5">{error}</p>}
+      {hint  && !error && <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>{hint}</p>}
+      {error && <p className="errmsg">{error}</p>}
     </div>
   );
 }
@@ -215,12 +208,12 @@ function Toggle({ label, checked, onChange, disabled }: {
                        ${disabled ? "opacity-40 pointer-events-none" : ""}`}>
       <button type="button" role="switch" aria-checked={checked} onClick={onChange}
         className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none
-                    focus:ring-2 focus:ring-blue-500/40
-                    ${checked ? "bg-blue-600" : "bg-gray-700"}`}>
+                    focus:ring-2 focus:ring-[var(--accent-line)]
+                    ${checked ? "bg-[var(--accent)]" : "bg-[var(--bg3)]"}`}>
         <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow
                           transition-transform duration-200 ${checked ? "translate-x-4" : "translate-x-0"}`} />
       </button>
-      <span className="text-sm text-gray-400 group-hover:text-gray-200 transition-colors">{label}</span>
+      <span className="text-sm text-[var(--t-low)] group-hover:text-[var(--t-hi)] transition-colors">{label}</span>
     </label>
   );
 }
@@ -370,7 +363,7 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3">
 
       {/* ── Режим деплоя (горизонтальные вкладки) ── */}
-      <div className="flex gap-1 p-1 bg-gray-900 rounded-lg border border-gray-800">
+      <div className="seg accent">
         {([
           { id: "remnanode" as DeployMode, label: "Remnanode" },
           { id: "haproxy"   as DeployMode, label: "HAProxy" },
@@ -384,11 +377,9 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
               return updated;
             })}
             disabled={f}
-            className={`flex-1 px-4 py-1.5 rounded-md text-sm font-medium transition-colors
+            className={`flex-1 text-sm font-medium
                         focus:outline-none disabled:opacity-50
-                        ${form.mode === t.id
-                          ? "bg-blue-600 text-white"
-                          : "text-gray-500 hover:text-gray-300"}`}
+                        ${form.mode === t.id ? "on" : ""}`}
           >
             {t.label}
           </button>
@@ -396,7 +387,7 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
       </div>
 
       {/* ── Сервер ── */}
-      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-1">Сервер</p>
+      <p className="text-[11px] font-semibold uppercase tracking-widest mt-1" style={{ color: "var(--t-faint)" }}>Сервер</p>
       <div className="grid grid-cols-2 gap-3">
         <Field label="IP-адрес"  name="ip"       value={form.ip}       onChange={set}
           placeholder="1.2.3.4" error={errors.ip} disabled={f} />
@@ -409,7 +400,7 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
       {/* ── Домен и SSL (только Remnanode) ── */}
       {form.mode === "remnanode" && (
         <>
-          <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-2">Домен и SSL</p>
+          <p className="text-[11px] font-semibold uppercase tracking-widest mt-2" style={{ color: "var(--t-faint)" }}>Домен и SSL</p>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Домен ноды" name="domain" value={form.domain} onChange={set}
               placeholder="node1.example.com" error={errors.domain} disabled={f} />
@@ -423,7 +414,7 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
       )}
 
       {/* ── Сеть ── */}
-      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-2">Сеть</p>
+      <p className="text-[11px] font-semibold uppercase tracking-widest mt-2" style={{ color: "var(--t-faint)" }}>Сеть</p>
       <div className="grid grid-cols-3 gap-3">
         <Field label="Полоса (Mbps)"    name="bandwidth_mbps"   value={form.bandwidth_mbps}
           onChange={set} placeholder="100" disabled={f} />
@@ -461,7 +452,7 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
       {/* ── Remnanode + Remnawave (только режим Remnanode) ── */}
       {form.mode === "remnanode" && (
       <>
-      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-2">Remnanode</p>
+      <p className="text-[11px] font-semibold uppercase tracking-widest mt-2" style={{ color: "var(--t-faint)" }}>Remnanode</p>
 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Порт remnanode" name="remnanode_port" value={form.remnanode_port}
@@ -494,17 +485,16 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
           : undefined} />
 
       {/* Remnawave integration block */}
-      <div className={`rounded-lg border p-3 flex flex-col gap-3 ${
-        remnavaveReady
-          ? "border-gray-700/60 bg-gray-900/30"
-          : "border-gray-800/50 bg-gray-900/20 opacity-60"
-      }`}>
+      <div
+        className={`rounded-lg border p-3 flex flex-col gap-3 ${remnavaveReady ? "" : "opacity-60"}`}
+        style={{ borderColor: remnavaveReady ? "var(--line)" : "var(--line-soft)", background: "var(--bg2)" }}
+      >
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-widest">
+          <span className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
             Remnawave
           </span>
           {!remnavaveReady && (
-            <span className="flex items-center gap-1 text-[11px] text-amber-500">
+            <span className="flex items-center gap-1 text-[11px]" style={{ color: "var(--warn)" }}>
               <AlertCircle size={11} /> Не настроено
             </span>
           )}
@@ -525,24 +515,19 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
 
           {/* Template */}
           <div className="flex flex-col gap-1">
-            <label className={`text-[11px] font-medium uppercase tracking-widest
-                               ${!remnavaveReady ? "text-gray-700" : "text-gray-500"}`}>
+            <label className="text-[11px] font-medium uppercase tracking-widest"
+                   style={{ color: !remnavaveReady ? "var(--t-faint)" : "var(--t-low)" }}>
               Шаблон конфигурации
               {form.create_in_remnawave && remnavaveReady && (
-                <span className="text-red-500 ml-0.5">*</span>
+                <span className="ml-0.5" style={{ color: "var(--err)" }}>*</span>
               )}
             </label>
             <select
               value={form.template_id}
               onChange={e => set("template_id", e.target.value)}
               disabled={f || !remnavaveReady}
-              className={`w-full bg-gray-900/80 border rounded-md px-3 py-2 text-sm
-                          text-gray-100 focus:outline-none focus:ring-1 transition-colors
-                          disabled:opacity-40 disabled:cursor-not-allowed
-                          ${errors.template_id
-                            ? "border-red-600/70 focus:ring-red-500/20"
-                            : "border-gray-700/80 focus:border-blue-500/70 focus:ring-blue-500/20"
-                          }`}
+              className="selectbox transition-colors"
+              style={errors.template_id ? { borderColor: "var(--err-line)" } : undefined}
             >
               <option value="">— выберите шаблон —</option>
               {templates.map(t => (
@@ -550,8 +535,8 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
               ))}
             </select>
             {errors.template_id
-              ? <p className="text-[11px] text-red-400">{errors.template_id}</p>
-              : <p className="text-[11px] text-gray-600">Xray JSON с подстановкой $domain, $name, $privkey, $shortid</p>
+              ? <p className="errmsg">{errors.template_id}</p>
+              : <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>Xray JSON с подстановкой $domain, $name, $privkey, $shortid</p>
             }
           </div>
 
@@ -577,18 +562,15 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
 
           {/* Node plugin single-select */}
           <div className="flex flex-col gap-1">
-            <label className={`text-[11px] font-medium uppercase tracking-widest
-                               ${!remnavaveReady ? "text-gray-700" : "text-gray-500"}`}>
+            <label className="text-[11px] font-medium uppercase tracking-widest"
+                   style={{ color: !remnavaveReady ? "var(--t-faint)" : "var(--t-low)" }}>
               Плагин ноды
             </label>
             <select
               value={form.plugin_uuid}
               onChange={e => set("plugin_uuid", e.target.value)}
               disabled={f || !remnavaveReady || squadsLoading}
-              className="w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2
-                         text-sm text-gray-100 focus:outline-none focus:ring-1
-                         focus:border-blue-500/70 focus:ring-blue-500/20 transition-colors
-                         disabled:opacity-40 disabled:cursor-not-allowed"
+              className="selectbox transition-colors"
             >
               <option value="">{squadsLoading ? "Загрузка..." : "Не использовать плагин"}</option>
               {plugins.map(p => (
@@ -608,7 +590,7 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
       {/* ── HAProxy (только режим HAProxy) ── */}
       {form.mode === "haproxy" && (
       <>
-      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-2">HAProxy (реле)</p>
+      <p className="text-[11px] font-semibold uppercase tracking-widest mt-2" style={{ color: "var(--t-faint)" }}>HAProxy (реле)</p>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Порт HAProxy" name="haproxy_source_port" value={form.haproxy_source_port}
           onChange={set} placeholder="443" error={errors.haproxy_source_port} disabled={f} />
@@ -640,25 +622,26 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
         onChange={() => set("update_system", !form.update_system)} disabled={f} />
 
       {/* ── Оптимизация ОС ── */}
-      <div className="rounded-lg border border-gray-800/50 bg-gray-900/20">
+      <div className="rounded-lg border" style={{ borderColor: "var(--line-soft)", background: "var(--bg2)" }}>
         <button
           type="button"
           onClick={() => setOptOpen(v => !v)}
           className="w-full flex items-center justify-between gap-2 px-3 py-2.5
-                     text-left hover:bg-gray-800/30 transition-colors rounded-lg"
+                     text-left hover:bg-[var(--bg3)] transition-colors rounded-lg"
         >
-          <span className="flex items-center gap-2 text-[11px] font-semibold text-gray-500 uppercase tracking-widest">
-            <Zap size={12} className={form.optimize ? "text-yellow-500" : "text-gray-600"} />
+          <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
+            <Zap size={12} style={{ color: form.optimize ? "var(--warn)" : "var(--t-faint)" }} />
             Оптимизация ОС
           </span>
           <ChevronDown
             size={14}
-            className={`text-gray-600 transition-transform duration-200 ${optOpen ? "rotate-180" : ""}`}
+            className={`transition-transform duration-200 ${optOpen ? "rotate-180" : ""}`}
+            style={{ color: "var(--t-faint)" }}
           />
         </button>
 
         {optOpen && (
-          <div className="px-3 pb-3 flex flex-col gap-3 border-t border-gray-800/50 pt-3">
+          <div className="px-3 pb-3 flex flex-col gap-3 border-t pt-3" style={{ borderColor: "var(--line-soft)" }}>
             <Toggle
               label="Применить оптимизацию ОС"
               checked={form.optimize}
@@ -707,16 +690,18 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
       </div>
 
       {apiError && (
-        <div className="mt-2 px-3 py-2 rounded-md bg-red-950/50 border border-red-800/50
-                        text-xs text-red-400">{apiError}</div>
+        <div className="mt-2 px-3 py-2 rounded-md border
+                        text-xs"
+             style={{ background: "var(--err-dim)", borderColor: "var(--err-line)", color: "var(--err)" }}>{apiError}</div>
       )}
 
       <div className="mt-3 flex gap-2">
         <button type="submit" disabled={submitting}
           className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg
-                     font-semibold text-sm transition-all bg-blue-600 hover:bg-blue-500
-                     active:bg-blue-700 disabled:bg-blue-900/50 disabled:cursor-not-allowed
-                     focus:outline-none focus:ring-2 focus:ring-blue-500/50">
+                     font-semibold text-sm transition-all bg-[var(--accent)] text-[var(--primary-ink)]
+                     hover:bg-[var(--accent-hi)]
+                     active:bg-[var(--accent)] disabled:bg-[var(--accent-dim)] disabled:cursor-not-allowed
+                     focus:outline-none focus:ring-2 focus:ring-[var(--accent-line)]">
           {submitting
             ? <><Loader2 size={15} className="animate-spin" /> Запуск...</>
             : <><Rocket size={15} /> Запустить деплой</>
@@ -724,9 +709,9 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
         </button>
         {onCancel && !submitting && (
           <button type="button" onClick={onCancel}
-            className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-400
-                       hover:text-gray-200 hover:bg-gray-800 transition-colors
-                       focus:outline-none focus:ring-1 focus:ring-gray-700">
+            className="px-4 py-2.5 rounded-lg text-sm font-medium
+                       text-[var(--t-low)] hover:text-[var(--t-hi)] hover:bg-[var(--bg3)] transition-colors
+                       focus:outline-none focus:ring-1 focus:ring-[var(--line)]">
             Отмена
           </button>
         )}

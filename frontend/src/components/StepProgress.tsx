@@ -62,21 +62,21 @@ export function StepProgress({ currentStep, totalSteps, status, steps = DEPLOY_S
   const pct = totalSteps > 0 ? Math.round((doneCount / totalSteps) * 100) : 0;
 
   const barColor =
-    status === "success" ? "bg-green-500"
-    : status === "failed" ? "bg-red-500"
-    : "bg-blue-500";
+    status === "success" ? "var(--ok)"
+    : status === "failed" ? "var(--err)"
+    : "var(--accent)";
 
   return (
     <div className="flex flex-col gap-3">
       {/* Progress bar */}
       <div className="flex items-center gap-2">
-        <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+        <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg3)" }}>
           <div
-            className={`h-full rounded-full transition-all duration-500 ${barColor}`}
-            style={{ width: `${pct}%` }}
+            className="h-full rounded-full transition-all duration-500"
+            style={{ width: `${pct}%`, background: barColor }}
           />
         </div>
-        <span className="text-xs text-gray-500 tabular-nums w-8 text-right">{pct}%</span>
+        <span className="text-xs tabular-nums w-8 text-right dim">{pct}%</span>
       </div>
 
       {/* Step list */}
@@ -87,19 +87,20 @@ export function StepProgress({ currentStep, totalSteps, status, steps = DEPLOY_S
           const isActive = currentStep === stepNum && isRunning;
           const isFailed = currentStep === stepNum && status === "failed";
 
+          const rowStyle = isActive
+            ? { background: "var(--accent-dim)", color: "var(--accent-hi)", borderColor: "var(--accent-line)" }
+            : isDone
+            ? { color: "var(--ok)" }
+            : isFailed
+            ? { color: "var(--err)" }
+            : { color: "var(--t-faint)" };
+
           return (
             <div
               key={stepNum}
               className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-sm
-                          transition-all duration-200 ${
-                isActive
-                  ? "bg-blue-950/60 text-blue-300 border border-blue-800/60 shadow-sm shadow-blue-950"
-                  : isDone
-                  ? "text-green-500"
-                  : isFailed
-                  ? "text-red-400"
-                  : "text-gray-600"
-              }`}
+                          transition-all duration-200 ${isActive ? "border shadow-sm" : ""}`}
+              style={rowStyle}
             >
               <span className="shrink-0">
                 {isDone   ? <CheckCircle2 size={13} />
@@ -109,12 +110,12 @@ export function StepProgress({ currentStep, totalSteps, status, steps = DEPLOY_S
               </span>
 
               <span className="flex-1 leading-tight">
-                <span className="text-xs text-gray-600 mr-1.5">{stepNum}.</span>
+                <span className="text-xs faint mr-1.5">{stepNum}.</span>
                 {label}
               </span>
 
               {isActive && (
-                <span className="text-xs tabular-nums text-blue-500/70 ml-auto shrink-0">
+                <span className="text-xs tabular-nums ml-auto shrink-0" style={{ color: "var(--accent-hi)" }}>
                   {elapsed}
                 </span>
               )}
