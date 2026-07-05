@@ -20,6 +20,8 @@ class DeployDefaults(BaseModel):
     change_ssh_port: bool = True
     remnanode_port: int = 2222
     xhttp_path: str = ""
+    # Default firewall/fail2ban whitelist (IPs/CIDRs) that prefills the form.
+    whitelist_ips: str = ""
     # HAProxy relay defaults
     haproxy_source_port: int = 443
     haproxy_dest_port: int = 443

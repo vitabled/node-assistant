@@ -72,7 +72,7 @@ async function run() {
   const browser = await chromium.launch();
   for (const theme of ["dark", "light"]) {
     console.log("theme:", theme);
-    const context = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 1500 } });
     await seed(context, theme);
     await context.route("**/api/**", route => {
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(apiStub(route.request().url())) });
@@ -93,7 +93,18 @@ async function run() {
     // click the "add server" empty-state button if present
     await page.getByRole("button", { name: /Добавить сервер|Новый сервер|Добавить/ }).first().click().catch(() => {});
     await page.waitForTimeout(300);
+    // Expand the collapsed sections (Remnawave + Оптимизация ОС default closed)
+    // so the deploy-modal shot shows the full reorganized form.
+    await page.getByRole("button", { name: "Remnawave", exact: true }).click().catch(() => {});
+    await page.getByRole("button", { name: "Оптимизация ОС" }).click().catch(() => {});
+    await page.waitForTimeout(250);
     await shoot(page, `deploy-modal-${theme}`);
+    // HAProxy mode: verify «Настройки HAProxy» sits above «Сеть».
+    if (theme === "dark") {
+      await page.getByRole("button", { name: "HAProxy", exact: true }).click().catch(() => {});
+      await page.waitForTimeout(250);
+      await shoot(page, "deploy-modal-haproxy");
+    }
     // The modal closes on a backdrop mousedown (no Esc handler) — click the far
     // left of the overlay, well outside the centered modal box.
     await page.mouse.click(20, 430);

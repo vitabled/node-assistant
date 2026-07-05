@@ -35,7 +35,6 @@ export function DeployDashboard() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...data,
-        bandwidth_mbps:   parseInt(data.bandwidth_mbps,   10),
         current_ssh_port: parseInt(data.current_ssh_port, 10),
         new_ssh_port:     parseInt(data.new_ssh_port,     10),
         remnanode_port:   parseInt(data.remnanode_port,   10),

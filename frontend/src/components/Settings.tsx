@@ -27,6 +27,7 @@ interface DeployDefaults {
   change_ssh_port: boolean;
   remnanode_port: number;
   xhttp_path: string;
+  whitelist_ips: string;
   // HAProxy relay defaults
   haproxy_source_port: number;
   haproxy_dest_port: number;
@@ -56,6 +57,7 @@ const DEFAULTS_INIT: DeployDefaults = {
   change_ssh_port: true,
   remnanode_port: 2222,
   xhttp_path: "",
+  whitelist_ips: "",
   haproxy_source_port: 443,
   haproxy_dest_port: 443,
   haproxy_maxconn: 200000,
@@ -340,6 +342,13 @@ function DeployDefaultsTab() {
         onChange={v => setCfg(c => ({ ...c, open_ports: v }))}
         placeholder="80,443,8443"
         hint="Через запятую — будут открыты при деплое"
+      />
+      <SettingField
+        label="Whitelist IP / CIDR (по умолчанию)"
+        value={cfg.whitelist_ips}
+        onChange={v => setCfg(c => ({ ...c, whitelist_ips: v }))}
+        placeholder="1.2.3.4, 10.0.0.0/24"
+        hint="Префилл поля whitelist в форме деплоя (fail2ban/UFW)"
       />
       <OptCheckbox
         label="Сменять порт SSH по умолчанию"

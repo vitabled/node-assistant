@@ -13,11 +13,17 @@ class DeployRequest(BaseModel):
     ssh_password: str = Field(..., min_length=1)
     # domain/email/cloudflare are required only in remnanode mode (validated below)
     domain: str = Field(default="", description="Node domain, e.g. node1.example.com")
+    # Certificate issuer: cloudflare (DNS-01, acme.sh) | letsencrypt (HTTP-01) |
+    # zerossl (acme.sh + EAB). CF token is required only for cloudflare.
+    cert_provider: Literal["cloudflare", "letsencrypt", "zerossl"] = Field(default="cloudflare")
     cloudflare_api_key: str = Field(default="")
     email: str = Field(default="", description="Email for Let's Encrypt registration")
     remnanode_token: Optional[str] = Field(default=None)
-    bandwidth_mbps: int = Field(..., gt=0, description="Channel bandwidth in Mbps")
     open_ports: str = Field(..., description="Comma-separated ports to open in UFW")
+    # Firewall/fail2ban whitelist: IPs/CIDRs (any separator); normalized in the
+    # pipeline (Ф5). allow_ssh_all opens the SSH port to any source.
+    whitelist_ips: str = Field(default="")
+    allow_ssh_all: bool = Field(default=False)
     current_ssh_port: int = Field(default=22, ge=1, le=65535)
     new_ssh_port: int = Field(default=2222, ge=1, le=65535)
     change_ssh_port: bool = Field(default=True)
@@ -29,6 +35,8 @@ class DeployRequest(BaseModel):
     behind_cdn: bool = Field(default=False)
     install_warp: bool = Field(default=False)
     update_system: bool = Field(default=False)
+    install_vnstat: bool = Field(default=True)
+    install_trafficguard: bool = Field(default=True)
     # OS optimization (node-accelerator)
     optimize: bool = Field(default=True)
     opt_network_tuning: bool = Field(default=True)
@@ -61,8 +69,10 @@ class DeployRequest(BaseModel):
             # Domain/email/Cloudflare are needed for DNS + SSL in remnanode mode.
             if not self.domain:
                 raise ValueError("domain is required in remnanode mode")
-            if not self.cloudflare_api_key:
-                raise ValueError("cloudflare_api_key is required in remnanode mode")
+            # Cloudflare token is only needed for the cloudflare (DNS-01) issuer;
+            # letsencrypt/zerossl use HTTP-01 / email-EAB and don't take a token.
+            if self.cert_provider == "cloudflare" and not self.cloudflare_api_key:
+                raise ValueError("cloudflare_api_key is required for the cloudflare cert provider")
             if not self.email:
                 raise ValueError("email is required in remnanode mode")
             if not self.create_in_remnawave and not self.remnanode_token:
