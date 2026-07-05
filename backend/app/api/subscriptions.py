@@ -10,6 +10,8 @@ Two routers:
   the cross-account active set. Only reachable on node-assistant-net (compose
   `expose`, not `ports`; nginx does not proxy /internal), so it stays internal.
 """
+import asyncio
+import json
 import os
 import threading
 import uuid
@@ -29,9 +31,33 @@ _AGG_TOKEN = os.getenv("AGG_TOKEN", "").strip()  # shared secret with the aggreg
 
 # ── per-account CRUD (session-gated) ──────────────────────────
 
+_AGG_STATUS_URL = os.getenv("SUBS_AGGREGATOR_STATUS_URL", "http://subs-aggregator:8080/status")
+
+
 @router.get("")
 async def list_subscriptions():
     return storage.load_subscriptions()
+
+
+@router.get("/status")
+async def subscriptions_status():
+    """This account's subs merged with the aggregator's live per-sub error/count
+    (the aggregator tracks fetch errors; the backend store doesn't). Degrades to
+    the stored subs (error=None) when the aggregator is unreachable."""
+    subs = storage.load_subscriptions()
+    aid = accounts.current_account.get() or ""
+    agg = {}
+    try:
+        raw = await asyncio.to_thread(_fetch_agg_status)
+        for s in raw.get("subscriptions", []):
+            agg[s.get("key", "")] = s  # key == "<account>:<sub>"
+    except Exception:
+        pass
+    out = []
+    for s in subs:
+        st = agg.get(f"{aid}:{s['id']}", {})
+        out.append({**s, "last_error": st.get("error"), "config_count": st.get("count")})
+    return out
 
 
 @router.post("", status_code=201)
@@ -119,6 +145,14 @@ def _sub_key(sub_id: str) -> str:
     """The aggregator caches by `account:sub`; the active account is in context."""
     aid = accounts.current_account.get() or ""
     return f"{aid}:{sub_id}"
+
+
+def _fetch_agg_status() -> dict:
+    headers = {}
+    if _AGG_TOKEN:
+        headers["X-Agg-Token"] = _AGG_TOKEN
+    req = urllib.request.Request(_AGG_STATUS_URL, headers=headers)
+    return json.loads(urllib.request.urlopen(req, timeout=3).read().decode())
 
 
 def _post_refresh(sub_key) -> None:

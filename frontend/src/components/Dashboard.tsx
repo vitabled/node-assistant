@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Activity, Zap, RefreshCw, Loader2, ChevronDown, CheckCircle2,
-  AlertTriangle, XCircle, Server, Clock,
+  AlertTriangle, XCircle, Server, Clock, SlidersHorizontal, Save, Download,
+  Check, Plus, Trash2,
 } from "lucide-react";
 import { COUNTRIES } from "./CountrySelect";
 import { getFlagEmoji } from "../utils/format";
@@ -58,28 +59,34 @@ function fmtWhen(ts: number): string {
     day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
   });
 }
+// These return CSS-var color strings (not class names) — applied via inline style.
 const barColor: Record<TickStatus, string> = {
-  up: "bg-green-500", slow: "bg-amber-500", down: "bg-red-500",
+  up: "var(--ok)", slow: "var(--warn)", down: "var(--err)",
 };
 function uptimeColor(pct: number | null): string {
-  if (pct == null) return "text-gray-500";
-  if (pct >= 99.5) return "text-green-400";
-  if (pct >= 98) return "text-yellow-400";
-  return "text-red-400";
+  if (pct == null) return "var(--t-low)";
+  if (pct >= 99.5) return "var(--ok)";
+  if (pct >= 98) return "var(--warn)";
+  return "var(--err)";
 }
 function latencyColor(online: boolean, ms: number): string {
-  if (!online) return "text-gray-600";
-  if (ms < 300) return "text-green-400";
-  if (ms < 800) return "text-yellow-400";
-  return "text-red-400";
+  if (!online) return "var(--t-faint)";
+  if (ms < 300) return "var(--ok)";
+  if (ms < 800) return "var(--warn)";
+  return "var(--err)";
 }
 
-// Global banner appearance per health state.
-const BANNER: Record<GState, { cls: string; icon: React.ReactNode; text: string }> = {
-  ok:      { cls: "border-green-800/50 bg-green-950/40 text-green-300", icon: <CheckCircle2 size={22} />, text: "Все узлы работают стабильно" },
-  partial: { cls: "border-amber-800/50 bg-amber-950/40 text-amber-300", icon: <AlertTriangle size={22} />, text: "Частичные сбои" },
-  down:    { cls: "border-red-800/50 bg-red-950/40 text-red-300",       icon: <XCircle size={22} />,       text: "Критическая нестабильность сети" },
-  unknown: { cls: "border-gray-700/50 bg-gray-900/40 text-gray-400",    icon: <Activity size={22} />,      text: "Нет данных мониторинга" },
+// Global banner appearance per health state (style objects, not class strings —
+// applied via style= so the banner follows the light/dark theme tokens).
+const BANNER: Record<GState, { style: React.CSSProperties; icon: React.ReactNode; text: string }> = {
+  ok:      { style: { borderColor: "var(--ok-line)", background: "var(--ok-dim)", color: "var(--ok)" },
+             icon: <CheckCircle2 size={22} />, text: "Все узлы работают стабильно" },
+  partial: { style: { borderColor: "var(--warn-line)", background: "var(--warn-dim)", color: "var(--warn)" },
+             icon: <AlertTriangle size={22} />, text: "Частичные сбои" },
+  down:    { style: { borderColor: "var(--err-line)", background: "var(--err-dim)", color: "var(--err)" },
+             icon: <XCircle size={22} />, text: "Критическая нестабильность сети" },
+  unknown: { style: { borderColor: "var(--line-soft)", background: "var(--bg2)", color: "var(--t-low)" },
+             icon: <Activity size={22} />, text: "Нет данных мониторинга" },
 };
 
 export function Dashboard() {
@@ -141,42 +148,44 @@ export function Dashboard() {
 
         {/* Header row */}
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-base font-semibold text-white flex items-center gap-2">
-            <Activity size={16} className="text-blue-400" /> Статус нод сети
+          <h1 className="text-base font-semibold text-[var(--t-hi)] flex items-center gap-2">
+            <Activity size={16} className="text-[var(--accent-hi)]" /> Статус нод сети
           </h1>
           <div className="flex items-center gap-2">
-            <div className="flex rounded-md border border-gray-800 overflow-hidden">
+            <div className="flex rounded-md border border-[var(--line-soft)] overflow-hidden">
               {[30, 60, 90].map(n => (
                 <button key={n} onClick={() => setTicks(n)}
                   className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    ticks === n ? "bg-gray-800 text-white" : "text-gray-500 hover:text-gray-300"}`}>
+                    ticks === n ? "bg-[var(--bg3)] text-[var(--t-hi)]" : "text-[var(--t-low)] hover:text-[var(--t-mid)]"}`}>
                   {n}
                 </button>
               ))}
             </div>
-            <button onClick={() => load(ticks)}
-              className="p-2 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors" title="Обновить">
+            <button onClick={() => load(ticks)} className="iconbtn" title="Обновить">
               <RefreshCw size={13} />
             </button>
-            <button onClick={deepCheck} disabled={checking || !running}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-                         bg-blue-600 hover:bg-blue-500 text-white transition-colors
-                         disabled:opacity-40 disabled:cursor-not-allowed">
+            <button onClick={deepCheck} disabled={checking || !running} className="btn btn-primary">
               {checking ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
               Перепроверить все ноды
             </button>
           </div>
         </div>
 
+        {/* Xray-Checker controls (Ф9 — moved here from Settings → Деплой) */}
+        <CheckerControls />
+
+        {/* Tracked subscriptions (multi-subscription aggregation, Ф9) */}
+        <SubscriptionSelector />
+
         {/* Global health banner */}
-        <div className={`rounded-xl border p-5 mb-6 flex items-center gap-4 ${banner.cls}`}>
+        <div className="rounded-xl border p-5 mb-6 flex items-center gap-4" style={banner.style}>
           {banner.icon}
           <div className="flex-1">
             <p className="text-lg font-semibold">{banner.text}</p>
             <p className="text-xs opacity-70 mt-0.5">
               {running && g?.state
                 ? `${g.online} из ${g.total} узлов онлайн`
-                : loading ? "Загрузка…" : "xray-checker не запущен — настройте его в Настройки → Деплой"}
+                : loading ? "Загрузка…" : "Мониторинг не запущен — включите его в настройках мониторинга выше"}
             </p>
           </div>
           <div className="flex items-center gap-6 text-right">
@@ -188,7 +197,7 @@ export function Dashboard() {
 
         {/* Node groups */}
         {groups.length === 0 ? (
-          <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-8 text-center text-gray-600 text-sm">
+          <div className="rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-8 text-center text-[var(--t-faint)] text-sm">
             {running ? "Нет нод в подписке." : "Мониторинг неактивен."}
           </div>
         ) : groups.map(([country, nodes]) => {
@@ -196,18 +205,18 @@ export function Dashboard() {
           const flag = flagFor(country);
           const anyDown = nodes.some(n => !n.online);
           return (
-            <div key={country} className="mb-4 rounded-xl border border-gray-800 overflow-hidden">
+            <div key={country} className="mb-4 rounded-xl border border-[var(--line-soft)] overflow-hidden">
               <button
                 onClick={() => setCollapsed(c => ({ ...c, [country]: !c[country] }))}
-                className="w-full flex items-center gap-2.5 px-4 py-2.5 bg-gray-900/60 hover:bg-gray-900 transition-colors">
+                className="w-full flex items-center gap-2.5 px-4 py-2.5 bg-[var(--bg2)] hover:bg-[var(--bg3)] transition-colors">
                 <span className="text-lg leading-none">{flag}</span>
-                <span className="text-sm font-medium text-gray-200">{country}</span>
-                <span className="text-[11px] text-gray-600">Нод: {nodes.length}</span>
-                {anyDown && <span className="w-1.5 h-1.5 rounded-full bg-red-400" />}
-                <ChevronDown size={14} className={`ml-auto text-gray-600 transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
+                <span className="text-sm font-medium text-[var(--t-hi)]">{country}</span>
+                <span className="text-[11px] text-[var(--t-faint)]">Нод: {nodes.length}</span>
+                {anyDown && <span className="w-1.5 h-1.5 rounded-full bg-[var(--err)]" />}
+                <ChevronDown size={14} className={`ml-auto text-[var(--t-faint)] transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
               </button>
               {!isCollapsed && (
-                <div className="divide-y divide-gray-800/60">
+                <div className="divide-y divide-[var(--line-soft)]">
                   {nodes.map(n => <NodeRow key={n.stableId} node={n} flag={flag} ticks={ticks} />)}
                 </div>
               )}
@@ -216,25 +225,25 @@ export function Dashboard() {
         })}
 
         {/* Incident history */}
-        <div className="mt-6 rounded-xl border border-gray-800 bg-gray-900/40 p-4">
-          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+        <div className="mt-6 rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-4">
+          <p className="micro mb-3 flex items-center gap-2">
             <Clock size={12} /> История доступности за последние 7 дней
           </p>
           {incidents.length === 0 ? (
-            <p className="text-xs text-gray-600 py-3 text-center">Инцидентов не зафиксировано — все ноды были стабильны. ✓</p>
+            <p className="text-xs text-[var(--t-faint)] py-3 text-center">Инцидентов не зафиксировано — все ноды были стабильны. ✓</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {incidents.slice(0, 50).map((it, i) => (
                 <li key={i} className="flex items-start gap-2.5 text-xs">
-                  <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${it.ongoing ? "bg-red-400 animate-pulse" : "bg-gray-600"}`} />
-                  <span className="text-gray-500 tabular-nums shrink-0">{fmtWhen(it.start)}</span>
-                  <span className="text-gray-300">
-                    Нода <span className="text-white font-medium">{it.name}</span>
-                    {it.group && <span className="text-gray-500"> ({it.group})</span>}
+                  <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${it.ongoing ? "bg-[var(--err)] animate-pulse" : "bg-[var(--t-faint)]"}`} />
+                  <span className="text-[var(--t-low)] tabular-nums shrink-0">{fmtWhen(it.start)}</span>
+                  <span className="text-[var(--t-mid)]">
+                    Нода <span className="text-[var(--t-hi)] font-medium">{it.name}</span>
+                    {it.group && <span className="text-[var(--t-low)]"> ({it.group})</span>}
                     {it.ongoing
-                      ? <span className="text-red-400"> недоступна сейчас</span>
-                      : <> была недоступна в течение <span className="text-amber-300">{fmtDuration(it.durationSec)}</span></>}.
-                    <span className="text-gray-600"> Причина: {it.reason}.</span>
+                      ? <span className="text-[var(--err)]"> недоступна сейчас</span>
+                      : <> была недоступна в течение <span className="text-[var(--warn)]">{fmtDuration(it.durationSec)}</span></>}.
+                    <span className="text-[var(--t-faint)]"> Причина: {it.reason}.</span>
                   </span>
                 </li>
               ))}
@@ -247,20 +256,297 @@ export function Dashboard() {
   );
 }
 
+// ── Xray-Checker controls (moved from Settings.tsx's XrayCheckerSettings) ──
+// Collapsible, collapsed by default so it doesn't dominate the status page.
+
+interface XrayCheckerCfg {
+  enabled: boolean;
+  subscription_url: string;
+  check_interval: number;
+  check_method: string;
+  metrics_port: number;
+  image: string;
+  poll_interval: number;
+}
+const XC_INIT: XrayCheckerCfg = {
+  enabled: false, subscription_url: "", check_interval: 300, check_method: "ip",
+  metrics_port: 2112, image: "kutovoys/xray-checker:latest", poll_interval: 60,
+};
+
+function CheckerControls() {
+  const [open,   setOpen]   = useState(false);
+  const [cfg,    setCfg]    = useState<XrayCheckerCfg>(XC_INIT);
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+  const [busy,   setBusy]   = useState<null | "update" | "stop">(null);
+  const [msg,    setMsg]    = useState<{ ok: boolean; text: string; warn?: boolean } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/settings").then(r => r.json())
+      .then(d => { if (d.xray_checker) setCfg({ ...XC_INIT, ...d.xray_checker }); })
+      .catch(() => {});
+  }, []);
+
+  const save = async () => {
+    setSaving(true); setMsg(null);
+    try {
+      const res = await fetch("/api/settings/xray-checker", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cfg),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMsg({ ok: false, text: String(d.detail ?? res.statusText) });
+      } else if (d.warning) {
+        // Settings saved, but the container couldn't start (e.g. no Docker).
+        setMsg({ ok: false, warn: true, text: String(d.warning) });
+        setSaved(true); setTimeout(() => setSaved(false), 2000);
+      } else {
+        setMsg(null);
+        setSaved(true); setTimeout(() => setSaved(false), 2000);
+      }
+    } catch (e) { setMsg({ ok: false, text: String(e) }); }
+    setSaving(false);
+  };
+
+  const action = async (kind: "update" | "stop") => {
+    setBusy(kind); setMsg(null);
+    const path = kind === "update" ? "/api/checker/update" : "/api/checker/stop";
+    try {
+      const res = await fetch(path, { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) setMsg({ ok: false, text: String(d.detail ?? res.statusText) });
+      else setMsg({ ok: true, text:
+        kind === "update" ? "Xray-Checker обновлён и перезапущен." : "Контейнер остановлен." });
+    } catch (e) { setMsg({ ok: false, text: String(e) }); }
+    setBusy(null);
+  };
+
+  return (
+    <div className="card card-p mb-4">
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-2 bg-transparent border-none cursor-pointer p-0">
+        <span className="micro flex items-center gap-2"><SlidersHorizontal size={13} /> Настройки мониторинга</span>
+        <ChevronDown size={14} className="text-[var(--t-faint)] transition-transform"
+          style={{ transform: open ? "rotate(180deg)" : "none" }} />
+      </button>
+
+      {open && (
+        <div className="mt-4 flex flex-col gap-4">
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <button type="button" role="switch" aria-checked={cfg.enabled}
+              onClick={() => setCfg(c => ({ ...c, enabled: !c.enabled }))}
+              className={`switch ${cfg.enabled ? "on" : ""}`} />
+            <span className="text-sm text-[var(--t-mid)]">Включить мониторинг</span>
+          </label>
+
+          <div className="flex flex-col gap-1">
+            <label className="label">Прямая подписка (без агрегатора)</label>
+            <input className="input" value={cfg.subscription_url}
+              onChange={e => setCfg(c => ({ ...c, subscription_url: e.target.value }))}
+              placeholder="https://panel.example.com/sub/…" />
+            <p className="hint">Для одиночной подписки; при использовании списка ниже оставьте пустым</p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="label">Интервал проверки (с)</label>
+              <input className="input" type="number" value={cfg.check_interval}
+                onChange={e => setCfg(c => ({ ...c, check_interval: parseInt(e.target.value) || 300 }))} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="label">Метод</label>
+              <select className="selectbox" value={cfg.check_method}
+                onChange={e => setCfg(c => ({ ...c, check_method: e.target.value }))}>
+                <option value="ip">ip</option>
+                <option value="status">status</option>
+                <option value="download">download</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="label">Порт метрик</label>
+              <input className="input" type="number" value={cfg.metrics_port}
+                onChange={e => setCfg(c => ({ ...c, metrics_port: parseInt(e.target.value) || 2112 }))} />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={save} disabled={saving} className="btn btn-primary">
+              {saved ? <><CheckCircle2 size={13} /> Сохранено</>
+                : saving ? <><Loader2 size={13} className="animate-spin" /> Сохранение…</>
+                : <><Save size={13} /> Сохранить</>}
+            </button>
+            <button onClick={() => action("update")} disabled={busy !== null} className="btn btn-soft">
+              {busy === "update" ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+              Обновить
+            </button>
+            <button onClick={() => action("stop")} disabled={busy !== null} className="btn btn-ghost">
+              Остановить
+            </button>
+          </div>
+
+          {msg && (
+            <span className="text-xs flex items-center gap-1.5"
+              style={{ color: msg.ok ? "var(--ok)" : msg.warn ? "var(--warn)" : "var(--err)" }}>
+              {msg.ok ? <CheckCircle2 size={12} /> : <XCircle size={12} />} {msg.text}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tracked subscriptions (multi-subscription selector, Ф9) ───────────────
+// Manages the account's subscription set fed into the shared subs-aggregator.
+
+interface SubStatus {
+  id: string;
+  url: string;
+  background: boolean;
+  enabled: boolean;
+  last_error: string | null;
+  config_count: number | null;
+}
+
+function SubscriptionSelector() {
+  const [subs,    setSubs]    = useState<SubStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newUrl,  setNewUrl]  = useState("");
+  const [adding,  setAdding]  = useState(false);
+  const [addErr,  setAddErr]  = useState<string | null>(null);
+  const [busyId,  setBusyId]  = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/subscriptions/status");
+      const d = await res.json();
+      setSubs(Array.isArray(d) ? d : []);
+    } catch { /* keep last */ }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    load();
+    timer.current = setInterval(load, 15_000);
+    return () => { if (timer.current) clearInterval(timer.current); };
+  }, [load]);
+
+  const toggleBackground = async (s: SubStatus) => {
+    setBusyId(s.id);
+    try {
+      await fetch(`/api/subscriptions/${s.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ background: !s.background }),
+      });
+      await load();
+    } catch { /* ignore */ }
+    setBusyId(null);
+  };
+
+  const refreshSub = async (id: string) => {
+    setBusyId(id);
+    try { await fetch(`/api/subscriptions/${id}/refresh`, { method: "POST" }); await load(); }
+    catch { /* ignore */ }
+    setBusyId(null);
+  };
+
+  const removeSub = async (id: string) => {
+    setBusyId(id);
+    try { await fetch(`/api/subscriptions/${id}`, { method: "DELETE" }); await load(); }
+    catch { /* ignore */ }
+    setBusyId(null);
+  };
+
+  const addSub = async () => {
+    const url = newUrl.trim();
+    if (!url) return;
+    setAdding(true); setAddErr(null);
+    try {
+      const res = await fetch("/api/subscriptions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, background: true }),
+      });
+      if (res.status === 422) {
+        setAddErr("URL должен начинаться с http:// или https://");
+      } else if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setAddErr(String(d.detail ?? "Ошибка"));
+      } else {
+        setNewUrl("");
+        await load();
+      }
+    } catch (e) { setAddErr(String(e)); }
+    setAdding(false);
+  };
+
+  return (
+    <div className="card card-p mb-6">
+      <p className="micro mb-3">Отслеживаемые подписки</p>
+
+      {loading ? (
+        <p className="text-xs text-[var(--t-faint)] py-2">Загрузка…</p>
+      ) : subs.length === 0 ? (
+        <p className="text-xs text-[var(--t-faint)] py-2">Нет отслеживаемых подписок — добавьте ссылку ниже.</p>
+      ) : (
+        <ul className="flex flex-col gap-2 mb-3">
+          {subs.map(s => (
+            <li key={s.id} className="flex flex-col gap-1.5 rounded-md px-3 py-2 bg-[var(--bg3)]">
+              <div className="flex items-center gap-2.5">
+                <button type="button" role="checkbox" aria-checked={s.background}
+                  onClick={() => toggleBackground(s)} disabled={busyId === s.id}
+                  className={`ck ${s.background ? "on" : ""}`} title="Фоновая подписка (в общий агрегат)">
+                  {s.background && <Check size={11} />}
+                </button>
+                <span className="text-xs font-mono trunc flex-1 text-[var(--t-mid)]" title={s.url}>{s.url}</span>
+                {s.config_count != null && (
+                  <span className="chip neutral">{s.config_count} конфигов</span>
+                )}
+                <button type="button" onClick={() => refreshSub(s.id)} disabled={busyId === s.id}
+                  className="iconbtn" title="Обновить">
+                  {busyId === s.id ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                </button>
+                <button type="button" onClick={() => removeSub(s.id)} disabled={busyId === s.id}
+                  className="iconbtn danger" title="Удалить">
+                  <Trash2 size={13} />
+                </button>
+              </div>
+              {s.last_error && (
+                <p className="text-[11px] text-[var(--err)]">Ошибка: {s.last_error}</p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="flex items-center gap-2">
+        <input className="input" value={newUrl} onChange={e => setNewUrl(e.target.value)}
+          placeholder="https://panel.example.com/sub/…"
+          onKeyDown={e => { if (e.key === "Enter") addSub(); }} />
+        <button type="button" onClick={addSub} disabled={adding} className="btn btn-primary">
+          {adding ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+        </button>
+      </div>
+      {addErr && <p className="errmsg mt-1">{addErr}</p>}
+    </div>
+  );
+}
+
 // ── Node row (compact status strip) ───────────────────────────
 function NodeRow({ node, flag, ticks }: { node: Node; flag: string; ticks: number }) {
   // Right-align bars: pad the left with "no-data" slots.
   const pad = Math.max(0, ticks - node.bars.length);
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-900/40">
+    <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--row-hover)]">
       {/* name + protocol */}
       <div className="flex items-center gap-2 min-w-0 w-52 shrink-0">
         <span className="text-base leading-none">{flag}</span>
         <div className="min-w-0">
-          <p className="text-sm text-gray-200 truncate">{node.name}</p>
+          <p className="text-sm text-[var(--t-hi)] truncate">{node.name}</p>
           {node.protocol && (
-            <span className="inline-block text-[10px] uppercase tracking-wide text-gray-500
-                             bg-gray-800/70 rounded px-1.5 py-0.5 mt-0.5">{node.protocol}</span>
+            <span className="inline-block text-[10px] uppercase tracking-wide text-[var(--t-low)]
+                             bg-[var(--bg3)] rounded px-1.5 py-0.5 mt-0.5">{node.protocol}</span>
           )}
         </div>
       </div>
@@ -268,21 +554,21 @@ function NodeRow({ node, flag, ticks }: { node: Node; flag: string; ticks: numbe
       {/* uptime bar grid */}
       <div className="flex-1 flex items-end gap-[2px] h-7 min-w-0" title={`Последние ${ticks} проверок`}>
         {Array.from({ length: pad }).map((_, i) => (
-          <span key={`p${i}`} className="flex-1 max-w-[6px] h-4 rounded-sm bg-gray-800/70" />
+          <span key={`p${i}`} className="flex-1 max-w-[6px] h-4 rounded-sm bg-[var(--bg3)]" />
         ))}
         {node.bars.map((b, i) => (
-          <span key={i} className={`flex-1 max-w-[6px] h-7 rounded-sm ${barColor[b.status]}`}
+          <span key={i} className="flex-1 max-w-[6px] h-7 rounded-sm" style={{ background: barColor[b.status] }}
             title={`${fmtWhen(b.ts)} — ${b.status === "up" ? "OK" : b.status === "slow" ? "высокая задержка" : "недоступна"}`} />
         ))}
       </div>
 
       {/* ping */}
-      <div className={`w-16 text-right text-sm tabular-nums shrink-0 ${latencyColor(node.online, node.latencyMs)}`}>
+      <div className="w-16 text-right text-sm tabular-nums shrink-0" style={{ color: latencyColor(node.online, node.latencyMs) }}>
         {node.online ? `${node.latencyMs} мс` : "офлайн"}
       </div>
 
       {/* 30d uptime */}
-      <div className={`w-20 text-right text-sm tabular-nums shrink-0 ${uptimeColor(node.uptime30d)}`}
+      <div className="w-20 text-right text-sm tabular-nums shrink-0" style={{ color: uptimeColor(node.uptime30d) }}
         title="Аптайм за 30 дней">
         {node.uptime30d != null ? `${node.uptime30d}%` : "—"}
       </div>

@@ -84,6 +84,20 @@ def test_internal_agg_subs_is_ungated_and_cross_account():
     assert by_url["https://b.example/bg"]["account_id"] == b["id"]
 
 
+def test_status_degrades_when_aggregator_unreachable():
+    # /api/subscriptions/status merges the aggregator's per-sub error; when the
+    # aggregator is unreachable it must still return the stored subs (error=None).
+    a = _register("subs-status")
+    client.post("/api/subscriptions", headers=_auth(a["token"]),
+                json={"url": "https://s.example/x", "background": True})
+    r = client.get("/api/subscriptions/status", headers=_auth(a["token"]))
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["last_error"] is None      # aggregator down → no error surfaced
+    assert "config_count" in body[0]
+
+
 def test_rejects_non_http_scheme_url():
     a = _register("subs-scheme")
     for bad in ["file:///etc/passwd", "ftp://h/x", "gopher://h/"]:

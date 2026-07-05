@@ -14,6 +14,7 @@ services:
       # The shared xray-checker probes the aggregator's combined subscription.
       - SUBS_AGGREGATOR_URL=http://subs-aggregator:8080/sub
       - SUBS_AGGREGATOR_REFRESH_URL=http://subs-aggregator:8080/refresh
+      - SUBS_AGGREGATOR_STATUS_URL=http://subs-aggregator:8080/status
       # Shared secret guarding /internal/agg-subs + the aggregator's /refresh.
       # Set a strong value in .env for prod (empty = guard disabled, dev only).
       - AGG_TOKEN=${AGG_TOKEN:-}

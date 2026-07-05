@@ -29,6 +29,38 @@ from app.models.settings import AppSettings
 router = APIRouter(prefix="/api/checker")
 
 
+# ── per-account tag filtering (Ф9) ────────────────────────────
+# The Ф8 aggregator tags each proxy's remark `<account_id>:<sub_id>|<orig>`, which
+# the checker surfaces as the proxy `name`. We filter the shared checker's output
+# to the ACTIVE account and strip the tag for display. Fallback: when NO proxy is
+# tagged (single-subscription / bare-metal mode, aggregator not in use), show all
+# — so the dashboard still works without the aggregator.
+
+def _parse_tag(name: str) -> tuple[str, str]:
+    """`<account>:<sub>|<orig>` → (account_id, orig_name); untagged → ("", name)."""
+    head, sep, orig = name.partition("|")
+    if sep and ":" in head:
+        acc, _, _sub = head.partition(":")
+        if acc:
+            return acc, orig
+    return "", name
+
+
+def _filter_by_account(items: list[dict], account_id: str, name_key: str = "name") -> list[dict]:
+    """Keep only items belonging to `account_id` (by the name tag) and strip the
+    tag from the display name. If nothing is tagged, return items unchanged."""
+    any_tagged = any(_parse_tag(str(i.get(name_key, "")))[0] for i in items)
+    if not any_tagged:
+        return items
+    out = []
+    for i in items:
+        acc, orig = _parse_tag(str(i.get(name_key, "")))
+        if acc == account_id:
+            i = {**i, name_key: orig}
+            out.append(i)
+    return out
+
+
 @router.get("/status")
 async def checker_status() -> dict[str, Any]:
     """Container state + a live snapshot of the checker's summary + proxies."""
@@ -42,9 +74,9 @@ async def checker_status() -> dict[str, Any]:
             return_exceptions=True,
         )
         if isinstance(summary, dict):
-            result["summary"] = summary
             result["reachable"] = True
         if isinstance(proxies, list):
+            proxies = _filter_by_account(proxies, accounts.current_account.get() or "")
             # Attach per-node uptime (24h availability) from the stored samples.
             uptime = await metrics_store.get_node_uptime(24)
             for p in proxies:
@@ -52,6 +84,18 @@ async def checker_status() -> dict[str, Any]:
                 p["uptimePct"]  = u["uptime_pct"] if u else None
                 p["lastSeen"]   = u["last_seen"] if u else None
             result["proxies"] = proxies
+            # Recompute the summary from THIS account's proxies — the checker's
+            # own /api/v1/status is a cross-account aggregate (total/online across
+            # all tenants) and must not be surfaced (same leak class as
+            # statuspage's global uptime).
+            online = [p for p in proxies if p.get("online")]
+            lats = [p.get("latencyMs", -1) for p in online if p.get("latencyMs", -1) >= 0]
+            result["summary"] = {
+                "total": len(proxies),
+                "online": len(online),
+                "offline": len(proxies) - len(online),
+                "avgLatencyMs": round(sum(lats) / len(lats)) if lats else 0,
+            }
         if isinstance(info, dict):
             result["system"] = info
     except Exception as exc:  # pragma: no cover — defensive
@@ -61,6 +105,11 @@ async def checker_status() -> dict[str, Any]:
 
 @router.get("/history")
 async def checker_history(hours: int = 24) -> dict[str, Any]:
+    # NOTE: this is a GLOBAL aggregate (avg latency/availability across ALL
+    # accounts) — it carries no node names/ids so it can't leak identifiable
+    # per-account data, and the dashboard doesn't render it (uses statuspage +
+    # incidents, both per-account filtered). Per-account history would need a
+    # name-tag column in the bucketed SQL; deferred.
     hours = max(1, min(hours, 168))
     return await metrics_store.get_history(hours)
 
@@ -79,6 +128,10 @@ async def checker_statuspage(ticks: int = 30) -> dict[str, Any]:
     except Exception as exc:
         result["error"] = str(exc)[:200]
         return result
+
+    # Filter to the active account (tag) + strip the tag from display names, so
+    # global counts below are also per-account.
+    proxies = _filter_by_account(proxies, accounts.current_account.get() or "")
 
     bars, up30 = await asyncio.gather(
         metrics_store.get_bars(ticks), metrics_store.get_uptime_30d()
@@ -110,11 +163,16 @@ async def checker_statuspage(ticks: int = 30) -> dict[str, Any]:
         }
         for p in proxies
     ]
+    # Global 30d uptime scoped to THIS account's nodes (up30["global"] is the
+    # whole shared DB across all accounts — don't leak that coarse aggregate).
+    own_up = [n["uptime30d"] for n in nodes if n["uptime30d"] is not None]
+    global_uptime = round(sum(own_up) / len(own_up), 1) if own_up else None
+
     result.update({
         "reachable": True,
         "global": {
             "state": gstate,
-            "uptime30d": up30["global"],
+            "uptime30d": global_uptime,
             "protocols": protocols,
             "total": total, "online": online, "offline": total - online,
         },
@@ -126,7 +184,9 @@ async def checker_statuspage(ticks: int = 30) -> dict[str, Any]:
 @router.get("/incidents")
 async def checker_incidents(days: int = 7) -> dict[str, Any]:
     days = max(1, min(days, 30))
-    return {"days": days, "incidents": await metrics_store.get_incidents(days)}
+    incidents = await metrics_store.get_incidents(days)
+    incidents = _filter_by_account(incidents, accounts.current_account.get() or "")
+    return {"days": days, "incidents": incidents}
 
 
 @router.get("/logs")
