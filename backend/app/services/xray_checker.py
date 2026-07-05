@@ -110,10 +110,22 @@ async def container_state() -> str:
     return (out.strip() or "unknown")
 
 
+def _subscription_url(cfg: XrayCheckerConfig) -> str:
+    """In DooD mode with the aggregator wired (SUBS_AGGREGATOR_URL), the checker
+    probes the COMBINED subscription from subs-aggregator (all accounts' tracked
+    subs, tagged account:sub). Falls back to the single per-account
+    `cfg.subscription_url` on bare metal or when the aggregator isn't configured."""
+    agg = os.getenv("SUBS_AGGREGATOR_URL", "").strip()
+    if agg and _network():
+        return agg
+    return cfg.subscription_url
+
+
 async def start(cfg: Optional[XrayCheckerConfig] = None) -> None:
     """(Re)create and start the checker container from the current settings."""
     cfg = cfg or _cfg()
-    if not cfg.subscription_url.strip():
+    sub_url = _subscription_url(cfg)
+    if not sub_url.strip():
         raise CheckerError("SUBSCRIPTION_URL не задан — укажите ссылку подписки в Настройках.")
 
     # Fail fast with a clear message if Docker isn't on the host.
@@ -135,7 +147,7 @@ async def start(cfg: Optional[XrayCheckerConfig] = None) -> None:
     run_args += [
         # Publish to the host too (optional: lets an admin open the status page).
         "-p", f"{cfg.metrics_port}:2112",
-        "-e", f"SUBSCRIPTION_URL={cfg.subscription_url}",
+        "-e", f"SUBSCRIPTION_URL={sub_url}",
         "-e", f"PROXY_CHECK_INTERVAL={cfg.check_interval}",
         "-e", f"PROXY_CHECK_METHOD={cfg.check_method}",
         "-e", "METRICS_PORT=2112",

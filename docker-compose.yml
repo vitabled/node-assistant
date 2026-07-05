@@ -11,6 +11,12 @@ services:
       # Shared docker network name — node-assistant attaches the xray-checker
       # container to it and reaches the checker by container name.
       - XRAY_CHECKER_NETWORK=node-assistant-net
+      # The shared xray-checker probes the aggregator's combined subscription.
+      - SUBS_AGGREGATOR_URL=http://subs-aggregator:8080/sub
+      - SUBS_AGGREGATOR_REFRESH_URL=http://subs-aggregator:8080/refresh
+      # Shared secret guarding /internal/agg-subs + the aggregator's /refresh.
+      # Set a strong value in .env for prod (empty = guard disabled, dev only).
+      - AGG_TOKEN=${AGG_TOKEN:-}
     volumes:
       - node-data:/app/data
       # Docker-out-of-Docker: manage the sibling xray-checker container via the
@@ -26,6 +32,27 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # Merges every account's tracked subscriptions into one combined subscription
+  # that the shared xray-checker probes (reached by container name on the shared
+  # network). Reads the active set from the backend's internal /agg-subs endpoint.
+  subs-aggregator:
+    build:
+      context: ./subs-aggregator
+      dockerfile: Dockerfile
+    container_name: subs-aggregator
+    restart: unless-stopped
+    environment:
+      - AGG_SOURCE_URL=http://node-installer-backend:8000/internal/agg-subs
+      - PORT=8080
+      - AGG_TOKEN=${AGG_TOKEN:-}
+    expose:
+      - "8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-net
 
   frontend:
     build:

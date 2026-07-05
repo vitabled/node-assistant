@@ -55,3 +55,11 @@ def load_traffic_rules(account_id: Optional[str] = None) -> list:
 
 def save_traffic_rules(rules: list, account_id: Optional[str] = None) -> None:
     _write(_dir(account_id) / "traffic_rules.json", rules)
+
+
+def load_subscriptions(account_id: Optional[str] = None) -> list:
+    return _read(_dir(account_id) / "subscriptions.json").get("subscriptions", [])
+
+
+def save_subscriptions(subs: list, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "subscriptions.json", {"subscriptions": subs})
