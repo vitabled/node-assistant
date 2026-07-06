@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api import (
     auth, deploy, certs, ws, stats, settings as settings_router, traffic_rules,
-    xray_checker, infra_billing,
+    xray_checker, infra_billing, node_ops, subscriptions, domains, hosts,
 )
 from app.api.auth import require_account
 
@@ -54,14 +54,23 @@ _auth = [Depends(require_account)]
 app.include_router(deploy.router, dependencies=_auth)
 app.include_router(certs.router, dependencies=_auth)
 app.include_router(stats.router, dependencies=_auth)
+app.include_router(node_ops.router, dependencies=_auth)
 app.include_router(settings_router.router, dependencies=_auth)
 app.include_router(traffic_rules.router, dependencies=_auth)
 app.include_router(xray_checker.router, dependencies=_auth)
 app.include_router(infra_billing.router, dependencies=_auth)
+app.include_router(subscriptions.router, dependencies=_auth)
+app.include_router(domains.router, dependencies=_auth)
+app.include_router(hosts.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.
 app.include_router(ws.router)
+# Internal aggregator source — NOT account-gated (the subs-aggregator container
+# has no account token). Only reachable on node-assistant-net: compose `expose`s
+# it without a host port and nginx does not proxy /internal. Same ungated posture
+# as ws.router, justified by network isolation.
+app.include_router(subscriptions.internal_router)
 
 
 @app.get("/api/health")

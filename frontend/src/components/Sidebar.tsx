@@ -1,13 +1,13 @@
 import { useState } from "react";
 import {
-  Activity, Rocket, RefreshCw, FileCode2, Gauge, Settings2, Server,
+  Activity, Rocket, ShieldCheck, FileCode2, Network, Gauge, Settings2, Server,
   PieChart, ChevronDown, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
-  | "dashboard" | "deploy" | "certs" | "templates" | "traffic" | "settings"
+  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
@@ -16,10 +16,10 @@ interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon }
 const NAV_MAIN: NavItemDef[] = [
   { tab: "dashboard", label: "Дешборд",      Icon: Activity  },
   { tab: "deploy",    label: "Деплой ноды",  Icon: Rocket    },
-  { tab: "certs",     label: "Обновить SSL", Icon: RefreshCw },
+  { tab: "certs",     label: "Управление SSL", Icon: ShieldCheck },
   { tab: "templates", label: "Шаблоны",      Icon: FileCode2 },
+  { tab: "hosts",     label: "Хосты",        Icon: Network   },
   { tab: "traffic",   label: "Трафик",       Icon: Gauge     },
-  { tab: "settings",  label: "Настройки",    Icon: Settings2 },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
@@ -102,13 +102,15 @@ export function Sidebar({ activeTab, onTabChange }: Props) {
         )}
       </div>
 
-      {/* footer status */}
-      <div style={{ padding: "10px 10px 2px", borderTop: "1px solid var(--line-soft)", marginTop: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
-          <span className="dot" style={{ background: "var(--ok)" }} />
-          <span className="dim">Remnawave</span>
-          <span className="chip ok" style={{ marginLeft: "auto", padding: "1px 7px", fontSize: 10 }}>онлайн</span>
-        </div>
+      {/* footer — Настройки (moved out of the main nav) */}
+      <div style={{ paddingTop: 8, borderTop: "1px solid var(--line-soft)", marginTop: 6 }}>
+        <button
+          className={`navitem ${activeTab === "settings" ? "active" : ""}`}
+          onClick={() => onTabChange("settings")}
+        >
+          <Settings2 size={16} style={{ flex: "none" }} />
+          <span className="trunc">Настройки</span>
+        </button>
       </div>
     </aside>
   );

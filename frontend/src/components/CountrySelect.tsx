@@ -1,76 +1,92 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { ChevronDown, Search } from "lucide-react";
-import { getFlagEmoji } from "../utils/format";
+import { ChevronDown, Search, Globe } from "lucide-react";
 
-// ISO 3166-1 alpha-2 → { name, flag }. Mirrors the country picker in the
-// Remnawave panel. "XX" is the panel's "unknown" sentinel.
-export const COUNTRIES: { code: string; name: string; flag: string }[] = [
-  { code: "XX", name: "Неизвестно", flag: "🏳️" },
-  { code: "AL", name: "Albania", flag: "🇦🇱" },
-  { code: "AM", name: "Armenia", flag: "🇦🇲" },
-  { code: "AR", name: "Argentina", flag: "🇦🇷" },
-  { code: "AT", name: "Austria", flag: "🇦🇹" },
-  { code: "AU", name: "Australia", flag: "🇦🇺" },
-  { code: "AZ", name: "Azerbaijan", flag: "🇦🇿" },
-  { code: "BE", name: "Belgium", flag: "🇧🇪" },
-  { code: "BG", name: "Bulgaria", flag: "🇧🇬" },
-  { code: "BR", name: "Brazil", flag: "🇧🇷" },
-  { code: "BY", name: "Belarus", flag: "🇧🇾" },
-  { code: "CA", name: "Canada", flag: "🇨🇦" },
-  { code: "CH", name: "Switzerland", flag: "🇨🇭" },
-  { code: "CL", name: "Chile", flag: "🇨🇱" },
-  { code: "CN", name: "China", flag: "🇨🇳" },
-  { code: "CY", name: "Cyprus", flag: "🇨🇾" },
-  { code: "CZ", name: "Czechia", flag: "🇨🇿" },
-  { code: "DE", name: "Germany", flag: "🇩🇪" },
-  { code: "DK", name: "Denmark", flag: "🇩🇰" },
-  { code: "EE", name: "Estonia", flag: "🇪🇪" },
-  { code: "ES", name: "Spain", flag: "🇪🇸" },
-  { code: "FI", name: "Finland", flag: "🇫🇮" },
-  { code: "FR", name: "France", flag: "🇫🇷" },
-  { code: "GB", name: "United Kingdom", flag: "🇬🇧" },
-  { code: "GE", name: "Georgia", flag: "🇬🇪" },
-  { code: "GR", name: "Greece", flag: "🇬🇷" },
-  { code: "HK", name: "Hong Kong", flag: "🇭🇰" },
-  { code: "HR", name: "Croatia", flag: "🇭🇷" },
-  { code: "HU", name: "Hungary", flag: "🇭🇺" },
-  { code: "ID", name: "Indonesia", flag: "🇮🇩" },
-  { code: "IE", name: "Ireland", flag: "🇮🇪" },
-  { code: "IL", name: "Israel", flag: "🇮🇱" },
-  { code: "IN", name: "India", flag: "🇮🇳" },
-  { code: "IR", name: "Iran", flag: "🇮🇷" },
-  { code: "IS", name: "Iceland", flag: "🇮🇸" },
-  { code: "IT", name: "Italy", flag: "🇮🇹" },
-  { code: "JP", name: "Japan", flag: "🇯🇵" },
-  { code: "KZ", name: "Kazakhstan", flag: "🇰🇿" },
-  { code: "LT", name: "Lithuania", flag: "🇱🇹" },
-  { code: "LU", name: "Luxembourg", flag: "🇱🇺" },
-  { code: "LV", name: "Latvia", flag: "🇱🇻" },
-  { code: "MD", name: "Moldova", flag: "🇲🇩" },
-  { code: "MX", name: "Mexico", flag: "🇲🇽" },
-  { code: "MY", name: "Malaysia", flag: "🇲🇾" },
-  { code: "NL", name: "Netherlands", flag: "🇳🇱" },
-  { code: "NO", name: "Norway", flag: "🇳🇴" },
-  { code: "NZ", name: "New Zealand", flag: "🇳🇿" },
-  { code: "PL", name: "Poland", flag: "🇵🇱" },
-  { code: "PT", name: "Portugal", flag: "🇵🇹" },
-  { code: "RO", name: "Romania", flag: "🇷🇴" },
-  { code: "RS", name: "Serbia", flag: "🇷🇸" },
-  { code: "RU", name: "Russia", flag: "🇷🇺" },
-  { code: "SA", name: "Saudi Arabia", flag: "🇸🇦" },
-  { code: "SE", name: "Sweden", flag: "🇸🇪" },
-  { code: "SG", name: "Singapore", flag: "🇸🇬" },
-  { code: "SI", name: "Slovenia", flag: "🇸🇮" },
-  { code: "SK", name: "Slovakia", flag: "🇸🇰" },
-  { code: "TH", name: "Thailand", flag: "🇹🇭" },
-  { code: "TR", name: "Turkey", flag: "🇹🇷" },
-  { code: "TW", name: "Taiwan", flag: "🇹🇼" },
-  { code: "UA", name: "Ukraine", flag: "🇺🇦" },
-  { code: "US", name: "United States", flag: "🇺🇸" },
-  { code: "UZ", name: "Uzbekistan", flag: "🇺🇿" },
-  { code: "VN", name: "Vietnam", flag: "🇻🇳" },
-  { code: "ZA", name: "South Africa", flag: "🇿🇦" },
+// ISO 3166-1 alpha-2 → { name }. Mirrors the country picker in the Remnawave
+// panel. "XX" is the panel's "unknown" sentinel. Flags render via the
+// `flag-icons` SVG set (`fi fi-<cc>`), not emoji.
+export const COUNTRIES: { code: string; name: string }[] = [
+  { code: "XX", name: "Неизвестно" },
+  { code: "AL", name: "Albania" },
+  { code: "AM", name: "Armenia" },
+  { code: "AR", name: "Argentina" },
+  { code: "AT", name: "Austria" },
+  { code: "AU", name: "Australia" },
+  { code: "AZ", name: "Azerbaijan" },
+  { code: "BE", name: "Belgium" },
+  { code: "BG", name: "Bulgaria" },
+  { code: "BR", name: "Brazil" },
+  { code: "BY", name: "Belarus" },
+  { code: "CA", name: "Canada" },
+  { code: "CH", name: "Switzerland" },
+  { code: "CL", name: "Chile" },
+  { code: "CN", name: "China" },
+  { code: "CY", name: "Cyprus" },
+  { code: "CZ", name: "Czechia" },
+  { code: "DE", name: "Germany" },
+  { code: "DK", name: "Denmark" },
+  { code: "EE", name: "Estonia" },
+  { code: "ES", name: "Spain" },
+  { code: "FI", name: "Finland" },
+  { code: "FR", name: "France" },
+  { code: "GB", name: "United Kingdom" },
+  { code: "GE", name: "Georgia" },
+  { code: "GR", name: "Greece" },
+  { code: "HK", name: "Hong Kong" },
+  { code: "HR", name: "Croatia" },
+  { code: "HU", name: "Hungary" },
+  { code: "ID", name: "Indonesia" },
+  { code: "IE", name: "Ireland" },
+  { code: "IL", name: "Israel" },
+  { code: "IN", name: "India" },
+  { code: "IR", name: "Iran" },
+  { code: "IS", name: "Iceland" },
+  { code: "IT", name: "Italy" },
+  { code: "JP", name: "Japan" },
+  { code: "KZ", name: "Kazakhstan" },
+  { code: "LT", name: "Lithuania" },
+  { code: "LU", name: "Luxembourg" },
+  { code: "LV", name: "Latvia" },
+  { code: "MD", name: "Moldova" },
+  { code: "MX", name: "Mexico" },
+  { code: "MY", name: "Malaysia" },
+  { code: "NL", name: "Netherlands" },
+  { code: "NO", name: "Norway" },
+  { code: "NZ", name: "New Zealand" },
+  { code: "PL", name: "Poland" },
+  { code: "PT", name: "Portugal" },
+  { code: "RO", name: "Romania" },
+  { code: "RS", name: "Serbia" },
+  { code: "RU", name: "Russia" },
+  { code: "SA", name: "Saudi Arabia" },
+  { code: "SE", name: "Sweden" },
+  { code: "SG", name: "Singapore" },
+  { code: "SI", name: "Slovenia" },
+  { code: "SK", name: "Slovakia" },
+  { code: "TH", name: "Thailand" },
+  { code: "TR", name: "Turkey" },
+  { code: "TW", name: "Taiwan" },
+  { code: "UA", name: "Ukraine" },
+  { code: "US", name: "United States" },
+  { code: "UZ", name: "Uzbekistan" },
+  { code: "VN", name: "Vietnam" },
+  { code: "ZA", name: "South Africa" },
 ];
+
+// Fixed-size SVG flag chip from the flag-icons set; Globe fallback for XX/unknown.
+function FlagChip({ code, size = 18 }: { code: string; size?: number }) {
+  const cc = (code || "").toLowerCase();
+  if (!cc || cc === "xx") return <Globe size={size - 4} style={{ color: "var(--t-low)", flex: "none" }} />;
+  return (
+    <span
+      className={`fi fi-${cc}`}
+      style={{
+        width: size, height: Math.round(size * 0.72), borderRadius: 2, flex: "none",
+        backgroundSize: "cover", backgroundPosition: "center",
+        boxShadow: "0 0 0 1px rgba(0,0,0,.12)",
+      }}
+    />
+  );
+}
 
 interface Props {
   label:        string;
@@ -115,7 +131,7 @@ export function CountrySelect({
 
   return (
     <div className="flex flex-col gap-1 relative" ref={ref}>
-      <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+      <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
         {label}
       </label>
 
@@ -124,53 +140,46 @@ export function CountrySelect({
         type="button"
         onClick={() => !disabled && setOpen(o => !o)}
         disabled={disabled}
-        className={`w-full min-h-[2.25rem] flex items-center gap-2
-                    bg-gray-900/80 border rounded-md px-3 py-1.5 text-left
-                    text-sm transition-colors focus:outline-none focus:ring-1
-                    disabled:opacity-40 disabled:cursor-not-allowed
-                    ${error
-                      ? "border-red-600/70 focus:ring-red-500/20"
-                      : open
-                      ? "border-blue-500/70 ring-1 ring-blue-500/20"
-                      : "border-gray-700/80 hover:border-gray-600"
-                    }`}
+        className="input flex items-center gap-2 text-left transition-colors
+                   disabled:opacity-40 disabled:cursor-not-allowed"
+        style={error ? { borderColor: "var(--err-line)" } : undefined}
       >
         {selected ? (
-          <span className="flex-1 text-gray-100">
-            <span className="mr-1.5">{getFlagEmoji(selected.code)}</span>
+          <span className="flex-1 flex items-center gap-2" style={{ color: "var(--t-hi)" }}>
+            <FlagChip code={selected.code} />
             {selected.name}
-            <span className="text-gray-600 ml-1">({selected.code})</span>
+            <span style={{ color: "var(--t-faint)" }}>({selected.code})</span>
           </span>
         ) : (
-          <span className="flex-1 text-gray-700">{placeholder}</span>
+          <span className="flex-1" style={{ color: "var(--t-faint)" }}>{placeholder}</span>
         )}
         <ChevronDown
           size={13}
-          className={`shrink-0 text-gray-600 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+          style={{ color: "var(--t-faint)" }}
         />
       </button>
 
       {/* Dropdown with search */}
       {open && (
         <div
-          className="absolute z-50 mt-1 w-full min-w-[220px]
-                     bg-gray-950 border border-gray-700 rounded-lg shadow-xl"
-          style={{ top: "100%" }}
+          className="absolute z-50 mt-1 w-full min-w-[220px] rounded-lg"
+          style={{ top: "100%", background: "var(--bg1)", border: "1px solid var(--line)", boxShadow: "var(--shadow-pop)" }}
         >
-          <div className="flex items-center gap-2 px-2.5 py-2 border-b border-gray-800">
-            <Search size={13} className="text-gray-600 shrink-0" />
+          <div className="flex items-center gap-2 px-2.5 py-2" style={{ borderBottom: "1px solid var(--line-soft)" }}>
+            <Search size={13} className="shrink-0" style={{ color: "var(--t-faint)" }} />
             <input
               autoFocus
               value={query}
               onChange={e => setQuery(e.target.value)}
               placeholder="Поиск страны..."
-              className="w-full bg-transparent text-sm text-gray-100 placeholder:text-gray-700
-                         focus:outline-none"
+              className="w-full bg-transparent text-sm focus:outline-none"
+              style={{ color: "var(--t-hi)" }}
             />
           </div>
           <div className="max-h-52 overflow-y-auto py-1">
             {filtered.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-gray-600">Ничего не найдено</p>
+              <p className="px-3 py-2 text-xs" style={{ color: "var(--t-faint)" }}>Ничего не найдено</p>
             ) : (
               filtered.map(c => {
                 const active = c.code === value;
@@ -179,15 +188,14 @@ export function CountrySelect({
                     key={c.code}
                     type="button"
                     onClick={() => { onChange(c.code); setOpen(false); }}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-left
-                               hover:bg-gray-800 transition-colors select-none
-                               ${active ? "bg-gray-800/60" : ""}`}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors select-none hover:bg-[var(--bg3)]"
+                    style={active ? { background: "var(--accent-dim)" } : undefined}
                   >
-                    <span>{getFlagEmoji(c.code)}</span>
-                    <span className={`text-sm ${active ? "text-blue-300" : "text-gray-300"}`}>
+                    <FlagChip code={c.code} />
+                    <span className="text-sm" style={{ color: active ? "var(--accent-hi)" : "var(--t-mid)" }}>
                       {c.name}
                     </span>
-                    <span className="text-[11px] text-gray-600 ml-auto">{c.code}</span>
+                    <span className="text-[11px] ml-auto" style={{ color: "var(--t-faint)" }}>{c.code}</span>
                   </button>
                 );
               })
@@ -196,7 +204,7 @@ export function CountrySelect({
         </div>
       )}
 
-      {error && <p className="text-[11px] text-red-400">{error}</p>}
+      {error && <p className="errmsg">{error}</p>}
     </div>
   );
 }

@@ -58,6 +58,8 @@ def test_register_empty_fields_rejected():
     assert client.post("/api/auth/register", json={"login": _uniq(), "password": ""}).status_code == 422
     # whitespace-only login collapses to empty -> 422
     assert client.post("/api/auth/register", json={"login": "   ", "password": "x"}).status_code == 422
+    # whitespace-only password collapses to empty -> 422
+    assert client.post("/api/auth/register", json={"login": _uniq(), "password": "   "}).status_code == 422
 
 
 # ── login ─────────────────────────────────────────────────────

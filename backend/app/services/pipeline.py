@@ -12,6 +12,7 @@ Non-interactive strategy for third-party repos:
 """
 import asyncio
 import base64
+import ipaddress
 import os
 import secrets
 from typing import Optional
@@ -316,9 +317,45 @@ sysctl --system 2>&1 | grep -v "^sysctl:" || true
 echo "[kernel] hardening applied."
 """
 
-def _fail2ban_setup(backend_ip: str) -> str:
-    """Generate fail2ban setup script; backend_ip is added to ignoreip."""
-    ignoreip_line = f"ignoreip  = 127.0.0.1/8 ::1{' ' + backend_ip if backend_ip else ''}"
+def _parse_ip_list(s: str) -> list[str]:
+    """Normalize a free-form whitelist string into a deduped list of valid
+    IPv4 addresses / CIDR networks. Split on comma / whitespace / newline;
+    silently drop anything that isn't a valid IPv4 address or IPv4 network.
+    Order-preserving dedup."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in s.replace(",", " ").split():
+        tok = raw.strip()
+        if not tok:
+            continue
+        try:
+            if "/" in tok:
+                net = ipaddress.ip_network(tok, strict=False)
+                if net.version != 4:
+                    continue
+                norm = str(net)
+            else:
+                addr = ipaddress.ip_address(tok)
+                if addr.version != 4:
+                    continue
+                norm = str(addr)
+        except ValueError:
+            continue
+        if norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
+def _fail2ban_setup(backend_ip: str, whitelist: Optional[list[str]] = None,
+                    ssh_maxretry: int = 4) -> str:
+    """Generate fail2ban setup script. `backend_ip` + `whitelist` IPs/CIDRs go
+    into ignoreip; `ssh_maxretry` sets the sshd jail's maxretry (doubled to 8
+    when the deploy allows SSH from everywhere, so broad exposure doesn't cause
+    over-eager bans)."""
+    trusted = [ip for ip in [backend_ip, *(whitelist or [])] if ip]
+    trusted_suffix = (" " + " ".join(trusted)) if trusted else ""
+    ignoreip_line = f"ignoreip  = 127.0.0.1/8 ::1{trusted_suffix}"
     return f"""\
 {_APT_WAIT}
 {_apt_install("fail2ban", "nginx")}
@@ -348,7 +385,7 @@ port     = ssh
 filter   = sshd
 logpath  = %(syslog_authpriv)s
 backend  = systemd
-maxretry = 4
+maxretry = {ssh_maxretry}
 bantime  = 86400
 
 [nginx-http-auth]
@@ -453,13 +490,57 @@ free -h
 """
 
 
+def _firewall_extra_script(req: "DeployRequest", whitelist: list[str]) -> str:
+    """UFW allow rules for the deploy whitelist + optional open-SSH-to-all.
+    Each whitelisted IP/CIDR is trusted for all ports (`ufw allow from … to any`,
+    matching the backend-IP whitelist pattern). `allow_ssh_all` explicitly opens
+    the effective SSH port to any source (covers the change_ssh_port=off case
+    where the dual-port script didn't run). Guarded on ufw being present; never
+    force-enables UFW (that could lock out a box whose ports aren't allowed yet)."""
+    ssh_port = req.new_ssh_port if req.change_ssh_port else req.current_ssh_port
+    rules = [
+        f"ufw allow from {ip} to any comment 'deploy-whitelist' 2>/dev/null || true"
+        for ip in whitelist
+    ]
+    # allow_ssh_all opens the SSH port to any source. Only add it here when the
+    # port is NOT already opened by the dual-port script: `_ssh_dualport_config_
+    # _script` already does `ufw allow {new_port}/tcp` (all sources) when
+    # change_ssh_port is on. Adding it again would create a duplicate rule that a
+    # Scenario-Б rollback's single `ufw delete` wouldn't fully remove (leaving the
+    # new port open after rollback). So emit it only for the no-port-change case.
+    if req.allow_ssh_all and not req.change_ssh_port:
+        rules.append(
+            f"ufw allow {ssh_port}/tcp comment 'SSH open (all)' 2>/dev/null || true"
+        )
+    if not rules:
+        return "echo '[firewall] нет доп. правил (whitelist пуст, SSH-all выкл).'"
+    body = "\n    ".join(rules)
+    return f"""\
+if command -v ufw >/dev/null 2>&1; then
+    {body}
+    ufw status 2>/dev/null | grep -E 'deploy-whitelist|SSH open' || true
+fi
+echo "[firewall] доп. правила применены (whitelist={len(whitelist)}, ssh_all={str(req.allow_ssh_all).lower()})."
+"""
+
+
 async def step_system_optimize(
     ssh: SSHSession, task: Task, backend_ip: str, req: "DeployRequest"
 ) -> None:
     _begin_step(task, 5)
 
+    whitelist = _parse_ip_list(req.whitelist_ips)
+    if whitelist:
+        task.add_log(f"\x1b[36m[whitelist] Доверенные IP/CIDR: {', '.join(whitelist)}\x1b[0m")
+
     await ssh.run_script(_KERNEL_HARDENING, task)
-    await ssh.run_script(_fail2ban_setup(backend_ip), task)
+    await ssh.run_script(
+        _fail2ban_setup(
+            backend_ip, whitelist, ssh_maxretry=8 if req.allow_ssh_all else 4
+        ),
+        task,
+    )
+    await ssh.run_script(_firewall_extra_script(req, whitelist), task, check=False)
 
     # Use get_output() — reads stdout without adding noise to task logs
     raw = await ssh.get_output("grep MemTotal /proc/meminfo | awk '{print $2}'")
@@ -668,6 +749,10 @@ async def step_ssh_dualport_verify(
     req: "DeployRequest",
     backend_ip: str,
 ) -> SSHSession:
+    # This former single step is now presented as THREE progress steps:
+    #   6 «Перезагрузка»            — poll for the box to come back online
+    #   7 «Проверка нового порта SSH» — SSH-connect on the new port (rollback/lockout here)
+    #   8 «Удаление старого порта SSH» — cleanup: drop the old port
     _begin_step(task, 6)
 
     async def _whitelist(sess: SSHSession) -> None:
@@ -682,8 +767,12 @@ async def step_ssh_dualport_verify(
         )
 
     # No port change → no reboot happened; keep Session #1, just whitelist.
+    # Advance through steps 6/7/8 so the progress bar still completes them.
     if not req.change_ssh_port:
         task.add_log("\x1b[90m[ssh-dualport] Смена порта отключена — перезагрузки не было.\x1b[0m")
+        _begin_step(task, 7)
+        task.add_log("\x1b[90m[ssh-dualport] Проверка порта не требуется.\x1b[0m")
+        _begin_step(task, 8)
         await _whitelist(ssh)
         return ssh
 
@@ -691,7 +780,7 @@ async def step_ssh_dualport_verify(
     old_port = req.current_ssh_port
     loop = asyncio.get_running_loop()
 
-    # ── Poll for the server to come back online after the reboot ──
+    # ── Step 6: poll for the server to come back online after the reboot ──
     task.add_log("\x1b[36m[ssh-dualport] Ожидание перезагрузки сервера...\x1b[0m")
     await asyncio.sleep(20)  # let the OS actually begin shutting down
 
@@ -713,7 +802,8 @@ async def step_ssh_dualport_verify(
     task.add_log("\x1b[32m[ssh-dualport] Сервер снова в сети — проверяю порты...\x1b[0m")
     await asyncio.sleep(3)  # give sshd a moment to finish binding
 
-    # ── SCENARIO А — new port works ──
+    # ── Step 7: verify the new port accepts SSH ──
+    _begin_step(task, 7)
     session_new = await _try_ssh_connect(req, new_port, timeout=12)
     if session_new is not None:
         old_reachable = await _tcp_reachable(req.ip, old_port)
@@ -722,7 +812,8 @@ async def step_ssh_dualport_verify(
             f"установлено (старый порт {old_port}: "
             f"{'доступен' if old_reachable else 'закрыт'}).\x1b[0m"
         )
-        # Finalize: keep only the new port everywhere
+        # ── Step 8: keep only the new port everywhere ──
+        _begin_step(task, 8)
         await session_new.run_script(
             _ssh_cleanup_newport_script(old_port, new_port), task, check=False
         )
@@ -763,21 +854,35 @@ async def step_ssh_dualport_verify(
 # Step 5 – Cloudflare DNS + Wildcard SSL via acme.sh (DNS-01)
 # ──────────────────────────────────────────────────────────────
 
-async def step_ssl(
-    ssh: SSHSession,
-    task: Task,
-    domain: str,
-    email: str,
-    cf_api_key: str,
-    server_ip: str,
-) -> None:
-    _begin_step(task, 7)
+def ssl_needs_cf_dns(cert_provider: str) -> bool:
+    """Cloudflare (DNS-01) is the only provider we manage DNS for; the HTTP-01
+    providers require the FQDN to already resolve to the server."""
+    return cert_provider == "cloudflare"
 
-    task.add_log("Updating Cloudflare DNS A record...")
-    await upsert_a_record(cf_api_key, domain, server_ip)
-    task.add_log(f"\x1b[32m[CF] A record: {domain} → {server_ip}\x1b[0m")
 
-    ssl_script = f"""\
+def build_ssl_script(domain: str, email: str, cf_api_key: str, cert_provider: str) -> str:
+    """The acme.sh install + per-provider issue + install-cert bash script,
+    shared by the deploy pipeline (`step_ssl`) and the SSL-management endpoint
+    (`api/certs.py`). Issues per-FQDN (never a root wildcard). Provider branch:
+    cloudflare=DNS-01, letsencrypt=HTTP-01 standalone, zerossl=HTTP-01 + email-EAB."""
+    if cert_provider == "cloudflare":
+        provider_prep = f'export CF_Token="{cf_api_key}"'
+        issue_flags = "--dns dns_cf --server letsencrypt"
+    elif cert_provider == "zerossl":
+        provider_prep = (
+            "fuser -k 80/tcp 2>/dev/null || true\n"
+            f'/root/.acme.sh/acme.sh --register-account --server zerossl -m "{email}" || true'
+        )
+        issue_flags = "--standalone --server zerossl"
+    else:  # letsencrypt (HTTP-01 standalone)
+        provider_prep = "fuser -k 80/tcp 2>/dev/null || true"
+        issue_flags = "--standalone --server letsencrypt"
+
+    # cloudflare + letsencrypt share the Let's Encrypt CA (DNS-01 vs HTTP-01);
+    # only zerossl is a different CA. Skip re-issue only on a CA match.
+    ca_marker = "zerossl" if cert_provider == "zerossl" else "letsencrypt"
+
+    return f"""\
 {_APT_WAIT}
 {_apt_install("curl", "socat", "cron")}
 
@@ -788,26 +893,34 @@ if [ ! -f /root/.acme.sh/acme.sh ]; then
     export PATH="$PATH:/root/.acme.sh"
 fi
 
-# ── Issue per-NODE cert for the exact FQDN (DNS-01 via Cloudflare) ──
+# ── Issue per-NODE cert for the exact FQDN ({cert_provider}) ──
 # IMPORTANT: we issue for the node's own FQDN ({domain}) — NOT a root wildcard.
 # A wildcard (root + *.root) is the SAME "set of identifiers" for every node, so
-# deploying ~5 nodes under one root domain hits Let's Encrypt's limit of 5 certs
-# per identical identifier set / 168h (429 rateLimited). Each node FQDN is a
-# unique set, so per-FQDN issuance never collides and works on a fresh server.
-export CF_Token="{cf_api_key}"
+# deploying ~5 nodes under one root domain hits the CA's limit of 5 certs per
+# identical identifier set / 168h (429 rateLimited). Each node FQDN is a unique
+# set, so per-FQDN issuance never collides and works on a fresh server.
+{provider_prep}
 
 # Decide issuance on the ACTUAL ECC cert files, not on `acme.sh --list`
 # (a stale/partial registry entry would otherwise skip issuance, then
 # --install-cert --ecc fails). Force a fresh issue only when files are absent.
 ECC_DIR="/root/.acme.sh/{domain}_ecc"
-if [ -s "$ECC_DIR/{domain}.cer" ] && [ -s "$ECC_DIR/{domain}.key" ]; then
-    echo "[acme] ECC cert files present for {domain} — пропускаю выпуск."
+# CA-match guard: skip re-issue only if the on-disk cert was issued by the SAME
+# CA we're asking for now ({ca_marker}). A provider switch across CAs (→/from
+# zerossl) leaves a mismatched conf → we fall through to --issue, never silently
+# reuse the wrong CA's cert.
+CA_OK=1
+if [ -f "$ECC_DIR/{domain}.conf" ] && ! grep -qi '{ca_marker}' "$ECC_DIR/{domain}.conf"; then
+    CA_OK=0
+    echo "[acme] На диске сертификат другого CA — переиздаю под {cert_provider}."
+fi
+if [ -s "$ECC_DIR/{domain}.cer" ] && [ -s "$ECC_DIR/{domain}.key" ] && [ "$CA_OK" = "1" ]; then
+    echo "[acme] ECC cert files present for {domain} ({ca_marker}) — пропускаю выпуск."
 else
-    echo "[acme] ECC cert files missing — выпускаю сертификат для {domain} (--force)."
+    echo "[acme] ECC cert files missing/mismatched — выпускаю сертификат для {domain} (--force)."
     /root/.acme.sh/acme.sh --issue \\
-        --dns dns_cf \\
+        {issue_flags} \\
         -d "{domain}" \\
-        --server letsencrypt \\
         --keylength ec-256 \\
         --force
     echo "[acme] Certificate issued."
@@ -834,7 +947,32 @@ chmod 600 /etc/ssl/private/{domain}.key
 echo "[acme] Cert installed:"
 ls -lh /etc/ssl/certs/{domain}* /etc/ssl/private/{domain}.key
 """
-    await ssh.run_script(ssl_script, task, timeout=360)
+
+
+async def step_ssl(
+    ssh: SSHSession,
+    task: Task,
+    domain: str,
+    email: str,
+    cf_api_key: str,
+    server_ip: str,
+    cert_provider: str = "cloudflare",
+) -> None:
+    _begin_step(task, 9)
+
+    # Only Cloudflare (DNS-01) manages DNS for us via the CF API; HTTP-01
+    # providers validate over port 80, so the FQDN must already resolve here.
+    if ssl_needs_cf_dns(cert_provider):
+        task.add_log("Updating Cloudflare DNS A record...")
+        await upsert_a_record(cf_api_key, domain, server_ip)
+        task.add_log(f"\x1b[32m[CF] A record: {domain} → {server_ip}\x1b[0m")
+    else:
+        task.add_log(
+            f"\x1b[33m[SSL] Провайдер '{cert_provider}' использует HTTP-01 (порт 80). "
+            f"Убедитесь, что {domain} уже указывает на {server_ip}.\x1b[0m"
+        )
+
+    await ssh.run_script(build_ssl_script(domain, email, cf_api_key, cert_provider), task, timeout=360)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -987,7 +1125,7 @@ async def step_remnanode(
     node_port: int = 2222,
     xhttp_path: str = "",
 ) -> None:
-    _begin_step(task, 8)
+    _begin_step(task, 10)
 
     # The cert is issued per-FQDN (see step_ssl), so the cert identity IS the
     # node domain — not the root domain. All cert paths below key off the FQDN.
@@ -1081,7 +1219,7 @@ docker ps --filter "name=remnanode" --filter "name=remnawave-nginx" \
 # ──────────────────────────────────────────────────────────────
 
 async def step_warp(ssh: SSHSession, task: Task) -> None:
-    _begin_step(task, 9)
+    _begin_step(task, 12)
 
     warp_script = f"""\
 {_APT_WAIT}
@@ -1168,7 +1306,7 @@ async def step_certbot_ssl(
     domain: str,
     email: str,
 ) -> None:
-    _begin_step(task, 10)
+    _begin_step(task, 13)
 
     # ── 1. Provision the isolated certbot environment + issue the cert ──
     # The certbot/docker-compose.yml has no template vars (plain YAML). $domain
@@ -1326,7 +1464,7 @@ echo "[sni] Временные файлы удалены."
 
 
 # ──────────────────────────────────────────────────────────────
-# HAProxy relay mode (alternative to Steps 7–11)
+# HAProxy relay mode (alternative to Steps 9–13)
 # Installs HAProxy and configures a plain TCP relay from the source port to a
 # destination IP:port. No Remnawave/DNS/SSL/Xray involvement.
 # ──────────────────────────────────────────────────────────────
@@ -1368,8 +1506,8 @@ backend con_out
 
 
 async def step_haproxy_deploy(ssh: SSHSession, task: Task, req: "DeployRequest") -> None:
-    """HAProxy relay deploy — reuses step slot 7 (Steps 8–11 are skipped)."""
-    _begin_step(task, 7, "Установка HAProxy-реле")
+    """HAProxy relay deploy — reuses step slot 9 (Steps 10–13 are skipped)."""
+    _begin_step(task, 9, "Установка HAProxy-реле")
 
     task.add_log(
         f"\x1b[90m[haproxy] {req.haproxy_source_port} → "
@@ -1707,17 +1845,26 @@ echo "[update] Индекс пакетов обновлён."
 
         # ── Base utility: vnstat (network traffic monitor) ────
         # Starts collecting per-interface stats immediately; the deploy cards
-        # read `vnstat --json` for the traffic block.
-        vnstat_script = f"""\
+        # read `vnstat --json` for the traffic block. Gated on install_vnstat —
+        # if off, the card hides the traffic block and /api/stats/node degrades
+        # to empty trafficStats (does not 500).
+        if req.install_vnstat:
+            vnstat_script = f"""\
 {_APT_WAIT}
 {_apt_install("vnstat")}
 systemctl enable --now vnstat 2>/dev/null || true
 echo "[vnstat] Демон vnstat установлен и запущен."
 """
-        await ssh.run_script(vnstat_script, task, check=False, timeout=120)
+            await ssh.run_script(vnstat_script, task, check=False, timeout=120)
+        else:
+            task.add_log("\x1b[90m[vnstat] Пропущено по настройке (install_vnstat=false).\x1b[0m")
 
         await step_node_accelerator(ssh, task, req)
-        await step_traffic_guard(ssh, task, backend_ip)
+        if req.install_trafficguard:
+            await step_traffic_guard(ssh, task, backend_ip)
+        else:
+            _begin_step(task, 4)
+            task.add_log("\x1b[90m[TrafficGuard] Пропущено по настройке (install_trafficguard=false).\x1b[0m")
         # Step 5 configures dual-port SSH and reboots the box (when enabled),
         # closing the pre-reboot session.
         await step_system_optimize(ssh, task, backend_ip, req)
@@ -1726,11 +1873,13 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         # session used for all later steps.
         ssh = await step_ssh_dualport_verify(ssh, task, req, backend_ip)
 
-        # ── Mode branch: haproxy relay vs full remnanode stack (Steps 7–11) ──
+        # ── Mode branch: haproxy relay (step 9, skips 10–13) vs full remnanode
+        #    stack (steps 9–13) ──
         if req.mode == "haproxy":
             await step_haproxy_deploy(ssh, task, req)
         else:
-            await step_ssl(ssh, task, req.domain, req.email, req.cloudflare_api_key, req.ip)
+            await step_ssl(ssh, task, req.domain, req.email, req.cloudflare_api_key,
+                           req.ip, req.cert_provider)
 
             # ── Remnawave pre-deploy: create node, get token ──────
             remnanode_token = req.remnanode_token  # manual token (may be None)
@@ -1750,6 +1899,12 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                 xhttp_path=req.xhttp_path,
             )
 
+            # ── Step 11: uniquize the masking decoy site — runs BEFORE WARP ──
+            # (masking mutates /var/www/html and must not be affected by WARP's
+            # routing changes; ordering: Remnanode → Masking → WARP → Hysteria2).
+            await step_sni_masking(ssh, task)
+
+            # ── Step 12: WARP Native (non-fatal) ──
             if req.install_warp:
                 try:
                     await step_warp(ssh, task)
@@ -1759,12 +1914,11 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                         f"Нода Remnawave продолжает работу.\x1b[0m"
                     )
             else:
+                _begin_step(task, 12)
                 task.add_log("\x1b[90m[skip] WARP не выбран.\x1b[0m")
 
+            # ── Step 13: Hysteria2 (Certbot standalone SSL — label only renamed) ──
             await step_certbot_ssl(ssh, task, req.domain, req.email)
-
-            # ── Step 11: uniquize the masking decoy site (final SSH action) ──
-            await step_sni_masking(ssh, task)
 
             # ── Remnawave post-deploy: assign users to squads ─────
             if req.create_in_remnawave:

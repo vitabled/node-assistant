@@ -13,11 +13,17 @@ class DeployRequest(BaseModel):
     ssh_password: str = Field(..., min_length=1)
     # domain/email/cloudflare are required only in remnanode mode (validated below)
     domain: str = Field(default="", description="Node domain, e.g. node1.example.com")
+    # Certificate issuer: cloudflare (DNS-01, acme.sh) | letsencrypt (HTTP-01) |
+    # zerossl (acme.sh + EAB). CF token is required only for cloudflare.
+    cert_provider: Literal["cloudflare", "letsencrypt", "zerossl"] = Field(default="cloudflare")
     cloudflare_api_key: str = Field(default="")
     email: str = Field(default="", description="Email for Let's Encrypt registration")
     remnanode_token: Optional[str] = Field(default=None)
-    bandwidth_mbps: int = Field(..., gt=0, description="Channel bandwidth in Mbps")
     open_ports: str = Field(..., description="Comma-separated ports to open in UFW")
+    # Firewall/fail2ban whitelist: IPs/CIDRs (any separator); normalized in the
+    # pipeline (Ф5). allow_ssh_all opens the SSH port to any source.
+    whitelist_ips: str = Field(default="")
+    allow_ssh_all: bool = Field(default=False)
     current_ssh_port: int = Field(default=22, ge=1, le=65535)
     new_ssh_port: int = Field(default=2222, ge=1, le=65535)
     change_ssh_port: bool = Field(default=True)
@@ -29,6 +35,8 @@ class DeployRequest(BaseModel):
     behind_cdn: bool = Field(default=False)
     install_warp: bool = Field(default=False)
     update_system: bool = Field(default=False)
+    install_vnstat: bool = Field(default=True)
+    install_trafficguard: bool = Field(default=True)
     # OS optimization (node-accelerator)
     optimize: bool = Field(default=True)
     opt_network_tuning: bool = Field(default=True)
@@ -61,8 +69,10 @@ class DeployRequest(BaseModel):
             # Domain/email/Cloudflare are needed for DNS + SSL in remnanode mode.
             if not self.domain:
                 raise ValueError("domain is required in remnanode mode")
-            if not self.cloudflare_api_key:
-                raise ValueError("cloudflare_api_key is required in remnanode mode")
+            # Cloudflare token is only needed for the cloudflare (DNS-01) issuer;
+            # letsencrypt/zerossl use HTTP-01 / email-EAB and don't take a token.
+            if self.cert_provider == "cloudflare" and not self.cloudflare_api_key:
+                raise ValueError("cloudflare_api_key is required for the cloudflare cert provider")
             if not self.email:
                 raise ValueError("email is required in remnanode mode")
             if not self.create_in_remnawave and not self.remnanode_token:
@@ -91,6 +101,35 @@ class DeployRequest(BaseModel):
             raise ValueError("Invalid IPv4 address octets")
         return v
 
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, v: str) -> str:
+        # Empty is allowed (haproxy mode); presence is enforced by mode validator.
+        # When present it MUST be a plain hostname — this doubles as a shell-safety
+        # guard, since `domain` is interpolated into root-run bash in step_ssl /
+        # step_certbot_ssl (only [A-Za-z0-9.-] can appear → no shell metacharacters).
+        if not v:
+            return v
+        pattern = (
+            r"^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+            r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$"
+        )
+        if not re.match(pattern, v):
+            raise ValueError("Invalid domain (hostname expected)")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        # Empty allowed (haproxy mode); presence enforced by mode validator. The
+        # charset is shell-safe (no quotes/;/$/backtick), so interpolating it into
+        # the acme.sh install / zerossl register commands can't break out.
+        if not v:
+            return v
+        if not re.match(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", v):
+            raise ValueError("Invalid email")
+        return v
+
     @field_validator("open_ports")
     @classmethod
     def validate_ports(cls, v: str) -> str:
@@ -101,10 +140,44 @@ class DeployRequest(BaseModel):
         return ",".join(ports)
 
 
-class RenewCertsRequest(BaseModel):
+class DeployCertRequest(BaseModel):
+    """Deploy (issue + install) a cert onto a live node via the chosen provider —
+    the «Управление SSL» section (Ф10). Reuses the pipeline's per-FQDN SSL logic."""
     ip: str
     ssh_user: str = "root"
     ssh_password: str
     ssh_port: int = 22
     domain: str
-    cf_api_key: Optional[str] = None  # override stored acme.sh token if needed
+    email: str = ""                       # required for letsencrypt/zerossl (ACME/EAB)
+    cert_provider: Literal["cloudflare", "letsencrypt", "zerossl"] = "cloudflare"
+    cf_api_key: Optional[str] = None      # only for the cloudflare provider
+    force: bool = False                   # redeploy even if a valid cert is present
+
+    @field_validator("domain")
+    @classmethod
+    def _validate_domain(cls, v: str) -> str:
+        # Shell-safety + hostname sanity — `domain` reaches root-run bash.
+        pattern = (
+            r"^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+            r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$"
+        )
+        if not re.match(pattern, v):
+            raise ValueError("Invalid domain (hostname expected)")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, v: str) -> str:
+        if not v:
+            return v
+        if not re.match(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", v):
+            raise ValueError("Invalid email")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_provider(self) -> "DeployCertRequest":
+        if self.cert_provider == "cloudflare" and not (self.cf_api_key or "").strip():
+            raise ValueError("cf_api_key is required for the cloudflare provider")
+        if self.cert_provider in ("letsencrypt", "zerossl") and not self.email.strip():
+            raise ValueError("email is required for letsencrypt/zerossl")
+        return self

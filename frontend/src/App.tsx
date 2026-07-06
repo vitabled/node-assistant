@@ -1,13 +1,15 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
-  CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight, Clock, Sliders, Check,
+  CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight,
 } from "lucide-react";
 import { Sidebar, type Tab }               from "./components/Sidebar";
 import { Dashboard }                       from "./components/Dashboard";
 import { DeployDashboard }                 from "./components/DeployDashboard";
 import { Settings }                        from "./components/Settings";
 import { Templates }                       from "./components/Templates";
+import { Hosts }                           from "./components/Hosts";
 import { CertsForm, type CertsFormData }  from "./components/CertsForm";
+import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
@@ -21,11 +23,9 @@ import { StepProgress, RENEW_STEPS }       from "./components/StepProgress";
 import { TerminalOutput }                  from "./components/TerminalOutput";
 import { useTaskStream, type StatusFrame } from "./hooks/useTaskStream";
 import { AccountMenu }                     from "./auth/AccountMenu";
-import { tabKey }                          from "./auth/store";
+import { tabKey, getActiveId }             from "./auth/store";
 import {
-  ACCENTS, THEMES, type AccentKey, type Density, type ThemeKey,
-  applyAccent, applyDensity, applyTheme, loadAccent, loadDensity, loadTheme,
-  saveAccent, saveDensity, saveTheme,
+  applyAccent, applyDensity, applyThemeMode, loadAccent, loadDensity, loadThemeMode,
 } from "./theme/tweaks";
 
 const SIDEBAR_KEY = "sidebar_collapsed";
@@ -38,8 +38,9 @@ const INITIAL_CERT_STATUS: StatusFrame = {
 const CRUMB: Record<Tab, [string, string]> = {
   "dashboard":       ["Node Installer", "Дешборд"],
   "deploy":          ["Node Installer", "Деплой ноды"],
-  "certs":           ["Node Installer", "Обновить SSL"],
+  "certs":           ["Node Installer", "Управление SSL"],
   "templates":       ["Node Installer", "Шаблоны"],
+  "hosts":           ["Node Installer", "Хосты"],
   "traffic":         ["Node Installer", "Трафик"],
   "settings":        ["Node Installer", "Настройки"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
@@ -73,21 +74,16 @@ export default function App() {
       return next;
     });
 
-  // ── Appearance tweaks ──────────────────────────────────────
-  const [accent, setAccent]   = useState<AccentKey>(loadAccent);
-  const [density, setDensity] = useState<Density>(loadDensity);
-  const [themeK, setThemeK]   = useState<ThemeKey>(loadTheme);
-  const [tweaksOpen, setTweaksOpen] = useState(false);
-  const tweaksRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { applyAccent(accent); saveAccent(accent); }, [accent]);
-  useEffect(() => { applyDensity(density); saveDensity(density); }, [density]);
-  useEffect(() => { applyTheme(themeK); saveTheme(themeK); }, [themeK]);
+  // ── Appearance ─────────────────────────────────────────────
+  // Apply the persisted appearance on mount. App is keyed by activeId (see
+  // AuthGate), so this re-runs on account switch → the per-account theme mode is
+  // re-read and its matchMedia listener re-armed. The controls live in
+  // Settings → Тема and call apply*/save* imperatively; nothing to lift here.
   useEffect(() => {
-    if (!tweaksOpen) return;
-    const h = (e: MouseEvent) => { if (tweaksRef.current && !tweaksRef.current.contains(e.target as Node)) setTweaksOpen(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [tweaksOpen]);
+    applyThemeMode(loadThemeMode(getActiveId()));
+    applyAccent(loadAccent());
+    applyDensity(loadDensity());
+  }, []);
 
   // ── Certs task state ───────────────────────────────────────
   const [certTaskId, setCertTaskId]         = useState<string | null>(null);
@@ -109,9 +105,9 @@ export default function App() {
     (certStepStatus.status === "pending" && certTaskId !== null);
   const certIsDone = certStepStatus.status === "success" || certStepStatus.status === "failed";
 
-  const renewCerts = async (data: CertsFormData) => {
+  const deployCert = async (data: CertsFormData) => {
     setCertLogs([]); setCertTaskId(null); setCertStepStatus(INITIAL_CERT_STATUS);
-    const res = await fetch("/api/certs/renew", {
+    const res = await fetch("/api/certs/deploy", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...data, ssh_port: parseInt(data.ssh_port, 10), cf_api_key: data.cf_api_key || null }),
     });
@@ -144,49 +140,11 @@ export default function App() {
             <span className="hi trunc" style={{ fontWeight: 600 }}>{crumb[1]}</span>
           </nav>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-            <div className="num" style={{ fontSize: 11.5, color: "var(--t-low)", display: "flex", alignItems: "center", gap: 6 }}>
-              <Clock size={12} /> {new Date().toLocaleDateString("ru-RU", { day: "2-digit", month: "short" })}
-            </div>
-            {/* Tweaks */}
-            <div style={{ position: "relative" }} ref={tweaksRef}>
-              <button className="iconbtn" onClick={() => setTweaksOpen(v => !v)} title="Внешний вид">
-                <Sliders size={15} />
-              </button>
-              {tweaksOpen && (
-                <div className="panel" style={{
-                  position: "absolute", top: "calc(100% + 8px)", right: 0, zIndex: 50, width: 232,
-                  padding: 14, boxShadow: "var(--shadow-pop)", display: "flex", flexDirection: "column", gap: 14,
-                }}>
-                  <div>
-                    <p className="micro" style={{ marginBottom: 8 }}>Акцентный цвет</p>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      {(Object.keys(ACCENTS) as AccentKey[]).map(k => (
-                        <button key={k} onClick={() => setAccent(k)} title={k}
-                          style={{
-                            width: 26, height: 26, borderRadius: 7, background: ACCENTS[k].base, cursor: "pointer",
-                            border: accent === k ? "2px solid var(--t-hi)" : "2px solid transparent",
-                            display: "grid", placeItems: "center",
-                          }}>
-                          {accent === k && <Check size={13} color={ACCENTS[k].ink} strokeWidth={3} />}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <p className="micro" style={{ marginBottom: 8 }}>Плотность</p>
-                    <div className="seg">
-                      <button className={density === "comfortable" ? "on" : ""} onClick={() => setDensity("comfortable")}>Обычная</button>
-                      <button className={density === "compact" ? "on" : ""} onClick={() => setDensity("compact")}>Плотная</button>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="micro" style={{ marginBottom: 8 }}>Тема</p>
-                    <select className="selectbox" value={themeK} onChange={e => setThemeK(e.target.value as ThemeKey)}>
-                      {THEMES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
-                    </select>
-                  </div>
-                </div>
-              )}
+            {/* Remnawave status (moved here from the sidebar footer) */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5 }}>
+              <span className="dot" style={{ background: "var(--ok)" }} />
+              <span className="dim">Remnawave</span>
+              <span className="chip ok" style={{ padding: "1px 7px", fontSize: 10 }}>онлайн</span>
             </div>
             <AccountMenu />
           </div>
@@ -197,6 +155,7 @@ export default function App() {
           {tab === "dashboard" && <Dashboard />}
           {tab === "deploy" && <DeployDashboard />}
           {tab === "templates" && <Templates />}
+          {tab === "hosts" && <Hosts />}
           {tab === "settings" && <Settings />}
           {tab === "traffic" && <TrafficRules />}
 
@@ -212,7 +171,10 @@ export default function App() {
             <div className="flex-1 grid grid-cols-[360px_1fr] min-h-0" style={{ display: "grid" }}>
               <div style={{ borderRight: "1px solid var(--line-soft)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
                 <div style={{ padding: 20 }}>
-                  <CertsForm onSubmit={renewCerts} disabled={certIsRunning} />
+                  <CertsForm onSubmit={deployCert} disabled={certIsRunning} />
+                </div>
+                <div style={{ padding: "0 20px 20px" }}>
+                  <DomainsPanel />
                 </div>
                 {certTaskId && (
                   <div style={{ padding: "16px 20px 20px", borderTop: "1px solid var(--line-soft)" }}>
@@ -240,7 +202,7 @@ export default function App() {
                     color: certStepStatus.status === "success" ? "var(--ok)" : "var(--err)",
                   }}>
                     {certStepStatus.status === "success"
-                      ? <><CheckCircle2 size={15} /> Сертификаты обновлены</>
+                      ? <><CheckCircle2 size={15} /> Сертификат задеплоен</>
                       : <><XCircle size={15} /> Ошибка выполнения</>}
                   </div>
                 )}
@@ -252,7 +214,7 @@ export default function App() {
                       border: "1px solid var(--line-soft)", borderRadius: "var(--r-md)",
                     }}>
                       <TermIcon size={28} style={{ opacity: .3 }} />
-                      <span>Заполните форму и нажмите «Обновить сертификаты»</span>
+                      <span>Заполните форму и нажмите «Задеплоить сертификат»</span>
                     </div>
                   ) : (
                     <TerminalOutput lines={certLogs} />

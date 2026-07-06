@@ -1,41 +1,71 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  applyAccent, applyDensity, applyTheme,
-  loadAccent, loadDensity, loadTheme,
-  saveAccent, saveDensity, saveTheme, THEMES,
+  applyAccent, applyDensity, applyThemeMode, resolveThemeMode,
+  loadAccent, loadDensity, loadThemeMode,
+  saveAccent, saveDensity, saveThemeMode, THEME_MODES,
 } from "./tweaks";
+
+// jsdom has no matchMedia — install a controllable stub. `_light` flips the
+// emulated OS preference; `_emit` fires the "change" listeners.
+function mockMatchMedia(light: boolean) {
+  const listeners = new Set<(e: MediaQueryListEvent) => void>();
+  const state = { light };
+  (window as unknown as { matchMedia: unknown }).matchMedia = (q: string) => ({
+    matches: q.includes("light") ? state.light : !state.light,
+    media: q,
+    addEventListener: (_: string, l: (e: MediaQueryListEvent) => void) => listeners.add(l),
+    removeEventListener: (_: string, l: (e: MediaQueryListEvent) => void) => listeners.delete(l),
+    addListener: () => {}, removeListener: () => {}, onchange: null, dispatchEvent: () => false,
+  });
+  return {
+    set(v: boolean) { state.light = v; },
+    emit() { listeners.forEach(l => l({ matches: state.light } as MediaQueryListEvent)); },
+  };
+}
 
 beforeEach(() => {
   localStorage.clear();
-  delete document.body.dataset.theme;
+  delete document.documentElement.dataset.theme;
   delete document.body.dataset.density;
   document.documentElement.removeAttribute("style");
 });
-afterEach(() => localStorage.clear());
+afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
-describe("theme", () => {
-  it("applyTheme sets the Apple data-theme and clears it for console", () => {
-    applyTheme("apple-light");
-    expect(document.body.dataset.theme).toBe("apple-light");
-    applyTheme("apple-dark");
-    expect(document.body.dataset.theme).toBe("apple-dark");
-    applyTheme("console");
-    expect(document.body.dataset.theme).toBeUndefined(); // no attribute = default skin
+describe("theme mode", () => {
+  it("applyThemeMode sets data-theme on :root to the explicit mode", () => {
+    mockMatchMedia(false);
+    applyThemeMode("light");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    applyThemeMode("dark");
+    expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
-  it("loadTheme defaults to console for missing/invalid values", () => {
-    expect(loadTheme()).toBe("console");
-    localStorage.setItem("ni_theme", "bogus");
-    expect(loadTheme()).toBe("console");
+  it("system mode resolves from prefers-color-scheme and reacts to OS changes", () => {
+    const mm = mockMatchMedia(false); // OS = dark
+    applyThemeMode("system");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    mm.set(true); mm.emit(); // OS flips to light at runtime
+    expect(document.documentElement.dataset.theme).toBe("light");
   });
 
-  it("saveTheme round-trips through loadTheme", () => {
-    saveTheme("apple-dark");
-    expect(loadTheme()).toBe("apple-dark");
+  it("resolveThemeMode maps system to the OS preference", () => {
+    mockMatchMedia(true);
+    expect(resolveThemeMode("system")).toBe("light");
+    expect(resolveThemeMode("dark")).toBe("dark");
   });
 
-  it("exposes exactly the three theme options", () => {
-    expect(THEMES.map(t => t.key)).toEqual(["console", "apple-light", "apple-dark"]);
+  it("loadThemeMode defaults to system and is per-account", () => {
+    expect(loadThemeMode("acc-a")).toBe("system");
+    localStorage.setItem("ni_thememode_acc-a", "bogus");
+    expect(loadThemeMode("acc-a")).toBe("system");
+    saveThemeMode("acc-a", "light");
+    saveThemeMode("acc-b", "dark");
+    expect(loadThemeMode("acc-a")).toBe("light");
+    expect(loadThemeMode("acc-b")).toBe("dark"); // isolated per account
+  });
+
+  it("exposes exactly the three mode options", () => {
+    expect(THEME_MODES.map(t => t.key)).toEqual(["system", "light", "dark"]);
   });
 });
 

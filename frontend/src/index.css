@@ -211,68 +211,26 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 .xterm-viewport::-webkit-scrollbar{width:6px}
 .xterm-viewport::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
 
-/* ════════ Apple theme (System Settings skin) ════════
-   Optional alternate skin selectable from the appearance/Tweaks panel. Re-points
-   the themeable surface tokens + rounds controls. --font uses the system San
-   Francisco stack (-apple-system / system-ui) — the SF Pro .otf binaries are
-   NOT vendored here (Apple-licensed); code + terminal stay JetBrains Mono. */
-body[data-theme^="apple"]{
-  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",system-ui,sans-serif;
-  --r-sm:7px; --r-md:10px; --r-lg:14px;
-  /* Apple uses a FILLED accent nav pill; keep ink = the per-accent readable ink
-     (set by applyAccent), NOT a hardcoded #fff — the app has light accents
-     (amber/cyan) where white text on the fill would be unreadable. */
-  --primary-ink:var(--accent-ink); --brand-ink:var(--accent-ink);
-  --nav-active-bg:var(--accent); --nav-active-fg:var(--accent-ink);
-  --glass-blur:22px;
-  font-size:13px; letter-spacing:-.006em;
-}
-body[data-theme^="apple"] .navitem{font-weight:450;border-radius:8px}
-body[data-theme^="apple"] .navitem.active{font-weight:600}
-body[data-theme^="apple"] .navitem.active::before{display:none}
-body[data-theme^="apple"] .btn{font-weight:590;border-radius:8px}
-body[data-theme^="apple"] .btn-primary{box-shadow:0 1px 2px rgba(0,0,0,.14)}
-body[data-theme^="apple"] .iconbtn{border-radius:7px}
-body[data-theme^="apple"] .switch{width:38px;height:22px}
-body[data-theme^="apple"] .switch::after{width:16px;height:16px}
-body[data-theme^="apple"] .switch.on{background:#34C759;border-color:#34C759}
-body[data-theme^="apple"] .switch.on::after{transform:translateX(16px);background:#fff}
-body[data-theme^="apple"] .seg{border-radius:9px}
-body[data-theme^="apple"] .seg button{border-radius:7px;font-weight:530}
-body[data-theme^="apple"] .seg button.on{box-shadow:0 1px 3px rgba(0,0,0,.14)}
-body[data-theme^="apple"] .tag{border-radius:6px;text-transform:none;letter-spacing:.01em}
-body[data-theme^="apple"] .term .lt{color:#6B6B72}
-
-/* ── Apple · Light ── */
-body[data-theme="apple-light"]{
+/* ════════ Light theme ════════
+   :root (above) is the default DARK palette. The mode selector (Settings → Тема)
+   sets data-theme="light" | "dark" on :root; "system" resolves it from
+   prefers-color-scheme (see theme/tweaks.ts). Only the surface/text/state tokens
+   flip — the accent is applied inline by applyAccent() and is theme-independent,
+   and --font stays JetBrains Mono in both themes (the console aesthetic). The
+   terminal (--term-bg) intentionally stays dark on light theme. */
+:root[data-theme="light"]{
   --bg0:#ECECEF; --bg1:#F7F7F9; --bg2:#FFFFFF; --bg3:#E7E7EC;
   --line:#D7D7DD; --line-soft:#E7E7EC;
   --t-hi:#1D1D1F; --t-mid:#3E3E46; --t-low:#6E6E77; --t-faint:#A6A6AE;
-  --ok:#28A745; --ok-dim:rgba(52,199,89,.13); --ok-line:rgba(40,167,69,.28);
-  --warn:#B25E00; --warn-dim:rgba(255,149,0,.14); --warn-line:rgba(178,94,0,.26);
-  --err:#D70015; --err-dim:rgba(255,59,48,.10); --err-line:rgba(215,0,21,.26);
-  --raised:#F1F1F4; --row-hover:rgba(0,0,0,.035); --overlay:rgba(0,0,0,.26);
-  --topbar-bg:rgba(247,247,249,.72); --sidebar-bg:rgba(240,240,243,.72);
-  --term-bg:#1C1C1E;
+  --ok:#1B9E4B; --ok-dim:rgba(40,167,69,.13); --ok-line:rgba(40,167,69,.30);
+  --warn:#B25E00; --warn-dim:rgba(178,94,0,.12); --warn-line:rgba(178,94,0,.28);
+  --err:#D70015; --err-dim:rgba(215,0,21,.09); --err-line:rgba(215,0,21,.28);
+  --raised:#F1F1F4; --row-hover:rgba(0,0,0,.035); --overlay:rgba(0,0,0,.30);
+  --topbar-bg:rgba(247,247,249,.80); --sidebar-bg:#F0F0F3; --term-bg:#1C1C1E;
   --shadow-pop:0 12px 34px rgba(0,0,0,.14); --shadow-modal:0 20px 60px rgba(0,0,0,.22);
   --scroll-thumb:rgba(0,0,0,.22);
 }
-body[data-theme="apple-light"] .card{box-shadow:0 1px 2px rgba(0,0,0,.05)}
-body[data-theme="apple-light"] .toast.ok{background:rgba(240,250,243,.94);color:#1B7A34}
-body[data-theme="apple-light"] .toast.err{background:rgba(253,240,240,.94);color:#C11}
-body[data-theme="apple-light"] .toast.info{background:rgba(248,248,250,.96);color:var(--t-mid)}
-
-/* ── Apple · Dark ── */
-body[data-theme="apple-dark"]{
-  --bg0:#1C1C1E; --bg1:#232325; --bg2:#2C2C2E; --bg3:#3A3A3C;
-  --line:#3A3A3C; --line-soft:#2E2E30;
-  --t-hi:#F5F5F7; --t-mid:#D0D0D6; --t-low:#98989F; --t-faint:#6A6A70;
-  --ok:#30D158; --ok-dim:rgba(48,209,88,.15); --ok-line:rgba(48,209,88,.32);
-  --warn:#FF9F0A; --warn-dim:rgba(255,159,10,.15); --warn-line:rgba(255,159,10,.32);
-  --err:#FF453B; --err-dim:rgba(255,69,58,.14); --err-line:rgba(255,69,58,.34);
-  --raised:rgba(255,255,255,.045); --row-hover:rgba(255,255,255,.05); --overlay:rgba(0,0,0,.55);
-  --topbar-bg:rgba(30,30,32,.72); --sidebar-bg:rgba(35,35,37,.72);
-  --term-bg:#151517;
-  --shadow-pop:0 14px 40px rgba(0,0,0,.5); --shadow-modal:0 24px 64px rgba(0,0,0,.6);
-  --scroll-thumb:rgba(255,255,255,.18);
-}
+:root[data-theme="light"] .card{box-shadow:0 1px 2px rgba(0,0,0,.05)}
+:root[data-theme="light"] .toast.ok{background:rgba(240,250,243,.95);color:#1B7A34}
+:root[data-theme="light"] .toast.err{background:rgba(253,240,240,.95);color:#C11}
+:root[data-theme="light"] .toast.info{background:rgba(248,248,250,.96);color:var(--t-mid)}

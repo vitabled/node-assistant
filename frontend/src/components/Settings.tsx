@@ -1,6 +1,12 @@
 import { useState, useEffect } from "react";
-import { Save, CheckCircle2, XCircle, Loader2, Wifi, Download } from "lucide-react";
+import { Save, CheckCircle2, XCircle, Loader2, Wifi, Check, Sun, Moon, Monitor } from "lucide-react";
 import { MultiSelect, type SelectOption } from "./MultiSelect";
+import {
+  ACCENTS, THEME_MODES, type AccentKey, type Density, type ThemeMode,
+  applyAccent, applyDensity, applyThemeMode, loadAccent, loadDensity, loadThemeMode,
+  saveAccent, saveDensity, saveThemeMode,
+} from "../theme/tweaks";
+import { getActiveId } from "../auth/store";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -21,6 +27,7 @@ interface DeployDefaults {
   change_ssh_port: boolean;
   remnanode_port: number;
   xhttp_path: string;
+  whitelist_ips: string;
   // HAProxy relay defaults
   haproxy_source_port: number;
   haproxy_dest_port: number;
@@ -50,6 +57,7 @@ const DEFAULTS_INIT: DeployDefaults = {
   change_ssh_port: true,
   remnanode_port: 2222,
   xhttp_path: "",
+  whitelist_ips: "",
   haproxy_source_port: 443,
   haproxy_dest_port: 443,
   haproxy_maxconn: 200000,
@@ -335,6 +343,13 @@ function DeployDefaultsTab() {
         placeholder="80,443,8443"
         hint="Через запятую — будут открыты при деплое"
       />
+      <SettingField
+        label="Whitelist IP / CIDR (по умолчанию)"
+        value={cfg.whitelist_ips}
+        onChange={v => setCfg(c => ({ ...c, whitelist_ips: v }))}
+        placeholder="1.2.3.4, 10.0.0.0/24"
+        hint="Префилл поля whitelist в форме деплоя (fail2ban/UFW)"
+      />
       <OptCheckbox
         label="Сменять порт SSH по умолчанию"
         checked={cfg.change_ssh_port}
@@ -396,134 +411,6 @@ function DeployDefaultsTab() {
           : <><Save size={14} /> Сохранить</>
         }
       </button>
-
-      <XrayCheckerSettings />
-    </div>
-  );
-}
-
-// ── Xray-Checker sub-block (inside Deploy defaults) ───────────
-
-interface XrayCheckerCfg {
-  enabled: boolean;
-  subscription_url: string;
-  check_interval: number;
-  check_method: string;
-  metrics_port: number;
-  image: string;
-  poll_interval: number;
-}
-const XC_INIT: XrayCheckerCfg = {
-  enabled: false, subscription_url: "", check_interval: 300, check_method: "ip",
-  metrics_port: 2112, image: "kutovoys/xray-checker:latest", poll_interval: 60,
-};
-
-function XrayCheckerSettings() {
-  const [cfg, setCfg]       = useState<XrayCheckerCfg>(XC_INIT);
-  const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
-  const [busy,   setBusy]   = useState<null | "update" | "start" | "stop">(null);
-  const [msg,    setMsg]    = useState<{ ok: boolean; text: string; warn?: boolean } | null>(null);
-
-  useEffect(() => {
-    fetch("/api/settings").then(r => r.json())
-      .then(d => { if (d.xray_checker) setCfg({ ...XC_INIT, ...d.xray_checker }); })
-      .catch(() => {});
-  }, []);
-
-  const save = async () => {
-    setSaving(true); setMsg(null);
-    try {
-      const res = await fetch("/api/settings/xray-checker", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(cfg),
-      });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setMsg({ ok: false, text: String(d.detail ?? res.statusText) });
-      } else if (d.warning) {
-        // Settings saved, but the container couldn't start (e.g. no Docker).
-        setMsg({ ok: false, warn: true, text: String(d.warning) });
-        setSaved(true); setTimeout(() => setSaved(false), 2000);
-      } else {
-        setMsg(null);
-        setSaved(true); setTimeout(() => setSaved(false), 2000);
-      }
-    } catch (e) { setMsg({ ok: false, text: String(e) }); }
-    setSaving(false);
-  };
-
-  const action = async (kind: "update" | "start" | "stop") => {
-    setBusy(kind); setMsg(null);
-    const path = kind === "update" ? "/api/checker/update"
-               : kind === "start"  ? "/api/checker/start" : "/api/checker/stop";
-    try {
-      const res = await fetch(path, { method: "POST" });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) setMsg({ ok: false, text: String(d.detail ?? res.statusText) });
-      else setMsg({ ok: true, text:
-        kind === "update" ? "Xray-Checker обновлён и перезапущен."
-        : kind === "start" ? "Контейнер запущен." : "Контейнер остановлен." });
-    } catch (e) { setMsg({ ok: false, text: String(e) }); }
-    setBusy(null);
-  };
-
-  return (
-    <div className="mt-4 pt-5 border-t border-gray-800 flex flex-col gap-4">
-      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest">
-        Xray-Checker (мониторинг нод)
-      </p>
-
-      <OptCheckbox
-        label="Включить xray-checker"
-        checked={cfg.enabled}
-        onChange={v => setCfg(c => ({ ...c, enabled: v }))}
-        hint="Фоновый контейнер kutovoys/xray-checker, опрашивающий подписку"
-      />
-      <SettingField
-        label="URL подписки (SUBSCRIPTION_URL)"
-        value={cfg.subscription_url}
-        onChange={v => setCfg(c => ({ ...c, subscription_url: v }))}
-        placeholder="https://panel.example.com/sub/…"
-        hint="Ссылка Remnawave-подписки, которую проверяет чекер"
-      />
-      <div className="grid grid-cols-3 gap-4">
-        <SettingField label="Интервал проверки (с)" value={String(cfg.check_interval)}
-          onChange={v => setCfg(c => ({ ...c, check_interval: parseInt(v) || 300 }))} placeholder="300" />
-        <SettingField label="Метод" value={cfg.check_method}
-          onChange={v => setCfg(c => ({ ...c, check_method: v }))} placeholder="ip" hint="ip | status | download" />
-        <SettingField label="Порт метрик" value={String(cfg.metrics_port)}
-          onChange={v => setCfg(c => ({ ...c, metrics_port: parseInt(v) || 2112 }))} placeholder="2112" />
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <button onClick={save} disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium
-                     bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50">
-          {saved ? <><CheckCircle2 size={14} /> Сохранено</>
-            : saving ? <><Loader2 size={14} className="animate-spin" /> Сохранение…</>
-            : <><Save size={14} /> Сохранить и запустить</>}
-        </button>
-        <button onClick={() => action("update")} disabled={busy !== null}
-          className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium
-                     bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700
-                     transition-colors disabled:opacity-50">
-          {busy === "update" ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-          Обновить Xray-Checker
-        </button>
-        <button onClick={() => action("stop")} disabled={busy !== null}
-          className="px-3 py-2 rounded-md text-sm text-gray-400 hover:text-gray-200
-                     hover:bg-gray-800 transition-colors disabled:opacity-50">
-          Остановить
-        </button>
-      </div>
-
-      {msg && (
-        <span className={`text-xs flex items-center gap-1.5 ${
-          msg.ok ? "text-green-400" : msg.warn ? "text-amber-400" : "text-red-400"}`}>
-          {msg.ok ? <CheckCircle2 size={12} /> : <XCircle size={12} />} {msg.text}
-        </span>
-      )}
     </div>
   );
 }
@@ -651,9 +538,81 @@ function OptimizationTab() {
 }
 
 
+// ── Theme tab ─────────────────────────────────────────────────
+// Mode is per-account (keyed by the active account); accent + density are
+// device-global. Controls apply + persist imperatively — App re-reads the
+// persisted values on mount / account switch (see App.tsx).
+
+const MODE_ICON: Record<ThemeMode, typeof Sun> = { system: Monitor, light: Sun, dark: Moon };
+
+export function ThemeTab() {
+  const accountId = getActiveId();
+  const [mode, setMode]       = useState<ThemeMode>(() => loadThemeMode(accountId));
+  const [accent, setAccent]   = useState<AccentKey>(loadAccent);
+  const [density, setDensity] = useState<Density>(loadDensity);
+
+  const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); };
+  const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); };
+  const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 26, maxWidth: 460 }}>
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Режим</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+          {THEME_MODES.map(m => {
+            const Icon = MODE_ICON[m.key];
+            const on = mode === m.key;
+            return (
+              <button key={m.key} onClick={() => pickMode(m.key)}
+                className="card"
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 7,
+                  padding: "16px 8px", cursor: "pointer",
+                  borderColor: on ? "var(--accent-line)" : "var(--line-soft)",
+                  background: on ? "var(--accent-dim)" : "var(--bg2)",
+                  color: on ? "var(--accent-hi)" : "var(--t-mid)",
+                }}>
+                <Icon size={20} />
+                <span style={{ fontSize: 12.5, fontWeight: 600 }}>{m.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="hint">«Системная» следует настройке светлой/тёмной темы вашей ОС и переключается на лету.</p>
+      </div>
+
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Акцентный цвет</p>
+        <div style={{ display: "flex", gap: 10 }}>
+          {(Object.keys(ACCENTS) as AccentKey[]).map(k => (
+            <button key={k} onClick={() => pickAccent(k)} title={k}
+              style={{
+                width: 30, height: 30, borderRadius: 8, background: ACCENTS[k].base, cursor: "pointer",
+                border: accent === k ? "2px solid var(--t-hi)" : "2px solid transparent",
+                display: "grid", placeItems: "center",
+              }}>
+              {accent === k && <Check size={15} color={ACCENTS[k].ink} strokeWidth={3} />}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Плотность</p>
+        <div className="seg" style={{ maxWidth: 260 }}>
+          <button className={density === "comfortable" ? "on" : ""} onClick={() => pickDensity("comfortable")}>Обычная</button>
+          <button className={density === "compact" ? "on" : ""} onClick={() => pickDensity("compact")}>Плотная</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization";
+type SubTab = "remnawave" | "defaults" | "optimization" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -662,6 +621,7 @@ export function Settings() {
     { id: "remnawave",   label: "Remnawave" },
     { id: "defaults",    label: "Деплой (умолчания)" },
     { id: "optimization", label: "Оптимизация ОС" },
+    { id: "theme",       label: "Тема" },
   ];
 
   return (
@@ -669,20 +629,13 @@ export function Settings() {
       <div className="max-w-4xl mx-auto px-6 py-6">
 
         <div className="mb-6">
-          <h1 className="text-base font-semibold text-white">Настройки</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Параметры подключения и значения по умолчанию</p>
+          <h1 className="h1">Настройки</h1>
+          <p className="sub">Параметры подключения и значения по умолчанию</p>
         </div>
 
-        <div className="flex gap-1 p-1 bg-gray-900 rounded-lg border border-gray-800 self-start
-                        w-fit mb-6">
+        <div className="seg" style={{ width: "fit-content", marginBottom: 24 }}>
           {tabs.map(t => (
-            <button key={t.id} onClick={() => setSub(t.id)}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors
-                          focus:outline-none focus:ring-1 focus:ring-blue-500/30
-                          ${sub === t.id
-                            ? "bg-gray-800 text-white"
-                            : "text-gray-500 hover:text-gray-300"
-                          }`}>
+            <button key={t.id} className={sub === t.id ? "on" : ""} onClick={() => setSub(t.id)}>
               {t.label}
             </button>
           ))}
@@ -691,6 +644,7 @@ export function Settings() {
         {sub === "remnawave"    && <RemnavaveTab />}
         {sub === "defaults"     && <DeployDefaultsTab />}
         {sub === "optimization" && <OptimizationTab />}
+        {sub === "theme"        && <ThemeTab />}
       </div>
     </div>
   );

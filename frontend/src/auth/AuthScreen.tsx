@@ -178,11 +178,13 @@ function RegisterForm({ onDone, onLogin }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
+  const [generated, setGenerated] = useState(false);
 
   const gen = () => {
     const pw = generatePassword();
     setPassword(pw);
     setCopied(false);
+    setGenerated(true);
   };
   const copy = async () => {
     if (!password) return;
@@ -206,7 +208,7 @@ function RegisterForm({ onDone, onLogin }: {
       <div className="flex flex-col gap-1.5">
         <div className="flex gap-2">
           <input className={inputCls} placeholder="Пароль" type="text" value={password}
-            onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} spellCheck={false} />
+            onChange={e => { setPassword(e.target.value); setGenerated(false); }} onKeyDown={e => e.key === "Enter" && submit()} spellCheck={false} />
           <button onClick={copy} disabled={!password} title="Скопировать"
             className="flex-none px-2.5 rounded-md border border-gray-700 text-gray-400 hover:text-white disabled:opacity-40">
             {copied ? <Check size={15} className="text-green-400" /> : <Copy size={15} />}
@@ -215,6 +217,11 @@ function RegisterForm({ onDone, onLogin }: {
         <button onClick={gen} className="self-start flex items-center gap-1.5 text-xs text-gray-500 hover:text-blue-300">
           <KeyRound size={12} /> Сгенерировать пароль
         </button>
+        {generated && (
+          <p className="text-[11px] text-amber-400/90 leading-snug">
+            Пароль нигде не сохраняется — скопируйте его сейчас, иначе восстановить будет нельзя.
+          </p>
+        )}
       </div>
       {err && <p className="text-xs text-red-400">{err}</p>}
       <button className={btnPrimary} onClick={submit} disabled={busy}>

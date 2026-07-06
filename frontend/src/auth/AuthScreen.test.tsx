@@ -98,6 +98,18 @@ describe("AuthScreen", () => {
     expect(pw.value).toHaveLength(20);
   });
 
+  it("warns that a generated password is not saved, and clears the warning on manual edit", () => {
+    render(<AuthScreen />);
+    fireEvent.click(screen.getByText("Нет аккаунта? Регистрация"));
+    // no warning before generating
+    expect(screen.queryByText(/скопируйте его сейчас/)).toBeNull();
+    fireEvent.click(screen.getByText("Сгенерировать пароль"));
+    expect(screen.getByText(/скопируйте его сейчас/)).toBeInTheDocument();
+    // typing into the field (manual edit) dismisses the warning
+    setInput("Пароль", "manual-pw");
+    expect(screen.queryByText(/скопируйте его сейчас/)).toBeNull();
+  });
+
   it("registers and activates the new account", async () => {
     mockFetch({ ok: true, body: { id: "id-new", login: "newbie", token: "T2" } });
     render(<AuthScreen />);

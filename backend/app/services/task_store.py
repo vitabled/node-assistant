@@ -26,13 +26,15 @@ STEP_LABELS = [
     "Обновление системы",
     "Node Accelerator (оптимизация ОС)",
     "TrafficGuard (защита от сканеров)",
-    "Оптимизация + dual-port SSH и перезагрузка",
-    "Проверка SSH после перезагрузки (откат при сбое)",
-    "Cloudflare DNS + Wildcard SSL",
+    "Добавление порта SSH",
+    "Перезагрузка",
+    "Проверка нового порта SSH",
+    "Удаление старого порта SSH",
+    "Cloudflare DNS + SSL",
     "Установка Remnanode",
-    "WARP Native",
-    "SSL Certbot (standalone)",
     "Уникализация маскировочного сайта",
+    "WARP Native",
+    "Hysteria2",
 ]
 
 
