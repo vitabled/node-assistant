@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Activity, Rocket, RefreshCw, FileCode2, Gauge, Settings2, Server,
+  Activity, Rocket, ShieldCheck, FileCode2, Gauge, Settings2, Server,
   PieChart, ChevronDown, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal,
 } from "lucide-react";
@@ -16,7 +16,7 @@ interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon }
 const NAV_MAIN: NavItemDef[] = [
   { tab: "dashboard", label: "Дешборд",      Icon: Activity  },
   { tab: "deploy",    label: "Деплой ноды",  Icon: Rocket    },
-  { tab: "certs",     label: "Обновить SSL", Icon: RefreshCw },
+  { tab: "certs",     label: "Управление SSL", Icon: ShieldCheck },
   { tab: "templates", label: "Шаблоны",      Icon: FileCode2 },
   { tab: "traffic",   label: "Трафик",       Icon: Gauge     },
 ];

@@ -28,7 +28,7 @@ const STEP_GROUPS: { title: string; from: number; to: number }[] = [
 
 export const RENEW_STEPS = [
   "Подключение к серверу",
-  "Обновление сертификата",
+  "Выпуск и установка сертификата",
   "Перезапуск сервисов",
 ];
 

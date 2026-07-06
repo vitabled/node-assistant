@@ -140,10 +140,44 @@ class DeployRequest(BaseModel):
         return ",".join(ports)
 
 
-class RenewCertsRequest(BaseModel):
+class DeployCertRequest(BaseModel):
+    """Deploy (issue + install) a cert onto a live node via the chosen provider —
+    the «Управление SSL» section (Ф10). Reuses the pipeline's per-FQDN SSL logic."""
     ip: str
     ssh_user: str = "root"
     ssh_password: str
     ssh_port: int = 22
     domain: str
-    cf_api_key: Optional[str] = None  # override stored acme.sh token if needed
+    email: str = ""                       # required for letsencrypt/zerossl (ACME/EAB)
+    cert_provider: Literal["cloudflare", "letsencrypt", "zerossl"] = "cloudflare"
+    cf_api_key: Optional[str] = None      # only for the cloudflare provider
+    force: bool = False                   # redeploy even if a valid cert is present
+
+    @field_validator("domain")
+    @classmethod
+    def _validate_domain(cls, v: str) -> str:
+        # Shell-safety + hostname sanity — `domain` reaches root-run bash.
+        pattern = (
+            r"^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+            r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$"
+        )
+        if not re.match(pattern, v):
+            raise ValueError("Invalid domain (hostname expected)")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, v: str) -> str:
+        if not v:
+            return v
+        if not re.match(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", v):
+            raise ValueError("Invalid email")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_provider(self) -> "DeployCertRequest":
+        if self.cert_provider == "cloudflare" and not (self.cf_api_key or "").strip():
+            raise ValueError("cf_api_key is required for the cloudflare provider")
+        if self.cert_provider in ("letsencrypt", "zerossl") and not self.email.strip():
+            raise ValueError("email is required for letsencrypt/zerossl")
+        return self

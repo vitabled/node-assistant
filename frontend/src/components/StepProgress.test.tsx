@@ -45,7 +45,7 @@ describe("StepProgress (Ф6 restructure)", () => {
     render(<StepProgress currentStep={1} totalSteps={3} status="running" steps={RENEW_STEPS} />);
     expect(screen.queryByText("Оптимизация ОС")).toBeNull();
     expect(screen.queryByText("Сеть")).toBeNull();
-    expect(screen.getByText("Обновление сертификата")).toBeInTheDocument();
+    expect(screen.getByText("Выпуск и установка сертификата")).toBeInTheDocument();
   });
 
   it("renders every step 1..13 exactly once (no gap/overlap between groups)", () => {

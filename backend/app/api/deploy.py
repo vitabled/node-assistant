@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from app.models.deploy import DeployRequest, RenewCertsRequest
+from app.models.deploy import DeployRequest
 from app.services.task_store import task_store, STEP_LABELS, TaskStatus
 from app.services.pipeline import run_pipeline
 from app.config import settings

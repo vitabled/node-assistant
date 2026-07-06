@@ -854,38 +854,21 @@ async def step_ssh_dualport_verify(
 # Step 5 – Cloudflare DNS + Wildcard SSL via acme.sh (DNS-01)
 # ──────────────────────────────────────────────────────────────
 
-async def step_ssl(
-    ssh: SSHSession,
-    task: Task,
-    domain: str,
-    email: str,
-    cf_api_key: str,
-    server_ip: str,
-    cert_provider: str = "cloudflare",
-) -> None:
-    _begin_step(task, 9)
+def ssl_needs_cf_dns(cert_provider: str) -> bool:
+    """Cloudflare (DNS-01) is the only provider we manage DNS for; the HTTP-01
+    providers require the FQDN to already resolve to the server."""
+    return cert_provider == "cloudflare"
 
-    # Only the Cloudflare provider can (and does) manage DNS for us via the CF
-    # API. HTTP-01 providers (letsencrypt/zerossl) validate over port 80, so the
-    # node's FQDN must ALREADY resolve to this server — the operator points DNS.
-    if cert_provider == "cloudflare":
-        task.add_log("Updating Cloudflare DNS A record...")
-        await upsert_a_record(cf_api_key, domain, server_ip)
-        task.add_log(f"\x1b[32m[CF] A record: {domain} → {server_ip}\x1b[0m")
-    else:
-        task.add_log(
-            f"\x1b[33m[SSL] Провайдер '{cert_provider}' использует HTTP-01 (порт 80). "
-            f"Убедитесь, что {domain} уже указывает на {server_ip}.\x1b[0m"
-        )
 
-    # Per-provider prep + acme.sh issue flags. All issue per-FQDN (never a root
-    # wildcard — see the rate-limit note in CLAUDE.md §6).
+def build_ssl_script(domain: str, email: str, cf_api_key: str, cert_provider: str) -> str:
+    """The acme.sh install + per-provider issue + install-cert bash script,
+    shared by the deploy pipeline (`step_ssl`) and the SSL-management endpoint
+    (`api/certs.py`). Issues per-FQDN (never a root wildcard). Provider branch:
+    cloudflare=DNS-01, letsencrypt=HTTP-01 standalone, zerossl=HTTP-01 + email-EAB."""
     if cert_provider == "cloudflare":
         provider_prep = f'export CF_Token="{cf_api_key}"'
         issue_flags = "--dns dns_cf --server letsencrypt"
     elif cert_provider == "zerossl":
-        # ZeroSSL needs an EAB-bound account. Registering by email makes acme.sh
-        # fetch the EAB kid/hmac automatically (no manual EAB entry needed).
         provider_prep = (
             "fuser -k 80/tcp 2>/dev/null || true\n"
             f'/root/.acme.sh/acme.sh --register-account --server zerossl -m "{email}" || true'
@@ -895,14 +878,11 @@ async def step_ssl(
         provider_prep = "fuser -k 80/tcp 2>/dev/null || true"
         issue_flags = "--standalone --server letsencrypt"
 
-    # CA marker for the skip-issue guard below. cloudflare + letsencrypt use the
-    # SAME CA (Let's Encrypt; they differ only in DNS-01 vs HTTP-01 challenge), so
-    # their certs are interchangeable — only zerossl is a different CA. On a retry
-    # that switches provider ACROSS CAs, force a re-issue instead of silently
-    # reusing the old CA's cert. Matched against acme.sh's Le_API in the conf.
+    # cloudflare + letsencrypt share the Let's Encrypt CA (DNS-01 vs HTTP-01);
+    # only zerossl is a different CA. Skip re-issue only on a CA match.
     ca_marker = "zerossl" if cert_provider == "zerossl" else "letsencrypt"
 
-    ssl_script = f"""\
+    return f"""\
 {_APT_WAIT}
 {_apt_install("curl", "socat", "cron")}
 
@@ -967,7 +947,32 @@ chmod 600 /etc/ssl/private/{domain}.key
 echo "[acme] Cert installed:"
 ls -lh /etc/ssl/certs/{domain}* /etc/ssl/private/{domain}.key
 """
-    await ssh.run_script(ssl_script, task, timeout=360)
+
+
+async def step_ssl(
+    ssh: SSHSession,
+    task: Task,
+    domain: str,
+    email: str,
+    cf_api_key: str,
+    server_ip: str,
+    cert_provider: str = "cloudflare",
+) -> None:
+    _begin_step(task, 9)
+
+    # Only Cloudflare (DNS-01) manages DNS for us via the CF API; HTTP-01
+    # providers validate over port 80, so the FQDN must already resolve here.
+    if ssl_needs_cf_dns(cert_provider):
+        task.add_log("Updating Cloudflare DNS A record...")
+        await upsert_a_record(cf_api_key, domain, server_ip)
+        task.add_log(f"\x1b[32m[CF] A record: {domain} → {server_ip}\x1b[0m")
+    else:
+        task.add_log(
+            f"\x1b[33m[SSL] Провайдер '{cert_provider}' использует HTTP-01 (порт 80). "
+            f"Убедитесь, что {domain} уже указывает на {server_ip}.\x1b[0m"
+        )
+
+    await ssh.run_script(build_ssl_script(domain, email, cf_api_key, cert_provider), task, timeout=360)
 
 
 # ──────────────────────────────────────────────────────────────

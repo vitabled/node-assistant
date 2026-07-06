@@ -8,6 +8,7 @@ import { DeployDashboard }                 from "./components/DeployDashboard";
 import { Settings }                        from "./components/Settings";
 import { Templates }                       from "./components/Templates";
 import { CertsForm, type CertsFormData }  from "./components/CertsForm";
+import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
@@ -36,7 +37,7 @@ const INITIAL_CERT_STATUS: StatusFrame = {
 const CRUMB: Record<Tab, [string, string]> = {
   "dashboard":       ["Node Installer", "Дешборд"],
   "deploy":          ["Node Installer", "Деплой ноды"],
-  "certs":           ["Node Installer", "Обновить SSL"],
+  "certs":           ["Node Installer", "Управление SSL"],
   "templates":       ["Node Installer", "Шаблоны"],
   "traffic":         ["Node Installer", "Трафик"],
   "settings":        ["Node Installer", "Настройки"],
@@ -102,9 +103,9 @@ export default function App() {
     (certStepStatus.status === "pending" && certTaskId !== null);
   const certIsDone = certStepStatus.status === "success" || certStepStatus.status === "failed";
 
-  const renewCerts = async (data: CertsFormData) => {
+  const deployCert = async (data: CertsFormData) => {
     setCertLogs([]); setCertTaskId(null); setCertStepStatus(INITIAL_CERT_STATUS);
-    const res = await fetch("/api/certs/renew", {
+    const res = await fetch("/api/certs/deploy", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...data, ssh_port: parseInt(data.ssh_port, 10), cf_api_key: data.cf_api_key || null }),
     });
@@ -167,7 +168,10 @@ export default function App() {
             <div className="flex-1 grid grid-cols-[360px_1fr] min-h-0" style={{ display: "grid" }}>
               <div style={{ borderRight: "1px solid var(--line-soft)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
                 <div style={{ padding: 20 }}>
-                  <CertsForm onSubmit={renewCerts} disabled={certIsRunning} />
+                  <CertsForm onSubmit={deployCert} disabled={certIsRunning} />
+                </div>
+                <div style={{ padding: "0 20px 20px" }}>
+                  <DomainsPanel />
                 </div>
                 {certTaskId && (
                   <div style={{ padding: "16px 20px 20px", borderTop: "1px solid var(--line-soft)" }}>
@@ -195,7 +199,7 @@ export default function App() {
                     color: certStepStatus.status === "success" ? "var(--ok)" : "var(--err)",
                   }}>
                     {certStepStatus.status === "success"
-                      ? <><CheckCircle2 size={15} /> Сертификаты обновлены</>
+                      ? <><CheckCircle2 size={15} /> Сертификат задеплоен</>
                       : <><XCircle size={15} /> Ошибка выполнения</>}
                   </div>
                 )}
@@ -207,7 +211,7 @@ export default function App() {
                       border: "1px solid var(--line-soft)", borderRadius: "var(--r-md)",
                     }}>
                       <TermIcon size={28} style={{ opacity: .3 }} />
-                      <span>Заполните форму и нажмите «Обновить сертификаты»</span>
+                      <span>Заполните форму и нажмите «Задеплоить сертификат»</span>
                     </div>
                   ) : (
                     <TerminalOutput lines={certLogs} />

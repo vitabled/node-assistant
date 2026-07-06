@@ -63,3 +63,11 @@ def load_subscriptions(account_id: Optional[str] = None) -> list:
 
 def save_subscriptions(subs: list, account_id: Optional[str] = None) -> None:
     _write(_dir(account_id) / "subscriptions.json", {"subscriptions": subs})
+
+
+def load_domains(account_id: Optional[str] = None) -> list:
+    return _read(_dir(account_id) / "domains.json").get("domains", [])
+
+
+def save_domains(domains: list, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "domains.json", {"domains": domains})
