@@ -25,7 +25,8 @@ import { useTaskStream, type StatusFrame } from "./hooks/useTaskStream";
 import { AccountMenu }                     from "./auth/AccountMenu";
 import { tabKey, getActiveId }             from "./auth/store";
 import {
-  applyAccent, applyDensity, applyThemeMode, loadAccent, loadDensity, loadThemeMode,
+  applyAccent, applyDensity, applyThemeMode, applySkin,
+  loadAccent, loadDensity, loadThemeMode, loadSkin,
 } from "./theme/tweaks";
 
 const SIDEBAR_KEY = "sidebar_collapsed";
@@ -80,6 +81,7 @@ export default function App() {
   // re-read and its matchMedia listener re-armed. The controls live in
   // Settings → Тема and call apply*/save* imperatively; nothing to lift here.
   useEffect(() => {
+    applySkin(loadSkin(getActiveId()));
     applyThemeMode(loadThemeMode(getActiveId()));
     applyAccent(loadAccent());
     applyDensity(loadDensity());

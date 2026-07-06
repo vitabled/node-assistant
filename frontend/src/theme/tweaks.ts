@@ -11,6 +11,15 @@ export const THEME_MODES: { key: ThemeMode; label: string }[] = [
   { key: "dark",   label: "Тёмная" },
 ];
 
+// Design skin — a second, independent theme axis on :root (data-skin), on top of
+// the light/dark data-theme axis. "apple" = System-Settings aesthetic (SF font,
+// iOS controls, glass); "console" = the JetBrains-Mono default. Apple is default.
+export type AppSkin = "apple" | "console";
+export const SKINS: { key: AppSkin; label: string }[] = [
+  { key: "apple",   label: "Apple" },
+  { key: "console", label: "Консоль" },
+];
+
 export const ACCENTS: Record<AccentKey, { base: string; hi: string; ink: string }> = {
   blue:   { base: "#4C8DFF", hi: "#82AEFF", ink: "#0A0E16" },
   green:  { base: "#3ECF8E", hi: "#63E0A7", ink: "#04140D" },
@@ -36,6 +45,10 @@ export function applyAccent(key: AccentKey): void {
 
 export function applyDensity(d: Density): void {
   document.body.dataset.density = d;
+}
+
+export function applySkin(s: AppSkin): void {
+  document.documentElement.dataset.skin = s;
 }
 
 function prefersLight(): boolean {
@@ -76,6 +89,9 @@ const DENSITY_KEY = "ni_density";
 // key when no account is active (e.g. the login screen).
 const themeModeKey = (accountId?: string | null) =>
   accountId ? `ni_thememode_${accountId}` : "ni_thememode";
+// Skin is per-account too (like theme mode). Default: apple.
+const skinKey = (accountId?: string | null) =>
+  accountId ? `ni_skin_${accountId}` : "ni_skin";
 
 export function loadAccent(): AccentKey {
   const v = localStorage.getItem(ACCENT_KEY);
@@ -92,4 +108,10 @@ export function saveAccent(k: AccentKey): void { localStorage.setItem(ACCENT_KEY
 export function saveDensity(d: Density): void { localStorage.setItem(DENSITY_KEY, d); }
 export function saveThemeMode(accountId: string | null | undefined, m: ThemeMode): void {
   localStorage.setItem(themeModeKey(accountId), m);
+}
+export function loadSkin(accountId?: string | null): AppSkin {
+  return localStorage.getItem(skinKey(accountId)) === "console" ? "console" : "apple";
+}
+export function saveSkin(accountId: string | null | undefined, s: AppSkin): void {
+  localStorage.setItem(skinKey(accountId), s);
 }

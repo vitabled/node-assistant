@@ -3,6 +3,7 @@ import {
   applyAccent, applyDensity, applyThemeMode, resolveThemeMode,
   loadAccent, loadDensity, loadThemeMode,
   saveAccent, saveDensity, saveThemeMode, THEME_MODES,
+  applySkin, loadSkin, saveSkin, SKINS,
 } from "./tweaks";
 
 // jsdom has no matchMedia — install a controllable stub. `_light` flips the
@@ -93,5 +94,36 @@ describe("density", () => {
     expect(loadDensity()).toBe("comfortable"); // not saved yet
     saveDensity("compact");
     expect(loadDensity()).toBe("compact");
+  });
+});
+
+describe("skin", () => {
+  beforeEach(() => { document.documentElement.removeAttribute("data-skin"); });
+
+  it("defaults to apple when nothing stored", () => {
+    expect(loadSkin("acc1")).toBe("apple");
+    expect(loadSkin(null)).toBe("apple");
+  });
+
+  it("persists per-account and reads back (isolated)", () => {
+    saveSkin("acc1", "console");
+    expect(loadSkin("acc1")).toBe("console");
+    expect(loadSkin("acc2")).toBe("apple");
+  });
+
+  it("applySkin sets data-skin on :root", () => {
+    applySkin("apple");
+    expect(document.documentElement.dataset.skin).toBe("apple");
+    applySkin("console");
+    expect(document.documentElement.dataset.skin).toBe("console");
+  });
+
+  it("ignores garbage stored value → apple", () => {
+    localStorage.setItem("ni_skin_acc1", "frutiger");
+    expect(loadSkin("acc1")).toBe("apple");
+  });
+
+  it("exposes exactly the two skin options", () => {
+    expect(SKINS.map(s => s.key)).toEqual(["apple", "console"]);
   });
 });
