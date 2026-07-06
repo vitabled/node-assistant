@@ -48,24 +48,16 @@ function TemplateModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="bg-gray-950 border border-gray-700/60 rounded-xl w-full max-w-2xl
-                      flex flex-col overflow-hidden shadow-2xl max-h-[90vh]">
+    <div className="overlay" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal max-w-2xl">
 
         {/* Header */}
-        <div className="shrink-0 flex items-center justify-between px-5 py-3.5
-                        border-b border-gray-800">
-          <h2 className="text-sm font-semibold text-white">
+        <div className="shrink-0 flex items-center justify-between px-5 py-3.5"
+             style={{ borderBottom: "1px solid var(--line-soft)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--t-hi)" }}>
             {initial ? "Редактировать шаблон" : "Новый шаблон"}
           </h2>
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-gray-600 hover:text-gray-200 hover:bg-gray-800
-                       transition-colors"
-          >
+          <button onClick={onClose} className="iconbtn">
             <X size={15} />
           </button>
         </div>
@@ -74,29 +66,26 @@ function TemplateModal({
 
           {/* Name */}
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+            <label className="label">
               Название
             </label>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="Xray VLESS + Reality"
-              className="w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2
-                         text-sm text-gray-100 placeholder:text-gray-700
-                         focus:outline-none focus:ring-1 focus:border-blue-500/70
-                         focus:ring-blue-500/20 transition-colors"
+              className="input"
             />
           </div>
 
           {/* Config JSON */}
           <div className="flex flex-col gap-1 flex-1">
             <div className="flex items-center justify-between">
-              <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+              <label className="label">
                 Конфигурация Xray (JSON)
               </label>
-              <span className="text-[11px] text-gray-600">
-                переменные: <code className="text-blue-400">$domain</code>,{" "}
-                <code className="text-blue-400">$name</code>
+              <span className="text-[11px]" style={{ color: "var(--t-faint)" }}>
+                переменные: <code>$domain</code>,{" "}
+                <code>$name</code>
               </span>
             </div>
             <textarea
@@ -105,19 +94,13 @@ function TemplateModal({
               rows={16}
               spellCheck={false}
               placeholder='{"inbounds": [...]}'
-              className={`w-full bg-gray-900/80 border rounded-md px-3 py-2.5 text-xs
-                          font-mono text-gray-100 placeholder:text-gray-700 resize-y
-                          focus:outline-none focus:ring-1 transition-colors
-                          ${jsonError
-                            ? "border-red-600/70 focus:ring-red-500/20"
-                            : "border-gray-700/80 focus:border-blue-500/70 focus:ring-blue-500/20"
-                          }`}
+              className={`input font-mono text-xs resize-y ${jsonError ? "err" : ""}`}
             />
             {jsonError && (
-              <p className="text-[11px] text-red-400">{jsonError}</p>
+              <p className="errmsg">{jsonError}</p>
             )}
             {!jsonError && config && (
-              <p className="text-[11px] text-green-500">JSON валидный</p>
+              <p className="text-[11px]" style={{ color: "var(--ok)" }}>JSON валидный</p>
             )}
           </div>
 
@@ -129,34 +112,29 @@ function TemplateModal({
               aria-checked={isDefault}
               onClick={() => setIsDefault(v => !v)}
               className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none
-                          focus:ring-2 focus:ring-blue-500/40
-                          ${isDefault ? "bg-blue-600" : "bg-gray-700"}`}
+                          focus:ring-2 focus:ring-[var(--accent-line)]
+                          ${isDefault ? "bg-[var(--accent)]" : "bg-[var(--bg3)]"}`}
             >
               <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow
                                transition-transform duration-200
                                ${isDefault ? "translate-x-4" : "translate-x-0"}`} />
             </button>
-            <span className="text-sm text-gray-400 group-hover:text-gray-200 transition-colors">
+            <span className="text-sm text-[var(--t-low)] group-hover:text-[var(--t-hi)] transition-colors">
               Шаблон по умолчанию
             </span>
           </label>
         </div>
 
         {/* Footer */}
-        <div className="shrink-0 flex justify-end gap-2 px-5 py-3.5 border-t border-gray-800">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-md text-sm font-medium text-gray-400
-                       hover:text-gray-200 hover:bg-gray-800 transition-colors"
-          >
+        <div className="shrink-0 flex justify-end gap-2 px-5 py-3.5"
+             style={{ borderTop: "1px solid var(--line-soft)" }}>
+          <button onClick={onClose} className="btn btn-ghost">
             Отмена
           </button>
           <button
             onClick={handleSave}
             disabled={saving || !name.trim() || !!jsonError}
-            className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium
-                       bg-blue-600 hover:bg-blue-500 text-white transition-colors
-                       disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn btn-primary"
           >
             {saving
               ? <><Loader2 size={13} className="animate-spin" /> Сохранение...</>
@@ -192,16 +170,16 @@ function TemplateRow({
   }
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-gray-800/60
-                    bg-gray-900/40 hover:bg-gray-900/60 transition-colors group">
+    <div className="flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-[var(--bg3)] transition-colors group"
+         style={{ border: "1px solid var(--line-soft)", background: "var(--bg2)" }}>
       {/* Default star */}
       <button
         onClick={onSetDefault}
         title={tpl.is_default ? "Шаблон по умолчанию" : "Сделать по умолчанию"}
         className={`shrink-0 transition-colors ${
           tpl.is_default
-            ? "text-yellow-400"
-            : "text-gray-700 hover:text-gray-500"
+            ? "text-[var(--warn)]"
+            : "text-[var(--t-faint)] hover:text-[var(--t-low)]"
         }`}
       >
         <Star size={14} fill={tpl.is_default ? "currentColor" : "none"} />
@@ -210,35 +188,24 @@ function TemplateRow({
       {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-white truncate">{tpl.name}</p>
+          <p className="text-sm font-medium truncate" style={{ color: "var(--t-hi)" }}>{tpl.name}</p>
           {tpl.is_default && (
-            <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded
-                             bg-yellow-950/50 border border-yellow-800/40 text-yellow-500">
+            <span className="chip warn shrink-0">
               по умолчанию
             </span>
           )}
         </div>
         {configPreview && (
-          <p className="text-xs text-gray-600 truncate font-mono mt-0.5">{configPreview}</p>
+          <p className="text-xs truncate font-mono mt-0.5" style={{ color: "var(--t-faint)" }}>{configPreview}</p>
         )}
       </div>
 
       {/* Actions */}
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          onClick={onEdit}
-          className="p-1.5 rounded text-gray-600 hover:text-gray-200 hover:bg-gray-700
-                     transition-colors"
-          title="Редактировать"
-        >
+        <button onClick={onEdit} className="iconbtn" title="Редактировать">
           <Pencil size={13} />
         </button>
-        <button
-          onClick={onDelete}
-          className="p-1.5 rounded text-gray-600 hover:text-red-400 hover:bg-red-950/30
-                     transition-colors"
-          title="Удалить"
-        >
+        <button onClick={onDelete} className="iconbtn danger" title="Удалить">
           <Trash2 size={13} />
         </button>
       </div>
@@ -305,16 +272,15 @@ export function Templates() {
 
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-base font-semibold text-white">Шаблоны конфигурации</h1>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Xray JSON с переменными <code className="text-blue-400">$domain</code> и{" "}
-              <code className="text-blue-400">$name</code>
+            <h1 className="text-base font-semibold" style={{ color: "var(--t-hi)" }}>Шаблоны конфигурации</h1>
+            <p className="text-xs mt-0.5" style={{ color: "var(--t-low)" }}>
+              Xray JSON с переменными <code>$domain</code> и{" "}
+              <code>$name</code>
             </p>
           </div>
           <button
             onClick={() => setModal({})}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-                       bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+            className="btn btn-primary"
           >
             <Plus size={13} /> Новый шаблон
           </button>
@@ -322,21 +288,21 @@ export function Templates() {
 
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <Loader2 size={20} className="animate-spin text-gray-600" />
+            <Loader2 size={20} className="animate-spin" style={{ color: "var(--t-faint)" }} />
           </div>
         ) : templates.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="w-12 h-12 rounded-full bg-gray-800/60 flex items-center justify-center mb-4">
-              <CheckCircle2 size={20} className="text-gray-600" />
+            <div className="w-12 h-12 rounded-full flex items-center justify-center mb-4"
+                 style={{ background: "var(--bg3)" }}>
+              <CheckCircle2 size={20} style={{ color: "var(--t-faint)" }} />
             </div>
-            <p className="text-gray-500 text-sm mb-1">Нет шаблонов</p>
-            <p className="text-gray-700 text-xs mb-5">
+            <p className="text-sm mb-1" style={{ color: "var(--t-low)" }}>Нет шаблонов</p>
+            <p className="text-xs mb-5" style={{ color: "var(--t-faint)" }}>
               Создайте шаблон конфигурации Xray для автоматической регистрации в Remnawave
             </p>
             <button
               onClick={() => setModal({})}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm
-                         bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+              className="flex items-center gap-1.5 btn btn-primary"
             >
               <Plus size={14} /> Создать шаблон
             </button>

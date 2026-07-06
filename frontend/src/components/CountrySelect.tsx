@@ -163,7 +163,7 @@ export function CountrySelect({
       {/* Dropdown with search */}
       {open && (
         <div
-          className="absolute z-50 mt-1 w-full min-w-[220px] rounded-lg"
+          className="absolute z-50 mt-1 w-full min-w-[220px] max-w-full rounded-lg"
           style={{ top: "100%", background: "var(--bg1)", border: "1px solid var(--line)", boxShadow: "var(--shadow-pop)" }}
         >
           <div className="flex items-center gap-2 px-2.5 py-2" style={{ borderBottom: "1px solid var(--line-soft)" }}>

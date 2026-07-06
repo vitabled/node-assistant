@@ -55,40 +55,29 @@ export function MultiSelect({
 
   return (
     <div className="flex flex-col gap-1 relative" ref={ref}>
-      <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
-        {label}
-      </label>
+      <label className="label">{label}</label>
 
       {/* Trigger */}
       <button
         type="button"
         onClick={() => !isDisabled && setOpen(o => !o)}
         disabled={isDisabled}
-        className={`w-full min-h-[2.25rem] flex items-center gap-1.5 flex-wrap
-                    bg-gray-900/80 border rounded-md px-3 py-1.5 text-left
-                    text-sm transition-colors focus:outline-none focus:ring-1
-                    disabled:opacity-40 disabled:cursor-not-allowed
-                    ${error
-                      ? "border-red-600/70 focus:ring-red-500/20"
-                      : open
-                      ? "border-blue-500/70 ring-1 ring-blue-500/20"
-                      : "border-gray-700/80 hover:border-gray-600"
-                    }`}
+        className={`input ${error ? "err" : ""}`}
+        style={{
+          display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
+          minHeight: "2.25rem", textAlign: "left", cursor: isDisabled ? "not-allowed" : "pointer",
+        }}
       >
         {selectedLabels.length > 0 ? (
           <span className="flex flex-wrap gap-1 flex-1 py-0.5">
             {selectedLabels.map((lbl, i) => (
-              <span
-                key={selected[i]}
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded
-                           bg-blue-950/70 border border-blue-800/50 text-blue-300 text-[11px]"
-              >
+              <span key={selected[i]} className="chip accent" style={{ padding: "1px 8px" }}>
                 {lbl}
                 <button
                   type="button"
                   onMouseDown={e => remove(selected[i], e)}
                   disabled={isDisabled}
-                  className="text-blue-400 hover:text-white transition-colors"
+                  style={{ display: "inline-flex", opacity: 0.75 }}
                 >
                   <X size={9} />
                 </button>
@@ -96,42 +85,45 @@ export function MultiSelect({
             ))}
           </span>
         ) : (
-          <span className="flex-1 text-gray-700">
+          <span className="flex-1" style={{ color: "var(--t-faint)" }}>
             {loading ? "Загрузка..." : placeholder}
           </span>
         )}
         <ChevronDown
           size={13}
-          className={`shrink-0 text-gray-600 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+          style={{ color: "var(--t-low)", marginLeft: "auto" }}
         />
       </button>
 
       {/* Dropdown */}
       {open && (
         <div
-          className="absolute z-50 mt-1 w-full min-w-[200px] max-h-52 overflow-y-auto
-                     bg-gray-950 border border-gray-700 rounded-lg shadow-xl py-1"
-          style={{ top: "100%" }}
+          className="absolute z-50 mt-1 w-full min-w-[200px] max-h-52 overflow-y-auto py-1"
+          style={{
+            top: "100%", background: "var(--bg1)", border: "1px solid var(--line)",
+            borderRadius: "var(--r-md)", boxShadow: "var(--shadow-pop)", maxWidth: "100%",
+          }}
         >
           {options.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-gray-600">Нет доступных опций</p>
+            <p className="px-3 py-2 text-xs" style={{ color: "var(--t-faint)" }}>Нет доступных опций</p>
           ) : (
             options.map(opt => {
               const checked = selected.includes(opt.value);
               return (
                 <label
                   key={opt.value}
-                  className="flex items-center gap-2.5 px-3 py-2 cursor-pointer
-                             hover:bg-gray-800 transition-colors select-none"
+                  className="navitem select-none"
+                  style={{ cursor: "pointer" }}
                 >
                   <input
                     type="checkbox"
                     checked={checked}
                     onChange={() => toggle(opt.value)}
-                    className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800
-                               accent-blue-500"
+                    className="w-3.5 h-3.5 rounded"
+                    style={{ accentColor: "var(--accent)", flex: "none" }}
                   />
-                  <span className={`text-sm ${checked ? "text-blue-300" : "text-gray-300"}`}>
+                  <span className="text-sm trunc" style={{ color: checked ? "var(--accent-hi)" : "var(--t-mid)" }}>
                     {opt.label}
                   </span>
                 </label>
@@ -141,7 +133,7 @@ export function MultiSelect({
         </div>
       )}
 
-      {error && <p className="text-[11px] text-red-400">{error}</p>}
+      {error && <p className="errmsg">{error}</p>}
     </div>
   );
 }
