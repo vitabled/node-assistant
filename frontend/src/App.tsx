@@ -3,7 +3,7 @@ import {
   CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight,
 } from "lucide-react";
 import { Sidebar, type Tab }               from "./components/Sidebar";
-import { BottomTabBar }                     from "./components/BottomTabBar";
+import { BottomTabBar, PRIMARY_TABS }       from "./components/BottomTabBar";
 import { Dashboard }                       from "./components/Dashboard";
 import { DeployDashboard }                 from "./components/DeployDashboard";
 import { Settings }                        from "./components/Settings";
@@ -72,6 +72,13 @@ export default function App() {
   // Mobile drawer (opened via the bottom tab bar's «Ещё»).
   const [mobileNav, setMobileNav] = useState(false);
   const goTab = useCallback((t: Tab) => { setTab(t); setMobileNav(false); }, []);
+  // Close the drawer on Escape (matches the Modal/overlay convention).
+  useEffect(() => {
+    if (!mobileNav) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setMobileNav(false); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [mobileNav]);
   const toggleSidebar = () =>
     setSidebarCollapsed(v => {
       const next = !v;
@@ -245,7 +252,7 @@ export default function App() {
 
       {/* Bottom tab bar (mobile ≤820px) */}
       <BottomTabBar activeTab={tab} onTabChange={goTab} onMore={() => setMobileNav(true)}
-        moreActive={mobileNav || !["dashboard", "deploy", "certs", "traffic"].includes(tab)} />
+        moreActive={mobileNav || !PRIMARY_TABS.includes(tab)} />
     </div>
   );
 }

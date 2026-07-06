@@ -11,6 +11,10 @@ const TABS: { tab: Tab; label: string; Icon: LucideIcon }[] = [
   { tab: "traffic",   label: "Трафик", Icon: Gauge },
 ];
 
+// The tab-bar's primary destinations. Exported so App.tsx derives «Ещё»'s
+// active-state from the SAME source (no drift between the two lists).
+export const PRIMARY_TABS: Tab[] = TABS.map(t => t.tab);
+
 interface Props {
   activeTab: Tab;
   onTabChange: (t: Tab) => void;
@@ -21,7 +25,7 @@ interface Props {
 function TabButton({ Icon, label, active, onClick }:
   { Icon: LucideIcon; label: string; active: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick} style={{
+    <button onClick={onClick} aria-current={active ? "page" : undefined} style={{
       flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
       gap: 3, padding: "7px 2px 4px", minHeight: 50,
       color: active ? "var(--accent)" : "var(--t-low)", transition: "color .12s",
