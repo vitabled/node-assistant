@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { Save, CheckCircle2, XCircle, Loader2, Wifi, Check, Sun, Moon, Monitor } from "lucide-react";
 import { MultiSelect, type SelectOption } from "./MultiSelect";
 import {
-  ACCENTS, THEME_MODES, type AccentKey, type Density, type ThemeMode,
-  applyAccent, applyDensity, applyThemeMode, loadAccent, loadDensity, loadThemeMode,
-  saveAccent, saveDensity, saveThemeMode,
+  ACCENTS, THEME_MODES, SKINS, type AccentKey, type Density, type ThemeMode, type AppSkin,
+  applyAccent, applyDensity, applyThemeMode, applySkin,
+  loadAccent, loadDensity, loadThemeMode, loadSkin,
+  saveAccent, saveDensity, saveThemeMode, saveSkin,
 } from "../theme/tweaks";
 import { getActiveId } from "../auth/store";
 
@@ -88,7 +89,7 @@ function SettingField({
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+      <label className="label">
         {label}
       </label>
       <input
@@ -98,12 +99,9 @@ function SettingField({
         placeholder={placeholder}
         autoComplete="off"
         spellCheck={false}
-        className="w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2
-                   text-sm text-gray-100 placeholder:text-gray-700
-                   focus:outline-none focus:ring-1 focus:border-blue-500/70 focus:ring-blue-500/20
-                   transition-colors"
+        className="input"
       />
-      {hint && <p className="text-[11px] text-gray-600">{hint}</p>}
+      {hint && <p className="hint">{hint}</p>}
     </div>
   );
 }
@@ -214,16 +212,17 @@ function RemnavaveTab() {
           onClick={checkConnection}
           disabled={checking || !cfg.panel_url || !cfg.api_token}
           className="flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium
-                     bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700
+                     bg-[var(--bg3)] text-[var(--t-mid)] border border-[var(--line)]
                      transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {checking ? <Loader2 size={12} className="animate-spin" /> : <Wifi size={12} />}
           Проверить соединение
         </button>
         {checkResult && (
-          <span className={`flex items-center gap-1.5 text-xs ${
-            checkResult.ok ? "text-green-400" : "text-red-400"
-          }`}>
+          <span
+            className="flex items-center gap-1.5 text-xs"
+            style={{ color: checkResult.ok ? "var(--ok)" : "var(--err)" }}
+          >
             {checkResult.ok
               ? <CheckCircle2 size={12} />
               : <XCircle size={12} />
@@ -255,7 +254,7 @@ function RemnavaveTab() {
         onClick={save}
         disabled={saving}
         className="self-start flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium
-                   bg-blue-600 hover:bg-blue-500 text-white transition-colors
+                   bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] transition-colors
                    disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {saved
@@ -373,7 +372,7 @@ function DeployDefaultsTab() {
       </div>
 
       {/* ── HAProxy relay defaults ── */}
-      <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-widest mt-2">
+      <p className="text-[11px] font-semibold text-[var(--t-faint)] uppercase tracking-widest mt-2">
         HAProxy (реле) — значения по умолчанию
       </p>
       <div className="grid grid-cols-2 gap-4">
@@ -401,7 +400,7 @@ function DeployDefaultsTab() {
         onClick={save}
         disabled={saving}
         className="self-start flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium
-                   bg-blue-600 hover:bg-blue-500 text-white transition-colors
+                   bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] transition-colors
                    disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {saved
@@ -442,13 +441,13 @@ function OptCheckbox({ label, checked, onChange, hint }: {
         type="checkbox"
         checked={checked}
         onChange={e => onChange(e.target.checked)}
-        className="mt-0.5 w-4 h-4 rounded border-gray-600 bg-gray-800 accent-blue-500"
+        className="mt-0.5 w-4 h-4 rounded border-[var(--line)] bg-[var(--bg3)] accent-[var(--accent)]"
       />
       <div>
-        <span className="text-sm text-gray-300 group-hover:text-white transition-colors">
+        <span className="text-sm text-[var(--t-mid)] group-hover:text-[var(--t-hi)] transition-colors">
           {label}
         </span>
-        {hint && <p className="text-[11px] text-gray-600 mt-0.5">{hint}</p>}
+        {hint && <p className="text-[11px] text-[var(--t-faint)] mt-0.5">{hint}</p>}
       </div>
     </label>
   );
@@ -482,7 +481,7 @@ function OptimizationTab() {
 
   return (
     <div className="flex flex-col gap-5 max-w-lg">
-      <p className="text-xs text-gray-500">
+      <p className="text-xs text-[var(--t-low)]">
         Настройки node-accelerator применяются при деплое до всех остальных шагов.
         Форма деплоя наследует эти значения, но позволяет переопределить их для конкретной ноды.
       </p>
@@ -524,7 +523,7 @@ function OptimizationTab() {
 
       <button onClick={save} disabled={saving}
         className="self-start flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium
-                   bg-blue-600 hover:bg-blue-500 text-white transition-colors
+                   bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] transition-colors
                    disabled:opacity-50 disabled:cursor-not-allowed">
         {saved
           ? <><CheckCircle2 size={14} /> Сохранено</>
@@ -547,16 +546,43 @@ const MODE_ICON: Record<ThemeMode, typeof Sun> = { system: Monitor, light: Sun, 
 
 export function ThemeTab() {
   const accountId = getActiveId();
+  const [skin, setSkin]       = useState<AppSkin>(() => loadSkin(accountId));
   const [mode, setMode]       = useState<ThemeMode>(() => loadThemeMode(accountId));
   const [accent, setAccent]   = useState<AccentKey>(loadAccent);
   const [density, setDensity] = useState<Density>(loadDensity);
 
+  const pickSkin = (s: AppSkin) => { setSkin(s); applySkin(s); saveSkin(accountId, s); };
   const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); };
   const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); };
   const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 26, maxWidth: 460 }}>
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Стиль</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
+          {SKINS.map(s => {
+            const on = skin === s.key;
+            return (
+              <button key={s.key} onClick={() => pickSkin(s.key)} className="card"
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 5,
+                  padding: "16px 8px", cursor: "pointer", textAlign: "center",
+                  borderColor: on ? "var(--accent-line)" : "var(--line-soft)",
+                  background: on ? "var(--accent-dim)" : "var(--bg2)",
+                  color: on ? "var(--accent-hi)" : "var(--t-mid)",
+                }}>
+                <span style={{ fontSize: 14, fontWeight: 700 }}>{s.label}</span>
+                <span style={{ fontSize: 11, color: "var(--t-low)" }}>
+                  {s.key === "apple" ? "Системный вид macOS/iOS" : "Моноширинный, консольный"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="hint">Apple — по умолчанию. «Консоль» возвращает моноширинный вид JetBrains Mono.</p>
+      </div>
+
       <div>
         <p className="micro" style={{ marginBottom: 10 }}>Режим</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>

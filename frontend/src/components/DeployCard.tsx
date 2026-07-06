@@ -699,7 +699,7 @@ function DeployDetailModal({
         </div>
 
         {/* Body */}
-        <div className="flex-1 grid grid-cols-[260px_1fr] min-h-0">
+        <div className="flex-1 grid grid-cols-1 sm:grid-cols-[260px_1fr] min-h-0">
 
           <div className="border-r border-[var(--line-soft)] p-4 overflow-y-auto">
             <StepProgress

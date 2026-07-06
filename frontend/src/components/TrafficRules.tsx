@@ -70,7 +70,7 @@ function SyncBadge({ rule, onSync }: { rule: TrafficRule; onSync: () => void }) 
   if (rule.sync_status === "synced") {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full
-                       bg-green-950/60 border border-green-800/50 text-green-400 text-xs">
+                       bg-[var(--ok-dim)] border border-[var(--ok-line)] text-[var(--ok)] text-xs">
         <CheckCircle2 size={10} /> Синхр.
       </span>
     );
@@ -79,8 +79,8 @@ function SyncBadge({ rule, onSync }: { rule: TrafficRule; onSync: () => void }) 
     return (
       <span
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full cursor-pointer
-                   bg-red-950/60 border border-red-800/50 text-red-400 text-xs
-                   hover:bg-red-900/50 transition-colors"
+                   bg-[var(--err-dim)] border border-[var(--err-line)] text-[var(--err)] text-xs
+                   hover:bg-[var(--err-line)] transition-colors"
         title={rule.sync_error ?? "Ошибка"}
         onClick={handle}
       >
@@ -92,8 +92,8 @@ function SyncBadge({ rule, onSync }: { rule: TrafficRule; onSync: () => void }) 
   return (
     <span
       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full cursor-pointer
-                 bg-yellow-950/60 border border-yellow-800/50 text-yellow-400 text-xs
-                 hover:bg-yellow-900/50 transition-colors"
+                 bg-[var(--warn-dim)] border border-[var(--warn-line)] text-[var(--warn)] text-xs
+                 hover:bg-[var(--warn-line)] transition-colors"
       onClick={handle}
     >
       {loading ? <Loader2 size={10} className="animate-spin" /> : <Clock size={10} />}
@@ -155,14 +155,14 @@ function Modal({ initial, nodes, intSquads, extSquads, squadsLoading, onClose, o
   const selectedSquadOptions = allSquadOptions.filter(o => form.squad_uuids.includes(o.value));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-      <div className="w-full max-w-md bg-gray-900 border border-gray-700/60 rounded-xl
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)]">
+      <div className="w-full max-w-md bg-[var(--bg1)] border border-[var(--line)] rounded-xl
                       shadow-2xl flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800/60">
-          <h2 className="text-sm font-semibold text-white">Ограничение трафика</h2>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--line-soft)]">
+          <h2 className="text-sm font-semibold text-[var(--t-hi)]">Ограничение трафика</h2>
           <button onClick={onClose}
-            className="text-gray-600 hover:text-gray-300 transition-colors focus:outline-none">
+            className="text-[var(--t-faint)] hover:text-[var(--t-mid)] transition-colors focus:outline-none">
             <X size={16} />
           </button>
         </div>
@@ -171,7 +171,7 @@ function Modal({ initial, nodes, intSquads, extSquads, squadsLoading, onClose, o
 
           {/* Node */}
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+            <label className="text-[11px] font-medium text-[var(--t-low)] uppercase tracking-widest">
               Нода
             </label>
             <select
@@ -182,10 +182,7 @@ function Modal({ initial, nodes, intSquads, extSquads, squadsLoading, onClose, o
                 set("node_name", node?.name ?? "");
               }}
               disabled={saving}
-              className="w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2
-                         text-sm text-gray-100 focus:outline-none focus:ring-1
-                         focus:border-blue-500/70 focus:ring-blue-500/20
-                         disabled:opacity-40 disabled:cursor-not-allowed"
+              className="selectbox transition-colors"
             >
               <option value="">— выберите ноду —</option>
               {nodes.map(n => (
@@ -196,33 +193,33 @@ function Modal({ initial, nodes, intSquads, extSquads, squadsLoading, onClose, o
 
           {/* Scope */}
           <div className="flex flex-col gap-2">
-            <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+            <label className="text-[11px] font-medium text-[var(--t-low)] uppercase tracking-widest">
               Кому применить
             </label>
             <div className="flex gap-3">
               {(["ALL", "SQUAD"] as Scope[]).map(s => (
                 <label key={s}
-                  className="flex items-center gap-2 cursor-pointer text-sm text-gray-400
-                             hover:text-gray-200 transition-colors select-none">
+                  className="flex items-center gap-2 cursor-pointer text-sm text-[var(--t-mid)]
+                             hover:text-[var(--t-hi)] transition-colors select-none">
                   <input type="radio" name="scope" value={s}
                     checked={form.scope === s}
                     onChange={() => set("scope", s)}
                     disabled={saving}
-                    className="accent-blue-500"
+                    className="accent-[var(--accent)]"
                   />
                   {s === "ALL" ? "Все пользователи (по умолчанию)" : "Конкретный сквад"}
                 </label>
               ))}
             </div>
             {form.scope === "ALL" && (
-              <p className="text-[11px] text-amber-500/80">
+              <p className="text-[11px] text-[var(--warn)]">
                 Ограничение применяется как квота пропускной способности ноды в целом
                 (суммарный трафик через сервер). Поддерживается только период «В месяц»
                 или «Без ограничений».
               </p>
             )}
             {form.scope === "SQUAD" && (
-              <p className="text-[11px] text-blue-400/70">
+              <p className="text-[11px] text-[var(--accent-hi)]">
                 Лимиты применяются к каждому пользователю сквада глобально
                 (не ограничены одной нодой) — такова возможность API Remnawave.
               </p>
@@ -249,7 +246,7 @@ function Modal({ initial, nodes, intSquads, extSquads, squadsLoading, onClose, o
 
           {/* Limit GB */}
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+            <label className="text-[11px] font-medium text-[var(--t-low)] uppercase tracking-widest">
               Объём трафика (ГБ)
             </label>
             <input
@@ -260,17 +257,14 @@ function Modal({ initial, nodes, intSquads, extSquads, squadsLoading, onClose, o
               onChange={e => set("limit_gb", e.target.value)}
               disabled={saving || form.period === "NO_RESET"}
               placeholder="0 = без лимита"
-              className="w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2
-                         text-sm text-gray-100 focus:outline-none focus:ring-1
-                         focus:border-blue-500/70 focus:ring-blue-500/20
-                         disabled:opacity-40 disabled:cursor-not-allowed"
+              className="input transition-colors"
             />
-            <p className="text-[11px] text-gray-600">0 = без ограничений</p>
+            <p className="text-[11px] text-[var(--t-faint)]">0 = без ограничений</p>
           </div>
 
           {/* Period */}
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">
+            <label className="text-[11px] font-medium text-[var(--t-low)] uppercase tracking-widest">
               Период обновления лимита
             </label>
             <select
@@ -281,10 +275,7 @@ function Modal({ initial, nodes, intSquads, extSquads, squadsLoading, onClose, o
                 if (p === "NO_RESET") set("limit_gb", "0");
               }}
               disabled={saving}
-              className="w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2
-                         text-sm text-gray-100 focus:outline-none focus:ring-1
-                         focus:border-blue-500/70 focus:ring-blue-500/20
-                         disabled:opacity-40 disabled:cursor-not-allowed"
+              className="selectbox transition-colors"
             >
               {(Object.entries(PERIOD_LABELS) as [Period, string][])
                 .filter(([p]) => form.scope === "ALL" ? (p === "MONTH" || p === "NO_RESET") : true)
@@ -296,8 +287,8 @@ function Modal({ initial, nodes, intSquads, extSquads, squadsLoading, onClose, o
 
           {/* API error */}
           {apiError && (
-            <div className="px-3 py-2 rounded-md bg-red-950/50 border border-red-800/50
-                            text-xs text-red-400">
+            <div className="px-3 py-2 rounded-md bg-[var(--err-dim)] border border-[var(--err-line)]
+                            text-xs text-[var(--err)]">
               {apiError}
             </div>
           )}
@@ -306,18 +297,18 @@ function Modal({ initial, nodes, intSquads, extSquads, squadsLoading, onClose, o
           <div className="flex gap-2 pt-1">
             <button type="submit" disabled={saving}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg
-                         font-semibold text-sm bg-blue-600 hover:bg-blue-500 transition-all
-                         active:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed
-                         focus:outline-none focus:ring-2 focus:ring-blue-500/50">
+                         font-semibold text-sm bg-[var(--accent)] hover:bg-[var(--accent-hi)] transition-all
+                         active:bg-[var(--accent)] disabled:opacity-50 disabled:cursor-not-allowed
+                         focus:outline-none focus:ring-2 focus:ring-[var(--accent-line)]">
               {saving
                 ? <><Loader2 size={14} className="animate-spin" /> Сохранение...</>
                 : "Сохранить и применить"
               }
             </button>
             <button type="button" onClick={onClose} disabled={saving}
-              className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-400
-                         hover:text-gray-200 hover:bg-gray-800 transition-colors
-                         focus:outline-none focus:ring-1 focus:ring-gray-700">
+              className="px-4 py-2.5 rounded-lg text-sm font-medium text-[var(--t-mid)]
+                         hover:text-[var(--t-hi)] hover:bg-[var(--bg3)] transition-colors
+                         focus:outline-none focus:ring-1 focus:ring-[var(--line)]">
               Отмена
             </button>
           </div>
@@ -444,13 +435,13 @@ export function TrafficRules() {
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Header bar */}
-      <div className="shrink-0 h-11 border-b border-gray-800/80 px-4 flex items-center gap-3">
-        <span className="text-sm font-medium text-white">Ограничение трафика</span>
+      <div className="shrink-0 h-11 border-b border-[var(--line-soft)] px-4 flex items-center gap-3">
+        <span className="text-sm font-medium text-[var(--t-hi)]">Ограничение трафика</span>
         <button
           onClick={openCreate}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
-                     font-medium bg-blue-600 hover:bg-blue-500 text-white transition-colors
-                     focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                     font-medium bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] transition-colors
+                     focus:outline-none focus:ring-2 focus:ring-[var(--accent-line)]"
         >
           <Plus size={13} /> Создать ограничение
         </button>
@@ -462,31 +453,31 @@ export function TrafficRules() {
         {/* Remnawave not configured warning */}
         {rwError && (
           <div className="mb-4 flex items-center gap-2 px-3 py-2.5 rounded-lg
-                          bg-amber-950/40 border border-amber-800/50 text-amber-400 text-sm">
+                          bg-[var(--warn-dim)] border border-[var(--warn-line)] text-[var(--warn)] text-sm">
             <AlertCircle size={14} className="shrink-0" />
             {rwError}. Настройте подключение в <strong className="ml-1">Настройки → Remnawave</strong>.
           </div>
         )}
 
         {loading ? (
-          <div className="flex items-center justify-center gap-2 text-gray-600 text-sm py-20">
+          <div className="flex items-center justify-center gap-2 text-[var(--t-faint)] text-sm py-20">
             <Loader2 size={16} className="animate-spin" /> Загрузка...
           </div>
         ) : rules.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-20 text-gray-600 text-sm">
+          <div className="flex flex-col items-center justify-center gap-3 py-20 text-[var(--t-faint)] text-sm">
             <p>Правил пока нет.</p>
             <button onClick={openCreate}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
-                         font-medium border border-gray-700 hover:bg-gray-800
-                         hover:text-gray-300 transition-colors">
+                         font-medium border border-[var(--line)] hover:bg-[var(--bg3)]
+                         hover:text-[var(--t-mid)] transition-colors">
               <Plus size={13} /> Создать первое правило
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-gray-800/60">
+          <div className="overflow-x-auto rounded-lg border border-[var(--line-soft)]">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800/60 text-[11px] text-gray-600
+                <tr className="border-b border-[var(--line-soft)] text-[11px] text-[var(--t-faint)]
                                uppercase tracking-widest">
                   <th className="px-4 py-2.5 text-left font-medium">Нода</th>
                   <th className="px-4 py-2.5 text-left font-medium">Область</th>
@@ -496,30 +487,30 @@ export function TrafficRules() {
                   <th className="px-4 py-2.5 text-left font-medium">Действия</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-800/40">
+              <tbody className="divide-y divide-[var(--line-soft)]">
                 {rules.map(rule => (
-                  <tr key={rule.id} className="hover:bg-gray-800/20 transition-colors">
-                    <td className="px-4 py-3 text-gray-200 font-mono text-xs">
+                  <tr key={rule.id} className="hover:bg-[var(--row-hover)] transition-colors">
+                    <td className="px-4 py-3 text-[var(--t-hi)] font-mono text-xs">
                       {rule.node_name}
                     </td>
                     <td className="px-4 py-3">
                       {rule.scope === "ALL" ? (
-                        <span className="text-gray-400">Все пользователи</span>
+                        <span className="text-[var(--t-mid)]">Все пользователи</span>
                       ) : (
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-blue-400">Сквад</span>
+                          <span className="text-[var(--accent-hi)]">Сквад</span>
                           {rule.squad_names.map((n, i) => (
-                            <span key={i} className="text-[11px] text-gray-500">{n}</span>
+                            <span key={i} className="text-[11px] text-[var(--t-low)]">{n}</span>
                           ))}
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-300">{fmtLimit(rule)}</td>
-                    <td className="px-4 py-3 text-gray-400">{PERIOD_LABELS[rule.period]}</td>
+                    <td className="px-4 py-3 text-[var(--t-mid)]">{fmtLimit(rule)}</td>
+                    <td className="px-4 py-3 text-[var(--t-mid)]">{PERIOD_LABELS[rule.period]}</td>
                     <td className="px-4 py-3">
                       <SyncBadge rule={rule} onSync={() => handleSync(rule)} />
                       {rule.last_synced_at && (
-                        <div className="text-[10px] text-gray-600 mt-0.5">
+                        <div className="text-[10px] text-[var(--t-faint)] mt-0.5">
                           {new Date(rule.last_synced_at).toLocaleString("ru-RU")}
                         </div>
                       )}
@@ -528,16 +519,16 @@ export function TrafficRules() {
                       <div className="flex items-center gap-1.5">
                         <button
                           onClick={() => openEdit(rule)}
-                          className="p-1.5 rounded-md text-gray-600 hover:text-gray-300
-                                     hover:bg-gray-700 transition-colors focus:outline-none"
+                          className="p-1.5 rounded-md text-[var(--t-faint)] hover:text-[var(--t-mid)]
+                                     hover:bg-[var(--bg3)] transition-colors focus:outline-none"
                           title="Редактировать"
                         >
                           <Pencil size={13} />
                         </button>
                         <button
                           onClick={() => handleSync(rule)}
-                          className="p-1.5 rounded-md text-gray-600 hover:text-blue-400
-                                     hover:bg-gray-700 transition-colors focus:outline-none"
+                          className="p-1.5 rounded-md text-[var(--t-faint)] hover:text-[var(--accent-hi)]
+                                     hover:bg-[var(--bg3)] transition-colors focus:outline-none"
                           title="Повторно применить"
                         >
                           <RefreshCw size={13} />
@@ -545,8 +536,8 @@ export function TrafficRules() {
                         <button
                           onClick={() => handleDelete(rule.id)}
                           disabled={deletingId === rule.id}
-                          className="p-1.5 rounded-md text-gray-600 hover:text-red-400
-                                     hover:bg-gray-700 transition-colors focus:outline-none
+                          className="p-1.5 rounded-md text-[var(--t-faint)] hover:text-[var(--err)]
+                                     hover:bg-[var(--bg3)] transition-colors focus:outline-none
                                      disabled:opacity-40"
                           title="Удалить"
                         >

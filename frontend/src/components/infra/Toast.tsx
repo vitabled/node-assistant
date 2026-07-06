@@ -29,9 +29,9 @@ function useToasts(): ToastItem[] {
 }
 
 const STYLE: Record<ToastType, { cls: string; icon: React.ReactNode }> = {
-  success: { cls: "border-green-800/50 bg-green-950/80 text-green-300", icon: <CheckCircle2 size={15} /> },
-  error:   { cls: "border-red-800/50 bg-red-950/80 text-red-300",       icon: <XCircle size={15} /> },
-  info:    { cls: "border-gray-700/60 bg-gray-900/90 text-gray-200",    icon: <Info size={15} /> },
+  success: { cls: "border-[var(--ok-line)] bg-[var(--ok-dim)] text-[var(--ok)]",       icon: <CheckCircle2 size={15} /> },
+  error:   { cls: "border-[var(--err-line)] bg-[var(--err-dim)] text-[var(--err)]",    icon: <XCircle size={15} /> },
+  info:    { cls: "border-[var(--line)] bg-[var(--bg2)] text-[var(--t-hi)]",           icon: <Info size={15} /> },
 };
 
 export function Toaster() {

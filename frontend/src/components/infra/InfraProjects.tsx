@@ -26,32 +26,32 @@ export function InfraProjects() {
 
   return (
     <Page>
-      <PageHeader icon={<FolderKanban size={16} className="text-blue-400" />} title="Проекты"
+      <PageHeader icon={<FolderKanban size={16} className="text-[var(--accent)]" />} title="Проекты"
         subtitle="Логическая группировка нод и ресурсов"
         actions={<>
-          <button onClick={load} className="p-2 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300"><RefreshCw size={13} /></button>
-          <button onClick={() => setModal({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white"><Plus size={13} /> Проект</button>
+          <button onClick={load} className="p-2 rounded-md bg-[var(--bg3)] text-[var(--t-mid)]"><RefreshCw size={13} /></button>
+          <button onClick={() => setModal({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)]"><Plus size={13} /> Проект</button>
         </>} />
 
       {loading ? (
-        <div className="py-16 text-center text-gray-600"><Loader2 size={18} className="animate-spin inline" /></div>
+        <div className="py-16 text-center text-[var(--t-faint)]"><Loader2 size={18} className="animate-spin inline" /></div>
       ) : rows.length === 0 ? (
-        <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-8 text-center text-gray-600 text-sm">Проектов пока нет.</div>
+        <div className="card p-8 text-center text-[var(--t-faint)] text-sm">Проектов пока нет.</div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {rows.map(p => (
-            <div key={p.id} className="rounded-xl border border-gray-800 bg-gray-900/40 p-4 flex flex-col gap-2">
+            <div key={p.id} className="card p-4 flex flex-col gap-2">
               <div className="flex items-start justify-between gap-2">
-                <span className="text-sm font-medium text-gray-100 truncate">{p.name}</span>
+                <span className="text-sm font-medium text-[var(--t-hi)] truncate">{p.name}</span>
                 <div className="flex shrink-0">
-                  <button onClick={() => setModal({ edit: p })} className="p-1 text-gray-500 hover:text-blue-400"><Pencil size={12} /></button>
-                  <button onClick={() => del(p)} className="p-1 text-gray-500 hover:text-red-400"><Trash2 size={12} /></button>
+                  <button onClick={() => setModal({ edit: p })} className="p-1 text-[var(--t-low)] hover:text-[var(--accent-hi)]"><Pencil size={12} /></button>
+                  <button onClick={() => del(p)} className="p-1 text-[var(--t-low)] hover:text-[var(--err)]"><Trash2 size={12} /></button>
                 </div>
               </div>
-              {p.description && <p className="text-xs text-gray-500 line-clamp-2">{p.description}</p>}
+              {p.description && <p className="text-xs text-[var(--t-low)] line-clamp-2">{p.description}</p>}
               <div className="flex items-center justify-between mt-auto pt-2 text-xs">
-                <span className="text-gray-500 flex items-center gap-1"><Boxes size={12} /> {p.nodeCount} нод</span>
-                <span className="text-gray-300 tabular-nums">{fmtNum(p.monthlyCost)}/мес</span>
+                <span className="text-[var(--t-low)] flex items-center gap-1"><Boxes size={12} /> {p.nodeCount} нод</span>
+                <span className="text-[var(--t-mid)] tabular-nums">{fmtNum(p.monthlyCost)}/мес</span>
               </div>
             </div>
           ))}
@@ -84,8 +84,8 @@ function ProjectModal({ edit, onClose, onSaved }: { edit?: Project; onClose: () 
   return (
     <Modal title={edit ? "Редактировать проект" : "Новый проект"} onClose={onClose}
       footer={<>
-        <button onClick={onClose} className="px-3 py-1.5 rounded-md text-sm text-gray-400 hover:text-gray-200">Отмена</button>
-        <button onClick={submit} disabled={saving} className="flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50">
+        <button onClick={onClose} className="px-3 py-1.5 rounded-md text-sm text-[var(--t-mid)] hover:text-[var(--t-hi)]">Отмена</button>
+        <button onClick={submit} disabled={saving} className="flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] disabled:opacity-50">
           {saving && <Loader2 size={13} className="animate-spin" />} Сохранить
         </button>
       </>}>

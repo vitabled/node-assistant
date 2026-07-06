@@ -37,16 +37,16 @@ export function InfraServices() {
 
   return (
     <Page>
-      <PageHeader icon={<Server size={16} className="text-blue-400" />} title="Услуги и Тарифы"
+      <PageHeader icon={<Server size={16} className="text-[var(--accent-hi)]" />} title="Услуги и Тарифы"
         subtitle="Оплачиваемые позиции инфраструктуры"
         actions={<>
-          <button onClick={load} className="p-2 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300"><RefreshCw size={13} /></button>
-          <button onClick={() => setModal({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white"><Plus size={13} /> Услуга</button>
+          <button onClick={load} className="iconbtn"><RefreshCw size={13} /></button>
+          <button onClick={() => setModal({})} className="btn btn-primary"><Plus size={13} /> Услуга</button>
         </>} />
 
-      <div className="rounded-xl border border-gray-800 overflow-hidden">
+      <div className="rounded-xl border border-[var(--line-soft)] overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-gray-900/60 text-gray-500 text-[11px] uppercase tracking-widest">
+          <thead className="bg-[var(--raised)] text-[var(--t-low)] text-[11px] uppercase tracking-widest">
             <tr>
               <th className="text-left font-medium px-4 py-2.5">Услуга</th>
               <th className="text-left font-medium px-4 py-2.5">Тип</th>
@@ -57,28 +57,28 @@ export function InfraServices() {
               <th className="text-right font-medium px-4 py-2.5"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-800/60">
+          <tbody className="divide-y divide-[var(--line-soft)]">
             {loading ? (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-600"><Loader2 size={16} className="animate-spin inline" /></td></tr>
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-[var(--t-faint)]"><Loader2 size={16} className="animate-spin inline" /></td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-600 text-xs">Услуг нет.</td></tr>
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-[var(--t-faint)] text-xs">Услуг нет.</td></tr>
             ) : rows.map(s => (
-              <tr key={s.id} className="hover:bg-gray-900/40">
-                <td className="px-4 py-2.5 text-gray-200">{s.name}</td>
-                <td className="px-4 py-2.5 text-gray-400">{kindLabel(s.kind)}</td>
-                <td className="px-4 py-2.5 text-gray-400">{pname(s.provider_uuid)}</td>
+              <tr key={s.id} className="hover:bg-[var(--row-hover)]">
+                <td className="px-4 py-2.5 text-[var(--t-hi)]">{s.name}</td>
+                <td className="px-4 py-2.5 text-[var(--t-mid)]">{kindLabel(s.kind)}</td>
+                <td className="px-4 py-2.5 text-[var(--t-mid)]">{pname(s.provider_uuid)}</td>
                 <td className="px-4 py-2.5">
-                  <span className={`text-xs ${s.billing_type === "hourly" ? "text-amber-300" : "text-blue-300"}`}>
+                  <span className={`text-xs ${s.billing_type === "hourly" ? "text-[var(--warn)]" : "text-[var(--accent-hi)]"}`}>
                     {s.billing_type === "hourly" ? "почасовая" : "фиксированная"}
                   </span>
                 </td>
-                <td className="px-4 py-2.5 text-right tabular-nums text-gray-200">
+                <td className="px-4 py-2.5 text-right tabular-nums text-[var(--t-hi)]">
                   {fmtNum(s.cost)}{s.billing_type === "hourly" ? "/ч" : "/мес"}
                 </td>
-                <td className="px-4 py-2.5 text-gray-400 flex items-center gap-1.5"><CalendarClock size={12} className="text-gray-600" />{s.next_billing_at ? fmtDateShort(s.next_billing_at) : "—"}</td>
+                <td className="px-4 py-2.5 text-[var(--t-mid)] flex items-center gap-1.5"><CalendarClock size={12} className="text-[var(--t-faint)]" />{s.next_billing_at ? fmtDateShort(s.next_billing_at) : "—"}</td>
                 <td className="px-4 py-2.5 text-right">
-                  <button onClick={() => setModal({ edit: s })} className="p-1.5 text-gray-500 hover:text-blue-400"><Pencil size={13} /></button>
-                  <button onClick={() => del(s)} className="p-1.5 text-gray-500 hover:text-red-400"><Trash2 size={13} /></button>
+                  <button onClick={() => setModal({ edit: s })} className="p-1.5 text-[var(--t-low)] hover:text-[var(--accent-hi)]"><Pencil size={13} /></button>
+                  <button onClick={() => del(s)} className="p-1.5 text-[var(--t-low)] hover:text-[var(--err)]"><Trash2 size={13} /></button>
                 </td>
               </tr>
             ))}
@@ -121,8 +121,8 @@ function ServiceModal({ edit, providers, projects, onClose, onSaved }: {
   return (
     <Modal title={edit ? "Редактировать услугу" : "Новая услуга"} onClose={onClose} wide
       footer={<>
-        <button onClick={onClose} className="px-3 py-1.5 rounded-md text-sm text-gray-400 hover:text-gray-200">Отмена</button>
-        <button onClick={submit} disabled={saving} className="flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50">
+        <button onClick={onClose} className="btn btn-ghost">Отмена</button>
+        <button onClick={submit} disabled={saving} className="btn btn-primary">
           {saving && <Loader2 size={13} className="animate-spin" />} Сохранить
         </button>
       </>}>
