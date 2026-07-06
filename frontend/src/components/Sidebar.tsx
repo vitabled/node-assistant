@@ -37,9 +37,10 @@ interface Props {
   onTabChange: (tab: Tab) => void;
   collapsed: boolean;    // "rail" mode in the design
   onToggle: () => void;
+  drawer?: boolean;      // rendered inside the mobile drawer → keep visible (no .ni-sidebar hide)
 }
 
-export function Sidebar({ activeTab, onTabChange }: Props) {
+export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
   const isInfra = activeTab.startsWith("infra-");
   const [infraOpen, setInfraOpen] = useState(isInfra);
 
@@ -60,10 +61,12 @@ export function Sidebar({ activeTab, onTabChange }: Props) {
 
   return (
     <aside
+      className={drawer ? undefined : "ni-sidebar"}
       style={{
         width: 224, flex: "none", background: "var(--sidebar-bg)",
         borderRight: "1px solid var(--line-soft)", display: "flex",
         flexDirection: "column", padding: "16px 12px 12px",
+        height: drawer ? "100%" : undefined,
       }}
     >
       {/* brand */}

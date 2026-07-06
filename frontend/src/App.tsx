@@ -3,6 +3,7 @@ import {
   CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight,
 } from "lucide-react";
 import { Sidebar, type Tab }               from "./components/Sidebar";
+import { BottomTabBar }                     from "./components/BottomTabBar";
 import { Dashboard }                       from "./components/Dashboard";
 import { DeployDashboard }                 from "./components/DeployDashboard";
 import { Settings }                        from "./components/Settings";
@@ -68,6 +69,9 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem(SIDEBAR_KEY) === "1"; } catch { return false; }
   });
+  // Mobile drawer (opened via the bottom tab bar's «Ещё»).
+  const [mobileNav, setMobileNav] = useState(false);
+  const goTab = useCallback((t: Tab) => { setTab(t); setMobileNav(false); }, []);
   const toggleSidebar = () =>
     setSidebarCollapsed(v => {
       const next = !v;
@@ -127,11 +131,11 @@ export default function App() {
   return (
     <div style={{ display: "flex", height: "100%", position: "relative" }}>
       <Toaster />
-      <Sidebar activeTab={tab} onTabChange={setTab} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+      <Sidebar activeTab={tab} onTabChange={goTab} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
 
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         {/* Topbar */}
-        <header style={{
+        <header className="ni-topbar" style={{
           height: 52, flex: "none", borderBottom: "1px solid var(--line-soft)",
           background: "var(--topbar-bg)", backdropFilter: "blur(var(--glass-blur))",
           display: "flex", alignItems: "center", gap: 12, padding: "0 20px",
@@ -143,7 +147,7 @@ export default function App() {
           </nav>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
             {/* Remnawave status (moved here from the sidebar footer) */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5 }}>
+            <div className="ni-clock" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5 }}>
               <span className="dot" style={{ background: "var(--ok)" }} />
               <span className="dim">Remnawave</span>
               <span className="chip ok" style={{ padding: "1px 7px", fontSize: 10 }}>онлайн</span>
@@ -153,7 +157,7 @@ export default function App() {
         </header>
 
         {/* Screen */}
-        <main style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <main className="ni-main" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
           {tab === "dashboard" && <Dashboard />}
           {tab === "deploy" && <DeployDashboard />}
           {tab === "templates" && <Templates />}
@@ -227,6 +231,21 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* Mobile drawer (full nav) — opened via the bottom tab bar «Ещё» */}
+      {mobileNav && (
+        <div className="ni-drawer" style={{ position: "fixed", inset: 0, zIndex: 55, display: "flex" }}>
+          <div style={{ position: "absolute", inset: 0, background: "var(--overlay)", backdropFilter: "blur(2px)" }}
+            onClick={() => setMobileNav(false)} />
+          <div style={{ position: "relative", animation: "ni-riseIn .18s ease-out" }}>
+            <Sidebar activeTab={tab} onTabChange={goTab} collapsed={false} onToggle={() => {}} drawer />
+          </div>
+        </div>
+      )}
+
+      {/* Bottom tab bar (mobile ≤820px) */}
+      <BottomTabBar activeTab={tab} onTabChange={goTab} onMore={() => setMobileNav(true)}
+        moreActive={mobileNav || !["dashboard", "deploy", "certs", "traffic"].includes(tab)} />
     </div>
   );
 }
