@@ -62,14 +62,17 @@ export function apiStub(url) {
   return {};
 }
 
-async function seed(context, theme) {
+// Seed device account + skin + mode + a starting tab, all before first paint.
+async function seed(context, { skin, mode, tab }) {
   await context.addInitScript(
-    ([acct, thm]) => {
+    ([acct, s, m, t]) => {
       localStorage.setItem("ni_accounts", JSON.stringify([acct]));
       localStorage.setItem("ni_active_account", acct.id);
-      localStorage.setItem("ni_thememode_" + acct.id, thm);
+      localStorage.setItem("ni_skin_" + acct.id, s);
+      localStorage.setItem("ni_thememode_" + acct.id, m);
+      if (t) localStorage.setItem("ni_tab_" + acct.id, t);
     },
-    [ACCT, theme],
+    [ACCT, skin, mode, tab || ""],
   );
 }
 
@@ -79,62 +82,68 @@ async function shoot(page, name) {
   console.log("  shot:", name);
 }
 
+async function openPage(browser, { skin, mode, viewport, tab }) {
+  const context = await browser.newContext({ viewport });
+  await seed(context, { skin, mode, tab });
+  await context.route("**/api/**", route => {
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(apiStub(route.request().url())) });
+  });
+  const page = await context.newPage();
+  page.on("console", m => { if (m.type() === "error") console.log("  [console.error]", m.text().slice(0, 160)); });
+  // vite-dev ESM never fires DOMContentLoaded under headless chromium here;
+  // commit + wait for a React-rendered marker (the always-present sidebar).
+  await page.goto(baseURL, { waitUntil: "commit" });
+  await page.waitForSelector(".ni-sidebar", { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(600);
+  return { context, page };
+}
+
+const DESKTOP = { width: 1280, height: 1400 };
+const MOBILE = { width: 390, height: 844 };
+
 async function run() {
   const browser = await chromium.launch();
-  for (const theme of ["dark", "light"]) {
-    console.log("theme:", theme);
-    const context = await browser.newContext({ viewport: { width: 1280, height: 1500 } });
-    await seed(context, theme);
-    await context.route("**/api/**", route => {
-      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(apiStub(route.request().url())) });
-    });
-    const page = await context.newPage();
-    page.on("console", m => { if (m.type() === "error") console.log("  [console.error]", m.text().slice(0, 160)); });
 
-    // vite-dev ESM never fires DOMContentLoaded under headless chromium here;
-    // commit + wait for a React-rendered marker instead.
-    await page.goto(baseURL, { waitUntil: "commit" });
-    await page.waitForSelector("text=Дешборд", { timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(700);
-    await shoot(page, `dashboard-${theme}`);
-
-    // Deploy tab → open the add-server modal (DeployForm)
-    await page.getByText("Деплой ноды", { exact: true }).click().catch(() => {});
-    await page.waitForTimeout(250);
-    // click the "add server" empty-state button if present
-    await page.getByRole("button", { name: /Добавить сервер|Новый сервер|Добавить/ }).first().click().catch(() => {});
-    await page.waitForTimeout(300);
-    // Expand the collapsed sections (Remnawave + Оптимизация ОС default closed)
-    // so the deploy-modal shot shows the full reorganized form.
-    await page.getByRole("button", { name: "Remnawave", exact: true }).click().catch(() => {});
-    await page.getByRole("button", { name: "Оптимизация ОС" }).click().catch(() => {});
-    await page.waitForTimeout(250);
-    await shoot(page, `deploy-modal-${theme}`);
-    // HAProxy mode: verify «Настройки HAProxy» sits above «Сеть».
-    if (theme === "dark") {
-      await page.getByRole("button", { name: "HAProxy", exact: true }).click().catch(() => {});
+  // ── Desktop matrix: skin × mode, key screens ──
+  for (const skin of ["apple", "console"]) {
+    for (const mode of ["light", "dark"]) {
+      const tag = `${skin}-${mode}`;
+      console.log("desktop:", tag);
+      // Dashboard
+      let { context, page } = await openPage(browser, { skin, mode, viewport: DESKTOP, tab: "dashboard" });
+      await shoot(page, `matrix/dashboard-${tag}`);
+      // Settings → Тема (skin+mode selectors)
+      await page.getByText("Настройки", { exact: true }).click().catch(() => {});
       await page.waitForTimeout(250);
-      await shoot(page, "deploy-modal-haproxy");
+      await page.getByRole("button", { name: "Тема" }).click().catch(() => {});
+      await shoot(page, `matrix/settings-theme-${tag}`);
+      await context.close();
+      // Infra providers (a converted table page)
+      ({ context, page } = await openPage(browser, { skin, mode, viewport: DESKTOP, tab: "infra-providers" }));
+      await shoot(page, `matrix/infra-providers-${tag}`);
+      await context.close();
     }
-    // The modal closes on a backdrop mousedown (no Esc handler) — click the far
-    // left of the overlay, well outside the centered modal box.
-    await page.mouse.click(20, 430);
+  }
+
+  // ── Mobile pass: apple light+dark — dashboard reflow + bottom-sheet modal ──
+  for (const mode of ["dark", "light"]) {
+    const tag = `apple-${mode}`;
+    console.log("mobile:", tag);
+    const { context, page } = await openPage(browser, { skin: "apple", mode, viewport: MOBILE, tab: "dashboard" });
+    await shoot(page, `matrix/mobile-dashboard-${tag}`);
+    // Traffic → open the create modal to verify the bottom-sheet on ≤600px
+    await page.getByText("Ещё", { exact: true }).click().catch(() => {});
+    await page.waitForTimeout(250);
+    await page.locator(".ni-drawer").getByText("Трафик", { exact: true }).click().catch(() => {});
+    await page.waitForTimeout(250);
+    await page.getByRole("button", { name: /Создать ограничение|Создать первое правило/ }).first().click().catch(() => {});
     await page.waitForTimeout(300);
-
-    // Certs tab (CertsForm)
-    await page.getByText("Обновить SSL", { exact: true }).click().catch(() => {});
-    await shoot(page, `certs-${theme}`);
-
-    // Settings (footer) → Тема tab
-    await page.getByText("Настройки", { exact: true }).click().catch(() => {});
-    await page.waitForTimeout(200);
-    await page.getByRole("button", { name: "Тема" }).click().catch(() => {});
-    await shoot(page, `settings-theme-${theme}`);
-
+    await shoot(page, `matrix/mobile-sheet-${tag}`);
     await context.close();
   }
+
   await browser.close();
-  console.log("done →", outDir);
+  console.log("done →", join(outDir, "matrix"));
 }
 
 // Only drive the browser when executed directly (`node theme-shots.mjs`), not

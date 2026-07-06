@@ -28,6 +28,15 @@ test("statuspage is guarded (empty global, so Dashboard's g?.state guard holds)"
   assert.ok(Array.isArray(apiStub("http://x/api/checker/incidents")));
 });
 
+test("infra-billing list endpoints return arrays; summary/settings are objects", () => {
+  for (const u of ["/infra-billing/providers", "/infra-billing/projects", "/infra-billing/services",
+                   "/infra-billing/payments", "/infra-billing/api-tokens", "/subscriptions/status"]) {
+    assert.ok(Array.isArray(apiStub("http://x/api" + u)), u);
+  }
+  assert.equal(apiStub("http://x/api/infra-billing/dashboard/summary").base_currency, "RUB");
+  assert.equal(apiStub("http://x/api/infra-billing/settings").base_currency, "RUB");
+});
+
 test("unknown endpoints fall back to an empty object", () => {
   assert.deepEqual(apiStub("http://x/api/whatever"), {});
 });
