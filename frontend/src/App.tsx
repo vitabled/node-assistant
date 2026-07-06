@@ -174,7 +174,7 @@ export default function App() {
           {tab === "infra-tokens"    && <InfraApiTokens />}
 
           {tab === "certs" && (
-            <div className="flex-1 grid grid-cols-[360px_1fr] min-h-0" style={{ display: "grid" }}>
+            <div className="flex-1 grid grid-cols-1 lg:grid-cols-[360px_1fr] min-h-0" style={{ display: "grid" }}>
               <div style={{ borderRight: "1px solid var(--line-soft)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
                 <div style={{ padding: 20 }}>
                   <CertsForm onSubmit={deployCert} disabled={certIsRunning} />

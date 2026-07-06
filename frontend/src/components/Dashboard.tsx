@@ -144,14 +144,14 @@ export function Dashboard() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-5xl mx-auto px-6 py-6">
+      <div className="ni-pagebody max-w-5xl mx-auto px-6 py-6">
 
         {/* Header row */}
-        <div className="flex items-center justify-between mb-4">
+        <div className="ni-pagehead flex items-center justify-between mb-4">
           <h1 className="text-base font-semibold text-[var(--t-hi)] flex items-center gap-2">
             <Activity size={16} className="text-[var(--accent-hi)]" /> Статус нод сети
           </h1>
-          <div className="flex items-center gap-2">
+          <div className="ni-pagehead-actions flex items-center gap-2">
             <div className="flex rounded-md border border-[var(--line-soft)] overflow-hidden">
               {[30, 60, 90].map(n => (
                 <button key={n} onClick={() => setTicks(n)}
@@ -178,7 +178,7 @@ export function Dashboard() {
         <SubscriptionSelector />
 
         {/* Global health banner */}
-        <div className="rounded-xl border p-5 mb-6 flex items-center gap-4" style={banner.style}>
+        <div className="ni-health rounded-xl border p-5 mb-6 flex items-center gap-4" style={banner.style}>
           {banner.icon}
           <div className="flex-1">
             <p className="text-lg font-semibold">{banner.text}</p>
@@ -188,7 +188,7 @@ export function Dashboard() {
                 : loading ? "Загрузка…" : "Мониторинг не запущен — включите его в настройках мониторинга выше"}
             </p>
           </div>
-          <div className="flex items-center gap-6 text-right">
+          <div className="ni-health-stats flex items-center gap-6 text-right">
             <Stat label="Аптайм 30 дней" value={g?.uptime30d != null ? `${g.uptime30d}%` : "—"} />
             <Stat label="Активных протоколов" value={g?.protocols ? String(g.protocols.length) : "—"}
               sub={g?.protocols?.join(", ")} />
@@ -538,9 +538,9 @@ function NodeRow({ node, flag, ticks }: { node: Node; flag: string; ticks: numbe
   // Right-align bars: pad the left with "no-data" slots.
   const pad = Math.max(0, ticks - node.bars.length);
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--row-hover)]">
+    <div className="ni-noderow flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--row-hover)]">
       {/* name + protocol */}
-      <div className="flex items-center gap-2 min-w-0 w-52 shrink-0">
+      <div className="ni-node-name flex items-center gap-2 min-w-0 w-52 shrink-0">
         <span className="text-base leading-none">{flag}</span>
         <div className="min-w-0">
           <p className="text-sm text-[var(--t-hi)] truncate">{node.name}</p>
@@ -552,7 +552,7 @@ function NodeRow({ node, flag, ticks }: { node: Node; flag: string; ticks: numbe
       </div>
 
       {/* uptime bar grid */}
-      <div className="flex-1 flex items-end gap-[2px] h-7 min-w-0" title={`Последние ${ticks} проверок`}>
+      <div className="ni-node-bars flex-1 flex items-end gap-[2px] h-7 min-w-0" title={`Последние ${ticks} проверок`}>
         {Array.from({ length: pad }).map((_, i) => (
           <span key={`p${i}`} className="flex-1 max-w-[6px] h-4 rounded-sm bg-[var(--bg3)]" />
         ))}

@@ -60,7 +60,7 @@ export function InfraPayments() {
           <button onClick={() => setAdding(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white"><Plus size={13} /> Платёж</button>
         </>} />
 
-      <div className="rounded-xl border border-gray-800 overflow-hidden">
+      <div className="rounded-xl border border-gray-800 overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-900/60 text-gray-500 text-[11px] uppercase tracking-widest">
             <tr>
