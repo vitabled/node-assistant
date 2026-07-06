@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { Save, CheckCircle2, XCircle, Loader2, Wifi, Check, Sun, Moon, Monitor } from "lucide-react";
 import { MultiSelect, type SelectOption } from "./MultiSelect";
 import {
-  ACCENTS, THEME_MODES, type AccentKey, type Density, type ThemeMode,
-  applyAccent, applyDensity, applyThemeMode, loadAccent, loadDensity, loadThemeMode,
-  saveAccent, saveDensity, saveThemeMode,
+  ACCENTS, THEME_MODES, SKINS, type AccentKey, type Density, type ThemeMode, type AppSkin,
+  applyAccent, applyDensity, applyThemeMode, applySkin,
+  loadAccent, loadDensity, loadThemeMode, loadSkin,
+  saveAccent, saveDensity, saveThemeMode, saveSkin,
 } from "../theme/tweaks";
 import { getActiveId } from "../auth/store";
 
@@ -547,16 +548,43 @@ const MODE_ICON: Record<ThemeMode, typeof Sun> = { system: Monitor, light: Sun, 
 
 export function ThemeTab() {
   const accountId = getActiveId();
+  const [skin, setSkin]       = useState<AppSkin>(() => loadSkin(accountId));
   const [mode, setMode]       = useState<ThemeMode>(() => loadThemeMode(accountId));
   const [accent, setAccent]   = useState<AccentKey>(loadAccent);
   const [density, setDensity] = useState<Density>(loadDensity);
 
+  const pickSkin = (s: AppSkin) => { setSkin(s); applySkin(s); saveSkin(accountId, s); };
   const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); };
   const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); };
   const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 26, maxWidth: 460 }}>
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Стиль</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
+          {SKINS.map(s => {
+            const on = skin === s.key;
+            return (
+              <button key={s.key} onClick={() => pickSkin(s.key)} className="card"
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 5,
+                  padding: "16px 8px", cursor: "pointer", textAlign: "center",
+                  borderColor: on ? "var(--accent-line)" : "var(--line-soft)",
+                  background: on ? "var(--accent-dim)" : "var(--bg2)",
+                  color: on ? "var(--accent-hi)" : "var(--t-mid)",
+                }}>
+                <span style={{ fontSize: 14, fontWeight: 700 }}>{s.label}</span>
+                <span style={{ fontSize: 11, color: "var(--t-low)" }}>
+                  {s.key === "apple" ? "Системный вид macOS/iOS" : "Моноширинный, консольный"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="hint">Apple — по умолчанию. «Консоль» возвращает моноширинный вид JetBrains Mono.</p>
+      </div>
+
       <div>
         <p className="micro" style={{ marginBottom: 10 }}>Режим</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
