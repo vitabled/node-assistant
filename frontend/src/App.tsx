@@ -7,6 +7,7 @@ import { Dashboard }                       from "./components/Dashboard";
 import { DeployDashboard }                 from "./components/DeployDashboard";
 import { Settings }                        from "./components/Settings";
 import { Templates }                       from "./components/Templates";
+import { Hosts }                           from "./components/Hosts";
 import { CertsForm, type CertsFormData }  from "./components/CertsForm";
 import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
@@ -39,6 +40,7 @@ const CRUMB: Record<Tab, [string, string]> = {
   "deploy":          ["Node Installer", "Деплой ноды"],
   "certs":           ["Node Installer", "Управление SSL"],
   "templates":       ["Node Installer", "Шаблоны"],
+  "hosts":           ["Node Installer", "Хосты"],
   "traffic":         ["Node Installer", "Трафик"],
   "settings":        ["Node Installer", "Настройки"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
@@ -153,6 +155,7 @@ export default function App() {
           {tab === "dashboard" && <Dashboard />}
           {tab === "deploy" && <DeployDashboard />}
           {tab === "templates" && <Templates />}
+          {tab === "hosts" && <Hosts />}
           {tab === "settings" && <Settings />}
           {tab === "traffic" && <TrafficRules />}
 

@@ -13,7 +13,7 @@ afterEach(cleanup);
 describe("Sidebar", () => {
   it("renders the main navigation items", () => {
     renderSidebar();
-    for (const label of ["Дешборд", "Деплой ноды", "Управление SSL", "Шаблоны", "Трафик", "Настройки"]) {
+    for (const label of ["Дешборд", "Деплой ноды", "Управление SSL", "Шаблоны", "Хосты", "Трафик", "Настройки"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });

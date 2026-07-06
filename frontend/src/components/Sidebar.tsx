@@ -1,13 +1,13 @@
 import { useState } from "react";
 import {
-  Activity, Rocket, ShieldCheck, FileCode2, Gauge, Settings2, Server,
+  Activity, Rocket, ShieldCheck, FileCode2, Network, Gauge, Settings2, Server,
   PieChart, ChevronDown, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
-  | "dashboard" | "deploy" | "certs" | "templates" | "traffic" | "settings"
+  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
@@ -18,6 +18,7 @@ const NAV_MAIN: NavItemDef[] = [
   { tab: "deploy",    label: "Деплой ноды",  Icon: Rocket    },
   { tab: "certs",     label: "Управление SSL", Icon: ShieldCheck },
   { tab: "templates", label: "Шаблоны",      Icon: FileCode2 },
+  { tab: "hosts",     label: "Хосты",        Icon: Network   },
   { tab: "traffic",   label: "Трафик",       Icon: Gauge     },
 ];
 
