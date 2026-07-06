@@ -34,23 +34,23 @@ export function InfraProviders() {
       <div className="max-w-5xl mx-auto px-6 py-6">
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h1 className="text-base font-semibold text-white flex items-center gap-2">
-              <CreditCard size={16} className="text-blue-400" /> Провайдеры хостинга
+            <h1 className="text-base font-semibold text-[var(--t-hi)] flex items-center gap-2">
+              <CreditCard size={16} className="text-[var(--accent-hi)]" /> Провайдеры хостинга
             </h1>
-            <p className="text-xs text-gray-500 mt-0.5">Аккаунты облачных провайдеров и их балансы</p>
+            <p className="text-xs text-[var(--t-low)] mt-0.5">Аккаунты облачных провайдеров и их балансы</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={load} className="p-2 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300"><RefreshCw size={13} /></button>
+            <button onClick={load} className="p-2 rounded-md bg-[var(--bg3)] hover:bg-[var(--bg3)] text-[var(--t-mid)]"><RefreshCw size={13} /></button>
             <button onClick={() => setModal({})}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white">
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)]">
               <Plus size={13} /> Добавить провайдера
             </button>
           </div>
         </div>
 
-        <div className="rounded-xl border border-gray-800 overflow-hidden">
+        <div className="rounded-xl border border-[var(--line-soft)] overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-900/60 text-gray-500 text-[11px] uppercase tracking-widest">
+            <thead className="bg-[var(--bg1)] text-[var(--t-low)] text-[11px] uppercase tracking-widest">
               <tr>
                 <th className="text-left font-medium px-4 py-2.5">Провайдер</th>
                 <th className="text-right font-medium px-4 py-2.5">Баланс</th>
@@ -59,37 +59,37 @@ export function InfraProviders() {
                 <th className="text-right font-medium px-4 py-2.5">Действия</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-800/60">
+            <tbody className="divide-y divide-[var(--line-soft)]">
               {loading ? (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-600"><Loader2 size={16} className="animate-spin inline" /></td></tr>
+                <tr><td colSpan={5} className="px-4 py-8 text-center text-[var(--t-faint)]"><Loader2 size={16} className="animate-spin inline" /></td></tr>
               ) : rows.length === 0 ? (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-600 text-xs">Провайдеры не добавлены.</td></tr>
+                <tr><td colSpan={5} className="px-4 py-8 text-center text-[var(--t-faint)] text-xs">Провайдеры не добавлены.</td></tr>
               ) : rows.map(p => {
                 const low = p.lowBalanceThreshold > 0 && p.balance < p.lowBalanceThreshold;
                 return (
-                  <tr key={p.uuid} className="hover:bg-gray-900/40">
+                  <tr key={p.uuid} className="hover:bg-[var(--row-hover)]">
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
                         {p.faviconLink
                           ? <img src={p.faviconLink} alt="" className="w-4 h-4 rounded" onError={e => (e.currentTarget.style.display = "none")} />
-                          : <span className="w-4 h-4 rounded bg-gray-700" />}
+                          : <span className="w-4 h-4 rounded bg-[var(--bg3)]" />}
                         {/* Geo flag — shown only when the provider carries a location code
                             (Remnawave providers currently have none; future-ready). */}
                         {p.countryCode && <span title={p.countryCode}>{getFlagEmoji(p.countryCode)}</span>}
-                        <span className="text-gray-200">{p.name}</span>
-                        {p.loginUrl && <a href={p.loginUrl} target="_blank" rel="noreferrer" className="text-gray-600 hover:text-blue-400"><ExternalLink size={11} /></a>}
+                        <span className="text-[var(--t-hi)]">{p.name}</span>
+                        {p.loginUrl && <a href={p.loginUrl} target="_blank" rel="noreferrer" className="text-[var(--t-faint)] hover:text-[var(--accent-hi)]"><ExternalLink size={11} /></a>}
                       </div>
                     </td>
-                    <td className={`px-4 py-2.5 text-right tabular-nums ${low ? "text-red-400" : "text-gray-200"}`}>
+                    <td className={`px-4 py-2.5 text-right tabular-nums ${low ? "text-[var(--err)]" : "text-[var(--t-hi)]"}`}>
                       {p.balance.toLocaleString("ru-RU")} {p.currency}
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-gray-500">
+                    <td className="px-4 py-2.5 text-right tabular-nums text-[var(--t-low)]">
                       {p.lowBalanceThreshold ? `${p.lowBalanceThreshold.toLocaleString("ru-RU")} ${p.currency}` : "—"}
                     </td>
-                    <td className="px-4 py-2.5 text-center text-gray-400">{p.nodeCount}</td>
+                    <td className="px-4 py-2.5 text-center text-[var(--t-mid)]">{p.nodeCount}</td>
                     <td className="px-4 py-2.5 text-right">
-                      <button onClick={() => setModal({ edit: p })} className="p-1.5 text-gray-500 hover:text-blue-400"><Pencil size={13} /></button>
-                      <button onClick={() => del(p)} className="p-1.5 text-gray-500 hover:text-red-400"><Trash2 size={13} /></button>
+                      <button onClick={() => setModal({ edit: p })} className="p-1.5 text-[var(--t-low)] hover:text-[var(--accent-hi)]"><Pencil size={13} /></button>
+                      <button onClick={() => del(p)} className="p-1.5 text-[var(--t-low)] hover:text-[var(--err)]"><Trash2 size={13} /></button>
                     </td>
                   </tr>
                 );
@@ -130,9 +130,9 @@ function ProviderModal({ edit, onClose, onSaved }: { edit?: Provider; onClose: (
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="bg-gray-950 border border-gray-700/60 rounded-xl w-full max-w-md p-5">
-        <h2 className="text-sm font-semibold text-white mb-4">{edit ? "Редактировать провайдера" : "Новый провайдер"}</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] p-4" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="bg-[var(--bg1)] border border-[var(--line)] rounded-xl w-full max-w-md p-5">
+        <h2 className="text-sm font-semibold text-[var(--t-hi)] mb-4">{edit ? "Редактировать провайдера" : "Новый провайдер"}</h2>
         <div className="flex flex-col gap-3">
           <Field label="Имя *" value={f.name} onChange={v => set("name", v)} placeholder="Selectel" />
           <Field label="URL панели провайдера" value={f.login_url} onChange={v => set("login_url", v)} placeholder="https://my.selectel.ru" />
@@ -142,12 +142,12 @@ function ProviderModal({ edit, onClose, onSaved }: { edit?: Provider; onClose: (
             <Field label="Валюта" value={f.currency} onChange={v => set("currency", v)} />
             <Field label="Порог алерта" value={f.low_balance_threshold} onChange={v => set("low_balance_threshold", v)} />
           </div>
-          <p className="text-[11px] text-gray-600">Баланс, валюта и порог хранятся локально (Remnawave их не хранит). API-токен провайдера не сохраняется.</p>
+          <p className="text-[11px] text-[var(--t-faint)]">Баланс, валюта и порог хранятся локально (Remnawave их не хранит). API-токен провайдера не сохраняется.</p>
         </div>
         <div className="flex justify-end gap-2 mt-5">
-          <button onClick={onClose} className="px-3 py-1.5 rounded-md text-sm text-gray-400 hover:text-gray-200">Отмена</button>
+          <button onClick={onClose} className="px-3 py-1.5 rounded-md text-sm text-[var(--t-mid)] hover:text-[var(--t-hi)]">Отмена</button>
           <button onClick={submit} disabled={saving}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50">
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] disabled:opacity-50">
             {saving && <Loader2 size={13} className="animate-spin" />} Сохранить
           </button>
         </div>
@@ -159,10 +159,9 @@ function ProviderModal({ edit, onClose, onSaved }: { edit?: Provider; onClose: (
 function Field({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">{label}</label>
+      <label className="label">{label}</label>
       <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} spellCheck={false}
-        className="w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2 text-sm text-gray-100
-                   placeholder:text-gray-700 focus:outline-none focus:ring-1 focus:border-blue-500/70 focus:ring-blue-500/20" />
+        className="input" />
     </div>
   );
 }

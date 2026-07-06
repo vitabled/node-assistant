@@ -46,8 +46,8 @@ export function InfraApiTokens() {
 
   if (locked) return (
     <Page>
-      <PageHeader icon={<KeyRound size={16} className="text-blue-400" />} title="API токены" />
-      <div className="rounded-xl border border-amber-900/40 bg-amber-950/30 p-8 text-center text-amber-300 text-sm flex flex-col items-center gap-2">
+      <PageHeader icon={<KeyRound size={16} className="text-[var(--accent-hi)]" />} title="API токены" />
+      <div className="rounded-xl border border-[var(--warn-line)] bg-[var(--warn-dim)] p-8 text-center text-[var(--warn)] text-sm flex flex-col items-center gap-2">
         <Lock size={20} /> Хранилище защищено. Войдите в финансовый контур во вкладке «Sign-in».
       </div>
     </Page>
@@ -55,20 +55,20 @@ export function InfraApiTokens() {
 
   return (
     <Page>
-      <PageHeader icon={<KeyRound size={16} className="text-blue-400" />} title="API токены хостингов"
+      <PageHeader icon={<KeyRound size={16} className="text-[var(--accent-hi)]" />} title="API токены хостингов"
         subtitle="Зашифрованное хранилище ключей интеграции"
         actions={<>
-          <button onClick={load} className="p-2 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300"><RefreshCw size={13} /></button>
-          <button onClick={() => setAdding(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white"><Plus size={13} /> Ключ</button>
+          <button onClick={load} className="iconbtn"><RefreshCw size={13} /></button>
+          <button onClick={() => setAdding(true)} className="btn btn-primary"><Plus size={13} /> Ключ</button>
         </>} />
 
-      <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-800 bg-gray-900/40 text-[11px] text-gray-500">
-        <ShieldCheck size={13} className="text-green-500" /> Секреты шифруются (Fernet) и никогда не возвращаются на фронтенд — показывается только маска.
+      <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--line-soft)] bg-[var(--bg2)] text-[11px] text-[var(--t-low)]">
+        <ShieldCheck size={13} className="text-[var(--ok)]" /> Секреты шифруются (Fernet) и никогда не возвращаются на фронтенд — показывается только маска.
       </div>
 
-      <div className="rounded-xl border border-gray-800 overflow-hidden">
+      <div className="rounded-xl border border-[var(--line-soft)] overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-gray-900/60 text-gray-500 text-[11px] uppercase tracking-widest">
+          <thead className="bg-[var(--raised)] text-[var(--t-low)] text-[11px] uppercase tracking-widest">
             <tr>
               <th className="text-left font-medium px-4 py-2.5">Название</th>
               <th className="text-left font-medium px-4 py-2.5">Провайдер</th>
@@ -77,23 +77,23 @@ export function InfraApiTokens() {
               <th className="text-right font-medium px-4 py-2.5"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-800/60">
+          <tbody className="divide-y divide-[var(--line-soft)]">
             {loading ? (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-600"><Loader2 size={16} className="animate-spin inline" /></td></tr>
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-[var(--t-faint)]"><Loader2 size={16} className="animate-spin inline" /></td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-600 text-xs">Ключей нет.</td></tr>
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-[var(--t-faint)] text-xs">Ключей нет.</td></tr>
             ) : rows.map(t => (
-              <tr key={t.id} className="hover:bg-gray-900/40">
-                <td className="px-4 py-2.5 text-gray-200">{t.name}</td>
-                <td className="px-4 py-2.5 text-gray-400">{kindLabel(t.providerKind)}</td>
-                <td className="px-4 py-2.5 font-mono text-gray-500 text-xs">{t.masked}</td>
-                <td className="px-4 py-2.5 text-gray-500 tabular-nums">{fmtDate(t.createdAt)}</td>
+              <tr key={t.id} className="hover:bg-[var(--row-hover)]">
+                <td className="px-4 py-2.5 text-[var(--t-hi)]">{t.name}</td>
+                <td className="px-4 py-2.5 text-[var(--t-mid)]">{kindLabel(t.providerKind)}</td>
+                <td className="px-4 py-2.5 font-mono text-[var(--t-low)] text-xs">{t.masked}</td>
+                <td className="px-4 py-2.5 text-[var(--t-low)] tabular-nums">{fmtDate(t.createdAt)}</td>
                 <td className="px-4 py-2.5 text-right whitespace-nowrap">
                   <button onClick={() => verify(t)} disabled={verifying === t.id} title="Проверить соединение"
-                    className="p-1.5 text-gray-500 hover:text-blue-400 disabled:opacity-50">
+                    className="p-1.5 text-[var(--t-low)] hover:text-[var(--accent-hi)] disabled:opacity-50">
                     {verifying === t.id ? <Loader2 size={13} className="animate-spin" /> : <Plug size={13} />}
                   </button>
-                  <button onClick={() => del(t)} className="p-1.5 text-gray-500 hover:text-red-400"><Trash2 size={13} /></button>
+                  <button onClick={() => del(t)} className="p-1.5 text-[var(--t-low)] hover:text-[var(--err)]"><Trash2 size={13} /></button>
                 </td>
               </tr>
             ))}
@@ -123,15 +123,15 @@ function TokenModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => 
   return (
     <Modal title="Новый API ключ" onClose={onClose}
       footer={<>
-        <button onClick={onClose} className="px-3 py-1.5 rounded-md text-sm text-gray-400 hover:text-gray-200">Отмена</button>
-        <button onClick={submit} disabled={saving} className="flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50">
+        <button onClick={onClose} className="btn btn-ghost">Отмена</button>
+        <button onClick={submit} disabled={saving} className="btn btn-primary">
           {saving && <Loader2 size={13} className="animate-spin" />} Сохранить
         </button>
       </>}>
       <Field label="Название связки" value={name} onChange={setName} placeholder="Selectel прод" />
       <SelectField label="Провайдер" value={kind} onChange={setKind} options={KINDS} />
       <Field label="Secret Key" value={secret} onChange={setSecret} type="password" placeholder="вставьте токен" />
-      <p className="text-[11px] text-gray-600">Секрет будет зашифрован на сервере и больше не отобразится в открытом виде.</p>
+      <p className="hint">Секрет будет зашифрован на сервере и больше не отобразится в открытом виде.</p>
     </Modal>
   );
 }

@@ -3,20 +3,18 @@ import { deployJobsKey } from "../../auth/store";
 
 // Shared dark-theme primitives for the infra-billing pages (Status-Page style).
 
-export const inputCls =
-  "w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2 text-sm text-gray-100 " +
-  "placeholder:text-gray-700 focus:outline-none focus:ring-1 focus:border-blue-500/70 focus:ring-blue-500/20";
+export const inputCls = "input";
 
 export function PageHeader({ icon, title, subtitle, actions }: {
   icon: ReactNode; title: string; subtitle?: string; actions?: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between mb-5">
+    <div className="ni-pagehead flex items-center justify-between mb-5">
       <div>
-        <h1 className="text-base font-semibold text-white flex items-center gap-2">{icon} {title}</h1>
-        {subtitle && <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>}
+        <h1 className="text-base font-semibold text-[var(--t-hi)] flex items-center gap-2">{icon} {title}</h1>
+        {subtitle && <p className="text-xs text-[var(--t-low)] mt-0.5">{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && <div className="ni-pagehead-actions flex items-center gap-2">{actions}</div>}
     </div>
   );
 }
@@ -24,7 +22,7 @@ export function PageHeader({ icon, title, subtitle, actions }: {
 export function Page({ children }: { children: ReactNode }) {
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-5xl mx-auto px-6 py-6">{children}</div>
+      <div className="ni-pagebody max-w-5xl mx-auto px-6 py-6">{children}</div>
     </div>
   );
 }
@@ -34,7 +32,7 @@ export function Field({ label, value, onChange, placeholder, type = "text" }: {
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">{label}</label>
+      <label className="label">{label}</label>
       <input type={type} value={value} onChange={e => onChange(e.target.value)}
         placeholder={placeholder} spellCheck={false} className={inputCls} />
     </div>
@@ -46,8 +44,8 @@ export function SelectField({ label, value, onChange, options }: {
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-medium text-gray-500 uppercase tracking-widest">{label}</label>
-      <select value={value} onChange={e => onChange(e.target.value)} className={inputCls}>
+      <label className="label">{label}</label>
+      <select value={value} onChange={e => onChange(e.target.value)} className="selectbox">
         {options.length === 0 && <option value="">— нет —</option>}
         {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
       </select>
@@ -61,8 +59,8 @@ export function Modal({ title, onClose, children, footer, wide }: {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
       onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className={`bg-gray-950 border border-gray-700/60 rounded-xl w-full ${wide ? "max-w-lg" : "max-w-md"} p-5 max-h-[90vh] overflow-y-auto`}>
-        <h2 className="text-sm font-semibold text-white mb-4">{title}</h2>
+      <div className={`bg-[var(--bg1)] border border-[var(--line)] rounded-xl w-full ${wide ? "max-w-lg" : "max-w-md"} p-5 max-h-[90vh] overflow-y-auto`}>
+        <h2 className="text-sm font-semibold text-[var(--t-hi)] mb-4">{title}</h2>
         <div className="flex flex-col gap-3">{children}</div>
         <div className="flex justify-end gap-2 mt-5">{footer}</div>
       </div>

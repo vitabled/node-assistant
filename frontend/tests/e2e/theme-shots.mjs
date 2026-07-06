@@ -34,6 +34,17 @@ export function apiStub(url) {
   if (url.includes("/remnawave/nodes")) return [];
   if (url.includes("/templates")) return [];
   if (url.includes("/traffic-rules")) return [];
+  if (url.includes("/subscriptions/status")) return [];
+  if (url.includes("/subscriptions")) return [];
+  if (url.includes("/hosts")) return [];
+  if (url.includes("/domains")) return [];
+  // Infra-billing: list endpoints → [], summary/settings → benign objects.
+  if (url.includes("/infra-billing/dashboard/summary"))
+    return { total_balance: 0, base_currency: "RUB", burn: { hourly: 0, daily: 0, monthly: 0, daysLeft: null, critical: false },
+             spend_by_provider: [], monthly: [] };
+  if (url.includes("/infra-billing/settings"))
+    return { base_currency: "RUB", fx_rates: {}, low_balance_threshold: 0, refresh_interval: 60 };
+  if (url.includes("/infra-billing/")) return [];
   if (url.includes("/settings")) {
     return {
       remnawave: { panel_url: "", api_token: "", default_internal_squad_ids: [], default_external_squad_ids: [] },
