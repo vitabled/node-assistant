@@ -49,14 +49,21 @@ describe("StepProgress (Ф6 restructure)", () => {
   });
 
   it("renders every step 1..13 exactly once (no gap/overlap between groups)", () => {
-    // pending + no active step → no elapsed-timer digits abutting a badge; groups
-    // default-open, so all 13 rows render. Each row's badge is "N.".
+    // pending + no active step → groups default-open, so all 13 rows render.
+    // Numbering is hierarchical (Ф5: 1, 2, 3.1…6.4) — the invariant is that
+    // every label renders exactly once and the badges cover all 13 steps.
     const { container } = render(<StepProgress currentStep={0} totalSteps={13} status="pending" />);
     const text = container.textContent || "";
-    for (let n = 1; n <= 13; n++) {
-      const count = (text.match(new RegExp(`(?<!\\d)${n}\\.`, "g")) || []).length;
-      expect(count, `step ${n} badge`).toBe(1);
+    for (const label of DEPLOY_STEPS) {
+      const count = text.split(label).length - 1;
+      expect(count, `label «${label}»`).toBe(1);
     }
+    const badges = ["1.", "2.", "3.1.", "3.2.", "4.1.", "4.2.", "4.3.", "4.4.", "5.", "6.1.", "6.2.", "6.3.", "6.4."];
+    for (const badge of badges) {
+      expect(text, `badge «${badge}»`).toContain(badge);
+    }
+    // no flat 7..13 badges remain after the hierarchical renumbering
+    expect(text).not.toMatch(/(?<![\d.])(?:1[0-3]|[7-9])\./);
   });
 
   it("shows 100% and marks groups done on success", () => {
