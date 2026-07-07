@@ -8,6 +8,8 @@ import {
   saveAccent, saveDensity, saveThemeMode, saveSkin,
 } from "../theme/tweaks";
 import { getActiveId } from "../auth/store";
+import { CheckerControls } from "./monitoring/CheckerControls";
+import { CheckerRegistry } from "./monitoring/CheckerRegistry";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -636,9 +638,21 @@ export function ThemeTab() {
 }
 
 
+// ── Monitoring tab (Ф2) ───────────────────────────────────────
+
+function MonitoringTab() {
+  return (
+    <div className="flex flex-col gap-4 max-w-2xl">
+      <CheckerControls />
+      <CheckerRegistry />
+    </div>
+  );
+}
+
+
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -647,6 +661,7 @@ export function Settings() {
     { id: "remnawave",   label: "Remnawave" },
     { id: "defaults",    label: "Деплой (умолчания)" },
     { id: "optimization", label: "Оптимизация ОС" },
+    { id: "monitoring",  label: "Мониторинг" },
     { id: "theme",       label: "Тема" },
   ];
 
@@ -670,6 +685,7 @@ export function Settings() {
         {sub === "remnawave"    && <RemnavaveTab />}
         {sub === "defaults"     && <DeployDefaultsTab />}
         {sub === "optimization" && <OptimizationTab />}
+        {sub === "monitoring"   && <MonitoringTab />}
         {sub === "theme"        && <ThemeTab />}
       </div>
     </div>
