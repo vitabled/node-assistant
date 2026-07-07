@@ -385,7 +385,7 @@ localStorage.
 Ф8/Ф9 читают список панелей из `panel_jobs_<id>`.
 
 ## Фаза 7 — Управление панелью/подпиской: модалка Компоненты + Статистика
-<!-- circle: status=pending order=70 deps=[6] autonomy=auto obstacle="" -->
+<!-- circle: status=done order=70 deps=[6] autonomy=auto obstacle="" -->
 
 **Подход:** модалка с 2 вкладками по образцу `DeployCard` `ManageBlock`/`OpStreamModal` (Компоненты) +
 `/api/stats/node` (Статистика) (отвергнуто: отдельные страницы — модалка ближе к ТЗ «нажатие на подрамку»).
@@ -471,6 +471,34 @@ pg_dump/tar самим — distillium уже покрывает + аплоады
 **Контракт:** `GET /api/backup/status` (питает виджет Ф6). следующий шаг: none (Волна 1 завершена).
 
 ## Журнал
+
+### Ф7 — done (2026-07-08)
+`rw/PanelManageModal.tsx` (модалка 2 вкладки `.seg`; **Компоненты**: `panelManageableComponents(savedForm)` —
+panel[target≠subpage]/subpage[target≠panel]/docker/test_tools[install_test_tools]/reverse_proxy с
+переустановить+удалить two-click, docker `removable:false` reinstall-only; op-стрим второй `useTaskStream`→
+`OpStreamModal` как DeployCard; **Данные сервера** редактор ip/ssh_user/ssh_password/ssh_port/panel_domain/
+sub_domain → `onEditJob` патчит `panel_jobs_<id>` по стабильному `id`, смена домена панели → amber-warning
+про пере-выпуск SSL; **Статистика**: `POST /api/stats/node` креды из savedForm → SecurityBlock(fail2ban)+
+TrafficBlock(vnstat), all-zero→«нет данных», offline→«Сервер недоступен»+Повторить). `PanelDashboard.tsx`:
+`manageJob` state + `onManage={setManageJob}` + `editJob` (функциональный setState по `id`, re-point открытой
+модалки) + модалка keyed by `id`. `PanelWidget.tsx` **без изменений** — подрамки уже кликабельны при `onManage`.
+Бэкенд `panel_deploy.py`: доведён `/api/panel/step` — добавлен `test_tools` uninstall (зеркало
+`node_ops._u_test_tools`), docker uninstall → понятный permanent FAILED (не «Ф7»). Reinstall всех 5 компонентов
+уже был в Ф4-скелете. Модалка на `.overlay/.modal` → мобильный bottom-sheet автоматически; секреты не
+логируются (op payload = savedForm, .env через тихий канал в `_install_panel`). Edge-cases: сервер недоступен
+(offline-стейт), правка ssh-пароля (только localStorage), смена домена (SSL-warning), удаление (two-click),
+vnstat/fail2ban нет («нет данных»), одна операция за раз (`opBusy`).
+Ревью (code+security): security **чисто по 7 пунктам** (reinstall panel НЕ регенерит .env — `__ENV_EXISTS__`
+guard; клиент-контролируемый savedForm ре-валидируется наследованием `PanelDeployRequest`; секреты не текут;
+uninstall без `-v`; docker-guard). Применены code-фиксы: **HIGH клик-управление гейтится на `success`**
+(`canManage` — иначе гонка `/api/panel/step` с идущим `run_panel_pipeline` по `/opt/remnawave`); M docstring +
+явное ограничение (docker/proxy/test_tools reinstall — только первичный сервер); L/M TrafficBlock/SecurityBlock
+`loading`-флаг (не зависают при `trafficStats:null` на online-боксе); L тест uninstall reverse_proxy, симметричное
+SSL-предупреждение для sub_domain, убран мёртвый импорт Globe, обновлён докстринг skeleton. Отклонены/defer:
+reinstall proxy к отдельному sub_server (UI не различает — задокументировано), uninstall `check=False` (baseline
+node_ops), `PanelDashboard.test.tsx` для editJob (полный рендер с WS непропорционален — логика верифицирована
+ревьюером), лишний `disable iperf3-server` в reverse_proxy-uninstall (косметика Ф4, безвреден `|| true`).
+Verify: backend **305 passed** (+8), frontend **128 passed**, tsc clean.
 
 ### Ф6 — done (2026-07-08)
 `auth/store.panelJobsKey`, `rw/PanelDashboard.tsx` (виджеты в `panel_jobs_<id>`, функциональный setState,
