@@ -13,7 +13,9 @@ import { CertsForm, type CertsFormData }  from "./components/CertsForm";
 import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
 import { UsersStats }                      from "./components/stats/UsersStats";
+import { SpeedTests }                      from "./components/stats/SpeedTests";
 import { Placeholder }                     from "./components/rw/Placeholder";
+import { SubPages }                        from "./components/rw/SubPages";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
 import { InfraProjects }                  from "./components/infra/InfraProjects";
@@ -48,6 +50,7 @@ const CRUMB: Record<Tab, [string, string]> = {
   "traffic":         ["Node Installer", "Трафик"],
   "settings":        ["Node Installer", "Настройки"],
   "stats-users":     ["Статистика", "Пользователи"],
+  "stats-speedtests": ["Статистика", "Тесты скорости"],
   "rw-install":      ["Remnawave", "Установка"],
   "rw-subpages":     ["Remnawave", "Страницы подписок"],
   "rw-variables":    ["Remnawave", "Переменные"],
@@ -185,9 +188,10 @@ export default function App() {
           {tab === "settings" && <Settings />}
           {tab === "traffic" && <TrafficRules />}
           {tab === "stats-users" && <UsersStats />}
+          {tab === "stats-speedtests" && <SpeedTests />}
 
           {tab === "rw-install"   && <Placeholder title="Установка" note="Появится в следующих фазах Волны 1" />}
-          {tab === "rw-subpages"  && <Placeholder title="Страницы подписок" note="Появится в следующих фазах Волны 1" />}
+          {tab === "rw-subpages"  && <SubPages />}
           {tab === "rw-variables" && <Placeholder title="Переменные" note="Появится в следующих фазах Волны 1" />}
           {tab === "rw-backup"    && <Placeholder title="Резервное копирование" note="Появится в следующих фазах Волны 1" />}
           {tab === "rw-migration" && <Placeholder title="Миграция" note="Раздел появится в Волне 2" />}
