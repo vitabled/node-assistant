@@ -146,19 +146,23 @@ export default function App() {
           height: 52, flex: "none", borderBottom: "1px solid var(--line-soft)",
           background: "var(--topbar-bg)", backdropFilter: "blur(var(--glass-blur))",
           display: "flex", alignItems: "center", gap: 12, padding: "0 20px",
+          position: "relative",
         }}>
           <nav style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, minWidth: 0 }}>
             <span className="dim trunc">{crumb[0]}</span>
             <ChevronRight size={13} style={{ color: "var(--t-faint)", flex: "none" }} />
             <span className="hi trunc" style={{ fontWeight: 600 }}>{crumb[1]}</span>
           </nav>
+          {/* Remnawave status — centered in the header (hidden ≤820px via .ni-clock) */}
+          <div className="ni-clock" style={{
+            position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)",
+            display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, whiteSpace: "nowrap",
+          }}>
+            <span className="dot" style={{ background: "var(--ok)" }} />
+            <span className="dim">Remnawave</span>
+            <span className="chip ok" style={{ padding: "1px 7px", fontSize: 10 }}>онлайн</span>
+          </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-            {/* Remnawave status (moved here from the sidebar footer) */}
-            <div className="ni-clock" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5 }}>
-              <span className="dot" style={{ background: "var(--ok)" }} />
-              <span className="dim">Remnawave</span>
-              <span className="chip ok" style={{ padding: "1px 7px", fontSize: 10 }}>онлайн</span>
-            </div>
             <AccountMenu />
           </div>
         </header>

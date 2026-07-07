@@ -1,7 +1,6 @@
-import { useState } from "react";
 import {
   Activity, Rocket, ShieldCheck, FileCode2, Network, Gauge, Settings2, Server,
-  PieChart, ChevronDown, CreditCard, FolderKanban, ReceiptText,
+  PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -41,17 +40,13 @@ interface Props {
 }
 
 export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
-  const isInfra = activeTab.startsWith("infra-");
-  const [infraOpen, setInfraOpen] = useState(isInfra);
-
-  const NavBtn = ({ item, nested }: { item: NavItemDef; nested?: boolean }) => {
+  const NavBtn = ({ item }: { item: NavItemDef }) => {
     const { Icon, label } = item;
     const active = activeTab === item.tab;
     return (
       <button
         className={`navitem ${active ? "active" : ""}`}
         onClick={() => onTabChange(item.tab)}
-        style={{ paddingLeft: nested ? 30 : undefined }}
       >
         <Icon size={16} style={{ flex: "none" }} />
         <span className="trunc">{label}</span>
@@ -90,19 +85,10 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         {NAV_MAIN.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Инфраструктура</p>
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Инфра-биллинг</p>
 
-        {/* Infra accordion group */}
-        <button className={`navitem ${isInfra && !infraOpen ? "active" : ""}`} onClick={() => setInfraOpen(v => !v)}>
-          <PieChart size={16} style={{ flex: "none" }} />
-          <span className="trunc" style={{ flex: 1 }}>Инфра-биллинг</span>
-          <ChevronDown size={13} style={{ color: "var(--t-low)", transform: infraOpen ? "none" : "rotate(-90deg)", transition: "transform .15s" }} />
-        </button>
-        {infraOpen && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
-            {INFRA_TABS.map(item => <NavBtn key={item.tab} item={item} nested />)}
-          </div>
-        )}
+        {/* Infra subtabs — flat section (no accordion) */}
+        {INFRA_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
       </div>
 
       {/* footer — Настройки (moved out of the main nav) */}
