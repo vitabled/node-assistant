@@ -470,9 +470,127 @@ def test_step_uninstall_docker_unsupported(monkeypatch):
     )
     assert r.status_code == 200
     task = task_store.get(r.json()["task_id"])
-    # docker uninstall is intentionally out of scope this wave → FAILED, not a
-    # silent no-op that lies about success.
+    # docker uninstall is intentionally out of scope → FAILED, not a silent no-op
+    # that lies about success.
     assert task is not None and task.status == TaskStatus.FAILED
+
+
+class _OpSSH:
+    """A fake session that lets every reinstall/uninstall op reach SUCCESS. Its
+    get_output returns BOTH container names so the panel + subpage running-checks
+    pass; get_script_output returns the .env sentinel; run_script captures scripts."""
+
+    scripts: list = []
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def connect(self, *a, **k):
+        pass
+
+    async def get_output(self, command):
+        return "remnawave-backend remnawave-subscription-page"
+
+    async def get_script_output(self, script, timeout=None):
+        return "__ENV_WRITTEN__"
+
+    async def run_script(self, script, task, check=True, timeout=None):
+        _OpSSH.scripts.append(script)
+        return 0
+
+    async def close(self):
+        pass
+
+
+@pytest.mark.parametrize(
+    "component", ["panel", "subpage", "docker", "test_tools", "reverse_proxy"]
+)
+def test_step_reinstall_all_components(monkeypatch, component):
+    monkeypatch.setattr(panel_deploy, "SSHSession", _OpSSH)
+    # target=both so subpage bundling + panel both resolve; other components ignore it
+    r = client.post(
+        "/api/panel/step",
+        headers=_auth(),
+        json={
+            "target": "both",
+            "ip": "1.2.3.4",
+            "ssh_password": "pw",
+            "panel_domain": "panel.example.com",
+            "sub_domain": "sub.example.com",
+            "component": component,
+            "action": "reinstall",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["task_type"] == "panel-op"
+    task = task_store.get(r.json()["task_id"])
+    assert task is not None and task.status == TaskStatus.SUCCESS
+
+
+def test_step_uninstall_subpage(monkeypatch):
+    _OpSSH.scripts = []
+    monkeypatch.setattr(panel_deploy, "SSHSession", _OpSSH)
+    r = client.post(
+        "/api/panel/step",
+        headers=_auth(),
+        json={
+            "target": "both",
+            "ip": "1.2.3.4",
+            "ssh_password": "pw",
+            "panel_domain": "panel.example.com",
+            "sub_domain": "sub.example.com",
+            "component": "subpage",
+            "action": "uninstall",
+        },
+    )
+    assert r.status_code == 200
+    task = task_store.get(r.json()["task_id"])
+    assert task is not None and task.status == TaskStatus.SUCCESS
+    assert any("/opt/remnawave-subpage" in s for s in _OpSSH.scripts)
+
+
+def test_step_uninstall_test_tools(monkeypatch):
+    # Ф7 added the test_tools teardown (was previously unsupported → FAILED).
+    _OpSSH.scripts = []
+    monkeypatch.setattr(panel_deploy, "SSHSession", _OpSSH)
+    r = client.post(
+        "/api/panel/step",
+        headers=_auth(),
+        json={
+            "target": "panel",
+            "ip": "1.2.3.4",
+            "ssh_password": "pw",
+            "panel_domain": "panel.example.com",
+            "component": "test_tools",
+            "action": "uninstall",
+        },
+    )
+    assert r.status_code == 200
+    task = task_store.get(r.json()["task_id"])
+    assert task is not None and task.status == TaskStatus.SUCCESS
+    assert any("iperf3" in s for s in _OpSSH.scripts)
+
+
+def test_step_uninstall_reverse_proxy(monkeypatch):
+    _OpSSH.scripts = []
+    monkeypatch.setattr(panel_deploy, "SSHSession", _OpSSH)
+    r = client.post(
+        "/api/panel/step",
+        headers=_auth(),
+        json={
+            "target": "panel",
+            "ip": "1.2.3.4",
+            "ssh_password": "pw",
+            "panel_domain": "panel.example.com",
+            "component": "reverse_proxy",
+            "action": "uninstall",
+        },
+    )
+    assert r.status_code == 200
+    task = task_store.get(r.json()["task_id"])
+    assert task is not None and task.status == TaskStatus.SUCCESS
+    # stops the proxy service (caddy/nginx), doesn't purge anything
+    assert any("systemctl stop" in s for s in _OpSSH.scripts)
 
 
 # ── (d) secrets never reach the Task log ───────────────────────

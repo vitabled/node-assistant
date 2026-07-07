@@ -112,6 +112,10 @@ export function PanelWidget({ job, onRemove, onRetry, onStatusChange, onManage }
     (stepStatus.status === "pending" && logs.length === 0 && !job.finalStatus);
   const isFailed  = stepStatus.status === "failed";
   const isDone    = stepStatus.status === "success" || stepStatus.status === "failed";
+  // Manage only after a SUCCESSFUL install — opening the modal mid-run would let
+  // a /api/panel/step op race the still-running run_panel_pipeline on the same
+  // /opt/remnawave (concurrent docker compose / .env writes). Mirrors DeployCard.
+  const canManage = stepStatus.status === "success";
 
   const subStatusOf = (want: boolean, ip: string, port: number): SubStatus => {
     if (!want) return "absent";
@@ -190,7 +194,7 @@ export function PanelWidget({ job, onRemove, onRetry, onStatusChange, onManage }
             title="Панель" icon={<Server size={13} />}
             status={subStatusOf(wantPanel, p.ip, p.ssh_port)}
             ip={p.ip} domain={p.panel_domain}
-            onClick={onManage && wantPanel ? () => onManage(job) : undefined}
+            onClick={onManage && wantPanel && canManage ? () => onManage(job) : undefined}
             extra={wantPanel ? (
               <Row icon={<Database size={11} />} label="Резервное копирование" value="не настроено" muted />
             ) : undefined}
@@ -199,7 +203,7 @@ export function PanelWidget({ job, onRemove, onRetry, onStatusChange, onManage }
             title="Подписка" icon={<LayoutTemplate size={13} />}
             status={subStatusOf(wantSub, subIp, subPort)}
             ip={wantSub ? subIp : ""} domain={p.sub_domain}
-            onClick={onManage && wantSub ? () => onManage(job) : undefined}
+            onClick={onManage && wantSub && canManage ? () => onManage(job) : undefined}
           />
         </div>
 

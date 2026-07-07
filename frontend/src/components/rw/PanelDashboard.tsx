@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Plus, ServerCog, X } from "lucide-react";
 import { PanelWidget } from "./PanelWidget";
+import { PanelManageModal } from "./PanelManageModal";
 import { PanelDeployForm, type PanelDeployPayload } from "./PanelDeployForm";
 import { panelJobsKey } from "../../auth/store";
 
@@ -34,8 +35,9 @@ function saveJobs(jobs: PanelJobSummary[]) {
 }
 
 export function PanelDashboard() {
-  const [jobs,     setJobs]     = useState<PanelJobSummary[]>(loadJobs);
-  const [showForm, setShowForm] = useState(false);
+  const [jobs,      setJobs]      = useState<PanelJobSummary[]>(loadJobs);
+  const [showForm,  setShowForm]  = useState(false);
+  const [manageJob, setManageJob] = useState<PanelJobSummary | null>(null);
 
   const submit = async (payload: PanelDeployPayload): Promise<string> => {
     const res = await fetch("/api/panel/deploy", {
@@ -97,6 +99,18 @@ export function PanelDashboard() {
     });
   };
 
+  // Ф7 — patch a job's saved server-data (ip / domains / ssh) in place. Keyed by
+  // the STABLE id (not taskId — a retry mints a new taskId, the id survives). The
+  // open manage modal is re-pointed at the fresh record so it reflects the edit.
+  const editJob = (updated: PanelJobSummary) => {
+    setJobs(prev => {
+      const next = prev.map(j => (j.id === updated.id ? updated : j));
+      saveJobs(next);
+      return next;
+    });
+    setManageJob(updated);
+  };
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-6xl mx-auto px-6 py-6 ni-pagebody">
@@ -127,6 +141,7 @@ export function PanelDashboard() {
                 onRemove={removeJob}
                 onRetry={retryJob}
                 onStatusChange={updateJobStatus}
+                onManage={setManageJob}
               />
             ))}
           </div>
@@ -135,6 +150,15 @@ export function PanelDashboard() {
 
       {showForm && (
         <FormModal onClose={() => setShowForm(false)} onSubmit={addJob} />
+      )}
+
+      {manageJob && (
+        <PanelManageModal
+          key={manageJob.id}
+          job={manageJob}
+          onClose={() => setManageJob(null)}
+          onEditJob={editJob}
+        />
       )}
     </div>
   );
