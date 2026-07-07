@@ -21,6 +21,7 @@ from app.api import (
     hosts,
     user_stats,
     testservers,
+    panel_deploy,
 )
 from app.api.auth import require_account
 
@@ -83,6 +84,7 @@ app.include_router(domains.router, dependencies=_auth)
 app.include_router(hosts.router, dependencies=_auth)
 app.include_router(user_stats.router, dependencies=_auth)
 app.include_router(testservers.router, dependencies=_auth)
+app.include_router(panel_deploy.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.
