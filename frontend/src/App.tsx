@@ -12,6 +12,7 @@ import { Hosts }                           from "./components/Hosts";
 import { CertsForm, type CertsFormData }  from "./components/CertsForm";
 import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
+import { UsersStats }                      from "./components/stats/UsersStats";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
 import { InfraProjects }                  from "./components/infra/InfraProjects";
@@ -45,6 +46,7 @@ const CRUMB: Record<Tab, [string, string]> = {
   "hosts":           ["Node Installer", "Хосты"],
   "traffic":         ["Node Installer", "Трафик"],
   "settings":        ["Node Installer", "Настройки"],
+  "stats-users":     ["Статистика", "Пользователи"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
   "infra-projects":  ["Инфра-биллинг", "Проекты"],
@@ -175,6 +177,7 @@ export default function App() {
           {tab === "hosts" && <Hosts />}
           {tab === "settings" && <Settings />}
           {tab === "traffic" && <TrafficRules />}
+          {tab === "stats-users" && <UsersStats />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}

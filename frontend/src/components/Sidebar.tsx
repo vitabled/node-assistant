@@ -1,12 +1,13 @@
 import {
   Activity, Rocket, ShieldCheck, FileCode2, Network, Gauge, Settings2, Server,
   PieChart, CreditCard, FolderKanban, ReceiptText,
-  KeyRound, SlidersHorizontal,
+  KeyRound, SlidersHorizontal, Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
+  | "stats-users"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
@@ -19,6 +20,10 @@ const NAV_MAIN: NavItemDef[] = [
   { tab: "templates", label: "Шаблоны",      Icon: FileCode2 },
   { tab: "hosts",     label: "Хосты",        Icon: Network   },
   { tab: "traffic",   label: "Трафик",       Icon: Gauge     },
+];
+
+const STATS_TABS: NavItemDef[] = [
+  { tab: "stats-users", label: "Пользователи", Icon: Users },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
@@ -83,6 +88,10 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
       <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", display: "flex", flexDirection: "column", gap: 2, paddingTop: 8 }}>
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Управление</p>
         {NAV_MAIN.map(item => <NavBtn key={item.tab} item={item} />)}
+
+        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Статистика</p>
+        {STATS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Инфра-биллинг</p>
