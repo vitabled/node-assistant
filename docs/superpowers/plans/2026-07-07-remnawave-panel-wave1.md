@@ -144,7 +144,7 @@ Remnawave-фазы). Группа «Статистика» — из плана `
 - **distillium restore деструктивен** — двойной confirm в UI перед restore.
 
 ## Фаза 1 — Тест-серверы + общий инсталлер тест-инструментов + Settings-вкладка
-<!-- circle: status=pending order=10 deps=[] autonomy=auto obstacle="" -->
+<!-- circle: status=done order=10 deps=[] autonomy=auto obstacle="" -->
 
 **Подход:** per-account реестр тест-серверов + деплой по SSH, по образцу `checker_registry.py`; ОБЩИЙ скрипт
 установки тест-инструментов (iperf3 + speedtest-cli + xray-client) выделяем в переиспользуемый модуль — его
@@ -471,3 +471,21 @@ pg_dump/tar самим — distillium уже покрывает + аплоады
 **Контракт:** `GET /api/backup/status` (питает виджет Ф6). следующий шаг: none (Волна 1 завершена).
 
 ## Журнал
+
+### Ф1 — done (2026-07-07)
+`test_tools.py` (инсталлер iperf3+Ookla speedtest c python-fallback+xray-core, все опц. сбои → `[warn]`;
+`iperf_server_script` systemd-юнит c явным fail при незапуске (порт занят → FAILED, сервер НЕ регистрируется);
+`iperf_client_script` JSON+маркеры+ping/traceroute; `parse_xray_link` vless/trojan/vmess/ss → xray-конфиг
+c socks-inbound 127.0.0.1:10808, фиксированные ошибки без утечки ссылки; `xray_link_speedtest_script`
+heredoc+trap, замеры down/up/ping через speed.cloudflare.com). `testserver_registry.py` (per-account
+`testservers.json`, дубликат ip+port → 409, `deploy_script` c UFW-allowlist backend+ноды, shlex.quote).
+`/api/testservers` CRUD + `/deploy` (транзитные креды, стрим-Task). `settings/TestServers.tsx` + вкладка
+«Сервера для тестирования»; деплой live-отслеживается `useTaskStream` (ошибка/успех → тост; ref против
+stale-closure). TDD: тесты парсера первыми. Ревью: security — чисто (heredoc-побег невозможен: json.dumps
+ensure_ascii + `<<'XRAYCFG'`); code — применены H1 (стрим в UI), M2 (явный fail iperf-сервиса), L6 (409);
+отклонены: гонка стора (унаследованный паттерн checker_registry), IPv6-приём (осознанно), socks5-проба.
+Отклонения от спеки: `test_tools_install_script()` без `extras` (все 3 инструмента всегда),
+`xray_link_speedtest_script(link)` без `mode` (down+up+ping всегда) — упрощение, потребители Ф2/Ф2b/Ф4
+учитывают; fallback-бинарь называется `speedtest-cli` (Ookla — `speedtest`) — раннер Ф2 должен проверять оба.
+Попутно: починен `StepProgress.test.tsx`, сломанный Ф5 прошлого плана (иерархическая нумерация).
+Verify: backend **207 passed** (+24), frontend **103 passed** (было 102+1 fail), tsc clean.
