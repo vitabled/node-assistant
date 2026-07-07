@@ -263,7 +263,7 @@ py_compile` + `tsc --noEmit`.
 Волны 1 завершён).
 
 ## Фаза 3 — Сайдбар-группа «Remnawave» + скелет разделов
-<!-- circle: status=pending order=30 deps=[] autonomy=auto obstacle="" -->
+<!-- circle: status=done order=30 deps=[] autonomy=auto obstacle="" -->
 
 **Подход:** новая группа + 6 Tab'ов; «Миграция»/«Профили» — заглушки-плейсхолдеры Волны 2 (отвергнуто:
 не создавать их сейчас — тогда Волна 2 переверстает сайдбар; дешевле заложить заглушки).
@@ -471,6 +471,14 @@ pg_dump/tar самим — distillium уже покрывает + аплоады
 **Контракт:** `GET /api/backup/status` (питает виджет Ф6). следующий шаг: none (Волна 1 завершена).
 
 ## Журнал
+
+### Ф3 — done (2026-07-07)
+Сайдбар-группа «Remnawave» (плоская секция, как «Статистика»/«Инфра-биллинг») + Tab-union `rw-install/
+subpages/variables/backup/migration/profiles`; `rw/Placeholder.tsx` (переиспользуемая заглушка). App:
+роутинг + CRUMB — install/subpages/variables/backup → Placeholder «Появится в следующих фазах Волны 1»
+(Ф4-Ф9 заменят), migration/profiles → «Волна 2». Мобильный drawer подхватывает автоматически. Чисто
+аддитивная UI-структура без логики/security — self-review не запускал (skipped:trivial-ui), diff просмотрен
+вручную. Verify: tsc clean, frontend **106 passed** (+2 Sidebar-теста), render-смоук 6 rw-табов pageerrors=0.
 
 ### Ф2 — done (2026-07-07)
 Пайплайн **13→14 шагов**: `step_test_tools` на позиции 5 (внутри «Оптимизация ОС», гейт `install_test_tools`
