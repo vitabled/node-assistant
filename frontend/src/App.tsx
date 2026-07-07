@@ -13,6 +13,7 @@ import { CertsForm, type CertsFormData }  from "./components/CertsForm";
 import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
 import { UsersStats }                      from "./components/stats/UsersStats";
+import { Placeholder }                     from "./components/rw/Placeholder";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
 import { InfraProjects }                  from "./components/infra/InfraProjects";
@@ -47,6 +48,12 @@ const CRUMB: Record<Tab, [string, string]> = {
   "traffic":         ["Node Installer", "Трафик"],
   "settings":        ["Node Installer", "Настройки"],
   "stats-users":     ["Статистика", "Пользователи"],
+  "rw-install":      ["Remnawave", "Установка"],
+  "rw-subpages":     ["Remnawave", "Страницы подписок"],
+  "rw-variables":    ["Remnawave", "Переменные"],
+  "rw-backup":       ["Remnawave", "Резервное копирование"],
+  "rw-migration":    ["Remnawave", "Миграция"],
+  "rw-profiles":     ["Remnawave", "Профили"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
   "infra-projects":  ["Инфра-биллинг", "Проекты"],
@@ -178,6 +185,13 @@ export default function App() {
           {tab === "settings" && <Settings />}
           {tab === "traffic" && <TrafficRules />}
           {tab === "stats-users" && <UsersStats />}
+
+          {tab === "rw-install"   && <Placeholder title="Установка" note="Появится в следующих фазах Волны 1" />}
+          {tab === "rw-subpages"  && <Placeholder title="Страницы подписок" note="Появится в следующих фазах Волны 1" />}
+          {tab === "rw-variables" && <Placeholder title="Переменные" note="Появится в следующих фазах Волны 1" />}
+          {tab === "rw-backup"    && <Placeholder title="Резервное копирование" note="Появится в следующих фазах Волны 1" />}
+          {tab === "rw-migration" && <Placeholder title="Миграция" note="Раздел появится в Волне 2" />}
+          {tab === "rw-profiles"  && <Placeholder title="Профили" note="Раздел появится в Волне 2" />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}
