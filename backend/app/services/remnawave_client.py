@@ -178,6 +178,42 @@ class RemnavaveClient:
         data = await self._req("POST", "/api/nodes", json=body)
         return _unwrap(data)
 
+    # ── Hosts ──────────────────────────────────────────────────
+
+    async def create_host(
+        self,
+        *,
+        inbound: dict,
+        remark: str,
+        address: str,
+        port: int,
+        nodes: Optional[list[str]] = None,
+        **optional: Any,
+    ) -> dict:
+        """
+        POST /api/hosts (CreateHostRequestDto).
+        Required: inbound (OBJECT {configProfileUuid, configProfileInboundUuid}),
+        remark, address, port. Optional CreateHostRequestDto fields (already in
+        Remnawave camelCase, e.g. sni/host/path/alpn/fingerprint/securityLayer/
+        isHidden/vlessRouteId/shuffleHost/serverDescription/overrideSniFromAddress/
+        keepSniBlank/excludedInternalSquads/xhttpExtraParams/…) are passed through
+        **optional; None values are dropped so the API keeps its own defaults.
+        Response: { response: { uuid, ... } }. Returns the `response` payload.
+        """
+        body: dict[str, Any] = {
+            "inbound": inbound,
+            "remark": remark,
+            "address": address,
+            "port": port,
+        }
+        if nodes:
+            body["nodes"] = nodes
+        for key, value in optional.items():
+            if value is not None:
+                body[key] = value
+        data = await self._req("POST", "/api/hosts", json=body)
+        return _unwrap(data)
+
     async def get_internal_squad(self, squad_uuid: str) -> dict:
         """
         GET /api/internal-squads/{uuid}

@@ -56,6 +56,9 @@ class DeployRequest(BaseModel):
     # the missing ones. Values are the node_ops `Component` names (unknown ones are
     # ignored by the pipeline). Empty (default) → full deploy.
     skip_components: list[str] = Field(default_factory=list)
+    # Host-templates (from the deploy Template's host_template_ids) the operator
+    # UNchecked in the form → NOT auto-created as Remnawave hosts at deploy (Ф6).
+    disabled_host_template_ids: list[str] = Field(default_factory=list)
 
     # ── HAProxy relay mode ────────────────────────────────────
     haproxy_source_port: int = Field(default=443, ge=1, le=65535)

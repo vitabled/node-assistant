@@ -1580,6 +1580,155 @@ fi
 
 
 # ──────────────────────────────────────────────────────────────
+# Ф6 — Auto-create Remnawave hosts from local host-templates
+# ──────────────────────────────────────────────────────────────
+
+def _map_host_optional(tpl: dict) -> dict:
+    """Map a local HostTemplateBody dict (accounts/<id>/hosts.json) → the OPTIONAL
+    CreateHostRequestDto fields (Remnawave camelCase). Only non-empty / enabled
+    values are included so the API keeps its own defaults for everything else.
+    These strings go into a JSON API body (NOT bash), so no shell-escaping."""
+    import re as _re
+
+    out: dict = {}
+
+    def put_str(key: str, val) -> None:
+        if isinstance(val, str) and val.strip():
+            out[key] = val
+
+    put_str("sni",               tpl.get("sni"))
+    put_str("host",              tpl.get("host"))
+    put_str("path",              tpl.get("path"))
+    put_str("alpn",              tpl.get("alpn"))
+    put_str("fingerprint",       tpl.get("fingerprint"))
+    put_str("serverDescription", tpl.get("server_description"))
+
+    # security_layer: local values are lowercase (default|tls|reality); Remnawave's
+    # host enum is DEFAULT|TLS|NONE. Skip "default" (API default already); map
+    # tls/none; DROP anything else (e.g. "reality" — not a host-level enum in
+    # Remnawave) so a stray value can't 400 the whole host-create.
+    _sec = str(tpl.get("security_layer") or "").strip().lower()
+    if _sec in ("tls", "none"):
+        out["securityLayer"] = _sec.upper()
+
+    if tpl.get("sni_from_address"): out["overrideSniFromAddress"] = True
+    if tpl.get("sni_empty"):        out["keepSniBlank"] = True
+    if tpl.get("hide_host"):        out["isHidden"] = True
+    if tpl.get("shuffle_host"):     out["shuffleHost"] = True
+    if tpl.get("x25519mlkem768"):   out["mihomoX25519"] = True
+    # local «Хост виден» off (visible=False) → Remnawave isDisabled=True (inverse).
+    if tpl.get("visible") is False:
+        out["isDisabled"] = True
+
+    route_id = tpl.get("vless_route_id")
+    if isinstance(route_id, int) and route_id > 0:
+        out["vlessRouteId"] = route_id
+
+    excl_squads = tpl.get("exclude_squads")
+    if isinstance(excl_squads, list) and excl_squads:
+        out["excludedInternalSquads"] = excl_squads
+    excl_sub = tpl.get("exclude_sub_types")
+    if isinstance(excl_sub, list) and excl_sub:
+        # local values are lowercase (xray_json…); Remnawave's enum is uppercase.
+        out["excludeFromSubscriptionTypes"] = [str(s).upper() for s in excl_sub if str(s).strip()]
+
+    for local_key, api_key in (
+        ("xhttp",      "xhttpExtraParams"),
+        ("mux",        "muxParams"),
+        ("sockopt",    "sockoptParams"),
+        ("final_mask", "finalMask"),
+    ):
+        v = tpl.get(local_key)
+        if isinstance(v, dict) and v:
+            out[api_key] = v
+
+    tag = tpl.get("tag")
+    if isinstance(tag, str) and _re.fullmatch(r"[A-Z0-9_:]+", tag) and len(tag) <= 36:
+        out["tags"] = [tag]
+
+    # NOT mapped by design: `xray_json_template` (local free text) has no clean
+    # target — Remnawave's `xrayJsonTemplateUuid` expects a UUID to a separate
+    # entity, not inline JSON — so it's intentionally omitted.
+    return out
+
+
+async def step_create_hosts(
+    task: Task,
+    client,
+    req: "DeployRequest",
+    node_uuid: str,
+    config_profile_uuid: str,
+    host_template_ids: list[str],
+) -> None:
+    """
+    Ф6 — auto-create Remnawave hosts from the account's local host-templates.
+
+    For each selected host-template (the Template's `host_template_ids` MINUS the
+    deploy's `disabled_host_template_ids`), POST /api/hosts with:
+      - address = the new node's FQDN (req.domain),
+      - nodes   = [node_uuid],
+      - inbound = { configProfileUuid: <node's profile>, configProfileInboundUuid:
+                    <template.inbound> } (the local `inbound` free-text field is
+                    treated as the inbound uuid),
+    plus mapped optional fields. Hosts are ADDITIVE: a per-host failure is logged
+    as a warning and skipped — it never fails the deploy. A template with an empty
+    `inbound` is invalid for POST /api/hosts → skipped with a log.
+    """
+    from app.services import storage as _storage
+    from app.services.remnawave_client import RemnavaveError
+
+    disabled = set(req.disabled_host_template_ids or [])
+    wanted = [hid for hid in (host_template_ids or []) if hid not in disabled]
+    if not wanted:
+        return
+
+    all_hosts = {
+        h["id"]: h
+        for h in _storage.load_hosts()
+        if isinstance(h, dict) and h.get("id")
+    }
+    task.add_log("\n\x1b[36m[Хосты] Создаю хосты Remnawave из шаблонов...\x1b[0m")
+
+    suffix = req.domain.split(".")[0]
+    for hid in wanted:
+        tpl = all_hosts.get(hid)
+        if tpl is None:
+            task.add_log(f"\x1b[33m[Хосты] Шаблон хоста id={hid} не найден — пропуск.\x1b[0m")
+            continue
+        inbound_uuid = (tpl.get("inbound") or "").strip()
+        if not inbound_uuid:
+            task.add_log(
+                f"\x1b[33m[Хосты] Шаблон «{tpl.get('remark', hid)}» без inbound — "
+                f"пропуск (POST /api/hosts требует inbound).\x1b[0m"
+            )
+            continue
+        # Remnawave's host `remark` maxLength is 40 (local allows 200) — truncate
+        # or the whole create 400s (silently, since failures are caught below).
+        remark = f"{tpl.get('remark') or 'host'} · {suffix}"[:40]
+        try:
+            await client.create_host(
+                inbound={
+                    "configProfileUuid": config_profile_uuid,
+                    "configProfileInboundUuid": inbound_uuid,
+                },
+                remark=remark,
+                address=req.domain,
+                port=int(tpl.get("port") or req.remnanode_port),
+                nodes=[node_uuid],
+                **_map_host_optional(tpl),
+            )
+            task.add_log(f"\x1b[32m[Хосты] Хост «{remark}» создан (address={req.domain}).\x1b[0m")
+        except RemnavaveError as exc:
+            task.add_log(
+                f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Не удалось создать хост «{remark}»: {exc.detail}\x1b[0m"
+            )
+        except Exception as exc:
+            task.add_log(
+                f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Ошибка при создании хоста «{remark}»: {exc}\x1b[0m"
+            )
+
+
+# ──────────────────────────────────────────────────────────────
 # Pre-deploy: Register node in Remnawave, obtain token for SSH step
 # ──────────────────────────────────────────────────────────────
 
@@ -1695,6 +1844,13 @@ async def step_remnawave_pre_deploy(
                     f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Не удалось привязать профиль к скваду "
                     f"{sq_id[:8]}…: {exc.detail}\x1b[0m"
                 )
+
+    # Step B3: auto-create Remnawave hosts from the account's host-templates (Ф6).
+    # Reuses the SAME configProfileUuid create_node was given; additive/non-fatal.
+    await step_create_hosts(
+        task, client, req, node_uuid, config_profile_uuid,
+        tpl.get("host_template_ids", []) if isinstance(tpl, dict) else [],
+    )
 
     # Step C: Fetch the real SECRET_KEY (long base64 token) — NOT the UUID.
     # The container authenticates with this, not with the node uuid.
