@@ -653,10 +653,49 @@ function MonitoringTab() {
 
 // ── Test servers tab (Ф1, wave1) ──────────────────────────────
 
+// Default metric level for the «Тесты скорости» run form (device-global,
+// localStorage `ni_speedtest_metrics`). Prefills SpeedTests.tsx on mount.
+const SPEEDTEST_METRICS_KEY = "ni_speedtest_metrics";
+const SPEEDTEST_METRIC_LEVELS = [
+  { level: 1, label: "Скорость" },
+  { level: 2, label: "+пинг/джиттер" },
+  { level: 3, label: "+трассировка" },
+];
+
+function SpeedtestDefaults() {
+  const [level, setLevel] = useState(() => {
+    const v = parseInt(localStorage.getItem(SPEEDTEST_METRICS_KEY) || "1", 10);
+    return v >= 1 && v <= 3 ? v : 1;
+  });
+  const pick = (l: number) => {
+    setLevel(l);
+    try { localStorage.setItem(SPEEDTEST_METRICS_KEY, String(l)); } catch {}
+  };
+  return (
+    <div className="card card-p">
+      <span className="micro flex items-center gap-2 mb-1">Метрики по умолчанию</span>
+      <p className="hint mb-3">Набор метрик, предвыбранный в разделе «Тесты скорости» (кумулятивно).</p>
+      <div className="flex items-center gap-1">
+        {SPEEDTEST_METRIC_LEVELS.map(m => (
+          <button key={m.level} type="button" onClick={() => pick(m.level)}
+            className={`px-2 py-1 rounded border text-[11px] transition-colors ${
+              level === m.level
+                ? "bg-[var(--accent-dim)] border-[var(--accent-line)] text-[var(--accent-hi)]"
+                : "bg-[var(--bg2)] border-[var(--line)] text-[var(--t-low)] hover:bg-[var(--bg3)]"
+            }`}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TestServersTab() {
   return (
     <div className="flex flex-col gap-4 max-w-2xl">
       <TestServers />
+      <SpeedtestDefaults />
     </div>
   );
 }

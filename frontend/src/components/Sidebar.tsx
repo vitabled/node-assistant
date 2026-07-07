@@ -2,13 +2,13 @@ import {
   Activity, Rocket, ShieldCheck, FileCode2, Network, Gauge, Settings2, Server,
   PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal, Users,
-  ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog,
+  ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
-  | "stats-users"
+  | "stats-users" | "stats-speedtests"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
@@ -25,7 +25,8 @@ const NAV_MAIN: NavItemDef[] = [
 ];
 
 const STATS_TABS: NavItemDef[] = [
-  { tab: "stats-users", label: "Пользователи", Icon: Users },
+  { tab: "stats-users",      label: "Пользователи",   Icon: Users },
+  { tab: "stats-speedtests", label: "Тесты скорости", Icon: Zap   },
 ];
 
 const RW_TABS: NavItemDef[] = [

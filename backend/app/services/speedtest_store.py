@@ -132,6 +132,21 @@ def _history(
     return [dict(r) for r in rows]
 
 
+def _history_by_kind(
+    account_id: Optional[str], kinds: tuple[str, ...], limit: int
+) -> list[dict[str, Any]]:
+    if not kinds:
+        return []  # `IN ()` is a SQLite syntax error
+    placeholders = ", ".join("?" for _ in kinds)
+    with _connect(account_id) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM runs WHERE kind IN ({placeholders}) "
+            "ORDER BY ts DESC, id DESC LIMIT ?",
+            (*kinds, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── async API ──────────────────────────────────────────────────
 
 
@@ -143,6 +158,14 @@ async def history(
     account_id: Optional[str], resource_key: str, limit: int = 20
 ) -> list[dict[str, Any]]:
     return await asyncio.to_thread(_history, account_id, resource_key, limit)
+
+
+async def history_by_kind(
+    account_id: Optional[str], kinds: tuple[str, ...], limit: int = 50
+) -> list[dict[str, Any]]:
+    """Recent runs of the given kinds (newest first), across all resource keys.
+    Used by the «Тесты скорости» section to list pair + xray runs together."""
+    return await asyncio.to_thread(_history_by_kind, account_id, tuple(kinds), limit)
 
 
 async def latest(
