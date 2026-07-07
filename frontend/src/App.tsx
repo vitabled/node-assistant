@@ -15,6 +15,7 @@ import { TrafficRules }                   from "./components/TrafficRules";
 import { UsersStats }                      from "./components/stats/UsersStats";
 import { SpeedTests }                      from "./components/stats/SpeedTests";
 import { Placeholder }                     from "./components/rw/Placeholder";
+import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
@@ -190,7 +191,7 @@ export default function App() {
           {tab === "stats-users" && <UsersStats />}
           {tab === "stats-speedtests" && <SpeedTests />}
 
-          {tab === "rw-install"   && <Placeholder title="Установка" note="Появится в следующих фазах Волны 1" />}
+          {tab === "rw-install"   && <PanelDashboard />}
           {tab === "rw-subpages"  && <SubPages />}
           {tab === "rw-variables" && <Placeholder title="Переменные" note="Появится в следующих фазах Волны 1" />}
           {tab === "rw-backup"    && <Placeholder title="Резервное копирование" note="Появится в следующих фазах Волны 1" />}

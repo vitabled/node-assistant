@@ -101,6 +101,9 @@ export function logoutActive() {
 export function deployJobsKey(id: string | null = state.activeId): string {
   return `deploy_jobs_${id ?? "none"}`;
 }
+export function panelJobsKey(id: string | null = state.activeId): string {
+  return `panel_jobs_${id ?? "none"}`;
+}
 export function tabKey(id: string | null = state.activeId): string {
   return `ni_tab_${id ?? "none"}`;
 }
