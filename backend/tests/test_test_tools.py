@@ -206,6 +206,16 @@ def test_install_script_essentials():
     assert "exit 1" not in s
 
 
+def test_speedtest_run_script_markers_and_fallback():
+    s = tt.speedtest_run_script()
+    assert "SPEEDTEST_JSON_START" in s and "SPEEDTEST_JSON_END" in s
+    assert "SPEEDTEST_KIND=ookla" in s and "SPEEDTEST_KIND=python" in s
+    assert "SPEEDTEST_NONE" in s  # neither CLI installed → marker, not an error
+    assert "--accept-license" in s and "--accept-gdpr" in s and "-f json" in s
+    assert "speedtest-cli --json" in s
+    assert "exit 1" not in s  # never fatal
+
+
 def test_iperf_server_script():
     s = tt.iperf_server_script(5999)
     assert "iperf3-server.service" in s

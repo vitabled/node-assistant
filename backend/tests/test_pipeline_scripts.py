@@ -40,11 +40,12 @@ def test_every_step_index_is_begun_and_in_range():
 
 
 def test_step_labels_count_and_key_renames():
-    assert len(STEP_LABELS) == 13
-    assert STEP_LABELS[8] == "Cloudflare DNS + SSL"     # step 9, standalone
-    assert STEP_LABELS[10] == "Уникализация маскировочного сайта"  # step 11 (before WARP)
-    assert STEP_LABELS[11] == "WARP Native"             # step 12
-    assert STEP_LABELS[12] == "Hysteria2"               # step 13 (renamed from SSL Certbot)
+    assert len(STEP_LABELS) == 14
+    assert STEP_LABELS[4] == "Тест-инструменты"         # step 5 (Ф2 wave1, in «Оптимизация ОС»)
+    assert STEP_LABELS[9] == "Cloudflare DNS + SSL"     # step 10, standalone
+    assert STEP_LABELS[11] == "Уникализация маскировочного сайта"  # step 12 (before WARP)
+    assert STEP_LABELS[12] == "WARP Native"             # step 13
+    assert STEP_LABELS[13] == "Hysteria2"               # step 14 (renamed from SSL Certbot)
 
 
 class _Task:
@@ -91,6 +92,35 @@ class _Req:
         self.new_ssh_port = kw.get("new_ssh_port", 2222)
         self.allow_ssh_all = kw.get("allow_ssh_all", False)
         self.whitelist_ips = kw.get("whitelist_ips", "")
+        self.install_test_tools = kw.get("install_test_tools", True)
+
+
+# ── step_test_tools (Ф2 wave1: step 5, optional + non-fatal) ──
+
+def test_step_test_tools_skips_when_disabled():
+    ssh, task = _SSH(), _Task()
+    asyncio.run(pipeline.step_test_tools(ssh, task, _Req(install_test_tools=False)))
+    assert ssh.scripts == []  # installer never ran
+    assert any("install_test_tools=false" in ln for ln in task.logs)
+
+
+def test_step_test_tools_runs_shared_installer():
+    ssh, task = _SSH(), _Task()
+    asyncio.run(pipeline.step_test_tools(ssh, task, _Req()))
+    assert ssh.scripts, "installer script must run"
+    s = ssh.scripts[-1]
+    assert "iperf3" in s and "speedtest" in s  # the Ф1 shared installer
+
+
+def test_step_test_tools_failure_is_nonfatal():
+    class _BoomSSH:
+        async def run_script(self, *a, **k):
+            raise RuntimeError("network down")
+
+    task = _Task()
+    # must NOT raise — test tools are optional, the deploy continues
+    asyncio.run(pipeline.step_test_tools(_BoomSSH(), task, _Req()))
+    assert any("ПРЕДУПРЕЖДЕНИЕ" in ln for ln in task.logs)
 
 
 # ── _parse_ip_list ────────────────────────────────────────────

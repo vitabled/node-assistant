@@ -60,6 +60,28 @@ echo "[test-tools] Готово."
 """
 
 
+def speedtest_run_script() -> str:
+    """External-channel speedtest, marker-delimited JSON (Ф2 wave1). Prefers the
+    Ookla CLI (`speedtest`, bytes/s bandwidths), falls back to the python
+    `speedtest-cli` (bits/s); emits SPEEDTEST_NONE when neither is installed.
+    Never fatal — the caller parses both JSON shapes off SPEEDTEST_KIND."""
+    return """\
+if command -v speedtest >/dev/null 2>&1; then
+    echo "SPEEDTEST_KIND=ookla"
+    echo "SPEEDTEST_JSON_START"
+    speedtest --accept-license --accept-gdpr -f json 2>/dev/null || true
+    echo "SPEEDTEST_JSON_END"
+elif command -v speedtest-cli >/dev/null 2>&1; then
+    echo "SPEEDTEST_KIND=python"
+    echo "SPEEDTEST_JSON_START"
+    speedtest-cli --json 2>/dev/null || true
+    echo "SPEEDTEST_JSON_END"
+else
+    echo "SPEEDTEST_NONE"
+fi
+"""
+
+
 def iperf_server_script(port: int) -> str:
     """systemd unit `iperf3-server.service` listening on `port`, enabled now."""
     port = int(port)
@@ -365,11 +387,11 @@ def xray_link_speedtest_script(link: str) -> str:
     cfg_json = json.dumps(parse_xray_link(link), indent=2)
     return f"""\
 set -u
-CFG="/tmp/xray-test-$$-$RANDOM.json"
+CFG=$(mktemp /tmp/xray-test-XXXXXXXX.json)
+chmod 600 "$CFG"
 cat > "$CFG" <<'XRAYCFG'
 {cfg_json}
 XRAYCFG
-chmod 600 "$CFG"
 if [ ! -x /usr/local/bin/xray ]; then
     echo "[warn] xray-тест недоступен (нет /usr/local/bin/xray)"
     rm -f "$CFG"

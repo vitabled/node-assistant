@@ -280,6 +280,35 @@ echo "[TrafficGuard] backend IP {backend_ip} whitelisted."
 
 
 # ──────────────────────────────────────────────────────────────
+# Step 5 – Test toolkit (iperf3 + speedtest CLI + xray-core)
+# Shared installer from test_tools.py (Ф1 wave1) so the node can run the
+# speed-test probes (Ф2). Optional + NON-FATAL: gated on install_test_tools,
+# and any install failure logs a warning without failing the deploy.
+# Runs in BOTH modes (remnanode and haproxy — before the mode branch).
+# ──────────────────────────────────────────────────────────────
+
+async def step_test_tools(ssh: SSHSession, task: Task, req: "DeployRequest") -> None:
+    _begin_step(task, 5)
+
+    if not req.install_test_tools:
+        task.add_log(
+            "\x1b[90m[test-tools] Пропущено по настройке (install_test_tools=false).\x1b[0m"
+        )
+        return
+
+    from app.services.test_tools import test_tools_install_script
+
+    try:
+        await ssh.run_script(test_tools_install_script(), task, check=False, timeout=300)
+        task.add_log("\x1b[32m[test-tools] Инструменты тестирования установлены.\x1b[0m")
+    except Exception as exc:
+        task.add_log(
+            f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Установка тест-инструментов не удалась: {exc} — "
+            f"деплой продолжается (инструменты опциональны).\x1b[0m"
+        )
+
+
+# ──────────────────────────────────────────────────────────────
 # Step 3 – System optimisation (Reshala logic, non-interactive)
 # We implement the Reshala menu options directly rather than calling
 # the interactive TUI script.
@@ -545,7 +574,7 @@ echo "[firewall] доп. правила применены (whitelist={len(white
 async def step_system_optimize(
     ssh: SSHSession, task: Task, backend_ip: str, req: "DeployRequest"
 ) -> None:
-    _begin_step(task, 5)
+    _begin_step(task, 6)
 
     whitelist = _parse_ip_list(req.whitelist_ips)
     if whitelist:
@@ -758,7 +787,7 @@ async def _try_ssh_connect(
 #   • Scenario А — new port works → finalize (keep new, drop old), continue.
 #   • Scenario Б — new port dead, old port alive → rollback, abort (FAILED).
 #   • Scenario В — neither port answers in 90s → critical lockout, abort.
-# Returns the live SSH session to use for Steps 7–11.
+# Returns the live SSH session to use for Steps 10–14.
 # ──────────────────────────────────────────────────────────────
 
 async def step_ssh_dualport_verify(
@@ -768,10 +797,10 @@ async def step_ssh_dualport_verify(
     backend_ip: str,
 ) -> SSHSession:
     # This former single step is now presented as THREE progress steps:
-    #   6 «Перезагрузка»            — poll for the box to come back online
-    #   7 «Проверка нового порта SSH» — SSH-connect on the new port (rollback/lockout here)
-    #   8 «Удаление старого порта SSH» — cleanup: drop the old port
-    _begin_step(task, 6)
+    #   7 «Перезагрузка»            — poll for the box to come back online
+    #   8 «Проверка нового порта SSH» — SSH-connect on the new port (rollback/lockout here)
+    #   9 «Удаление старого порта SSH» — cleanup: drop the old port
+    _begin_step(task, 7)
 
     async def _whitelist(sess: SSHSession) -> None:
         if not backend_ip:
@@ -785,12 +814,12 @@ async def step_ssh_dualport_verify(
         )
 
     # No port change → no reboot happened; keep Session #1, just whitelist.
-    # Advance through steps 6/7/8 so the progress bar still completes them.
+    # Advance through steps 7/8/9 so the progress bar still completes them.
     if not req.change_ssh_port:
         task.add_log("\x1b[90m[ssh-dualport] Смена порта отключена — перезагрузки не было.\x1b[0m")
-        _begin_step(task, 7)
-        task.add_log("\x1b[90m[ssh-dualport] Проверка порта не требуется.\x1b[0m")
         _begin_step(task, 8)
+        task.add_log("\x1b[90m[ssh-dualport] Проверка порта не требуется.\x1b[0m")
+        _begin_step(task, 9)
         await _whitelist(ssh)
         return ssh
 
@@ -798,7 +827,7 @@ async def step_ssh_dualport_verify(
     old_port = req.current_ssh_port
     loop = asyncio.get_running_loop()
 
-    # ── Step 6: poll for the server to come back online after the reboot ──
+    # ── Step 7: poll for the server to come back online after the reboot ──
     task.add_log("\x1b[36m[ssh-dualport] Ожидание перезагрузки сервера...\x1b[0m")
     await asyncio.sleep(20)  # let the OS actually begin shutting down
 
@@ -820,8 +849,8 @@ async def step_ssh_dualport_verify(
     task.add_log("\x1b[32m[ssh-dualport] Сервер снова в сети — проверяю порты...\x1b[0m")
     await asyncio.sleep(3)  # give sshd a moment to finish binding
 
-    # ── Step 7: verify the new port accepts SSH ──
-    _begin_step(task, 7)
+    # ── Step 8: verify the new port accepts SSH ──
+    _begin_step(task, 8)
     session_new = await _try_ssh_connect(req, new_port, timeout=12)
     if session_new is not None:
         old_reachable = await _tcp_reachable(req.ip, old_port)
@@ -830,8 +859,8 @@ async def step_ssh_dualport_verify(
             f"установлено (старый порт {old_port}: "
             f"{'доступен' if old_reachable else 'закрыт'}).\x1b[0m"
         )
-        # ── Step 8: keep only the new port everywhere ──
-        _begin_step(task, 8)
+        # ── Step 9: keep only the new port everywhere ──
+        _begin_step(task, 9)
         await session_new.run_script(
             _ssh_cleanup_newport_script(old_port, new_port), task, check=False
         )
@@ -976,7 +1005,7 @@ async def step_ssl(
     server_ip: str,
     cert_provider: str = "cloudflare",
 ) -> None:
-    _begin_step(task, 9)
+    _begin_step(task, 10)
 
     # Only Cloudflare (DNS-01) manages DNS for us via the CF API; HTTP-01
     # providers validate over port 80, so the FQDN must already resolve here.
@@ -1143,7 +1172,7 @@ async def step_remnanode(
     node_port: int = 2222,
     xhttp_path: str = "",
 ) -> None:
-    _begin_step(task, 10)
+    _begin_step(task, 11)
 
     # The cert is issued per-FQDN (see step_ssl), so the cert identity IS the
     # node domain — not the root domain. All cert paths below key off the FQDN.
@@ -1237,7 +1266,7 @@ docker ps --filter "name=remnanode" --filter "name=remnawave-nginx" \
 # ──────────────────────────────────────────────────────────────
 
 async def step_warp(ssh: SSHSession, task: Task) -> None:
-    _begin_step(task, 12)
+    _begin_step(task, 13)
 
     warp_script = f"""\
 {_APT_WAIT}
@@ -1324,7 +1353,7 @@ async def step_certbot_ssl(
     domain: str,
     email: str,
 ) -> None:
-    _begin_step(task, 13)
+    _begin_step(task, 14)
 
     # ── 1. Provision the isolated certbot environment + issue the cert ──
     # The certbot/docker-compose.yml has no template vars (plain YAML). $domain
@@ -1412,7 +1441,7 @@ echo "[certbot] Cron автообновления установлен (28-е ч
 # ──────────────────────────────────────────────────────────────
 
 async def step_sni_masking(ssh: SSHSession, task: Task) -> None:
-    _begin_step(task, 11)
+    _begin_step(task, 12)
 
     # `set -euo pipefail` makes the whole step abort (non-zero exit) on the
     # first failing command — exactly the "critical step" behaviour required:
@@ -1482,7 +1511,7 @@ echo "[sni] Временные файлы удалены."
 
 
 # ──────────────────────────────────────────────────────────────
-# HAProxy relay mode (alternative to Steps 9–13)
+# HAProxy relay mode (alternative to Steps 10–14)
 # Installs HAProxy and configures a plain TCP relay from the source port to a
 # destination IP:port. No Remnawave/DNS/SSL/Xray involvement.
 # ──────────────────────────────────────────────────────────────
@@ -1524,8 +1553,8 @@ backend con_out
 
 
 async def step_haproxy_deploy(ssh: SSHSession, task: Task, req: "DeployRequest") -> None:
-    """HAProxy relay deploy — reuses step slot 9 (Steps 10–13 are skipped)."""
-    _begin_step(task, 9, "Установка HAProxy-реле")
+    """HAProxy relay deploy — reuses step slot 10 (Steps 11–14 are skipped)."""
+    _begin_step(task, 10, "Установка HAProxy-реле")
 
     task.add_log(
         f"\x1b[90m[haproxy] {req.haproxy_source_port} → "
@@ -2050,24 +2079,30 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         else:
             _begin_step(task, 4)
             task.add_log("\x1b[90m[TrafficGuard] Пропущено по настройке (install_trafficguard=false).\x1b[0m")
-        # Step 5 configures dual-port SSH and reboots the box (when enabled),
+        # Step 5: test toolkit (iperf3/speedtest/xray) — optional, non-fatal,
+        # runs in both modes.
+        if "test_tools" in skip:
+            _skip_component(task, 5, "test-tools")
+        else:
+            await step_test_tools(ssh, task, req)
+        # Step 6 configures dual-port SSH and reboots the box (when enabled),
         # closing the pre-reboot session.
         await step_system_optimize(ssh, task, backend_ip, req)
-        # Step 6 polls for the rebooted server, then verifies the new port and
+        # Step 7 polls for the rebooted server, then verifies the new port and
         # finalizes — or rolls back via the old port and aborts. Returns the live
         # session used for all later steps.
         ssh = await step_ssh_dualport_verify(ssh, task, req, backend_ip)
 
-        # ── Mode branch: haproxy relay (step 9, skips 10–13) vs full remnanode
-        #    stack (steps 9–13) ──
+        # ── Mode branch: haproxy relay (step 10, skips 11–14) vs full remnanode
+        #    stack (steps 10–14) ──
         if req.mode == "haproxy":
             if "haproxy" in skip:
-                _skip_component(task, 9, "HAProxy", label="Установка HAProxy-реле")
+                _skip_component(task, 10, "HAProxy", label="Установка HAProxy-реле")
             else:
                 await step_haproxy_deploy(ssh, task, req)
         else:
             if "ssl" in skip:
-                _skip_component(task, 9, "SSL")
+                _skip_component(task, 10, "SSL")
             else:
                 await step_ssl(ssh, task, req.domain, req.email, req.cloudflare_api_key,
                                req.ip, req.cert_provider)
@@ -2082,7 +2117,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                 remnanode_token = token
 
             if "remnanode" in skip:
-                _skip_component(task, 10, "remnanode")
+                _skip_component(task, 11, "remnanode")
             else:
                 if not remnanode_token:
                     raise RuntimeError(
@@ -2095,17 +2130,17 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                     xhttp_path=req.xhttp_path,
                 )
 
-            # ── Step 11: uniquize the masking decoy site — runs BEFORE WARP ──
+            # ── Step 12: uniquize the masking decoy site — runs BEFORE WARP ──
             # (masking mutates /var/www/html and must not be affected by WARP's
             # routing changes; ordering: Remnanode → Masking → WARP → Hysteria2).
             if "masking" in skip:
-                _skip_component(task, 11, "masking")
+                _skip_component(task, 12, "masking")
             else:
                 await step_sni_masking(ssh, task)
 
-            # ── Step 12: WARP Native (non-fatal) ──
+            # ── Step 13: WARP Native (non-fatal) ──
             if "warp" in skip:
-                _skip_component(task, 12, "warp")
+                _skip_component(task, 13, "warp")
             elif req.install_warp:
                 try:
                     await step_warp(ssh, task)
@@ -2115,12 +2150,12 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                         f"Нода Remnawave продолжает работу.\x1b[0m"
                     )
             else:
-                _begin_step(task, 12)
+                _begin_step(task, 13)
                 task.add_log("\x1b[90m[skip] WARP не выбран.\x1b[0m")
 
-            # ── Step 13: Hysteria2 (Certbot standalone SSL — label only renamed) ──
+            # ── Step 14: Hysteria2 (Certbot standalone SSL — label only renamed) ──
             if "hysteria2" in skip:
-                _skip_component(task, 13, "hysteria2")
+                _skip_component(task, 14, "hysteria2")
             else:
                 await step_certbot_ssl(ssh, task, req.domain, req.email)
 

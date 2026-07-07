@@ -7,6 +7,7 @@ Design choices:
 - stderr merged into stdout with 2>&1 to preserve interleaved ordering.
 - Global semaphore caps concurrent SSH sessions (shared across all tasks).
 """
+
 import asyncio
 import asyncssh
 from typing import Optional
@@ -26,8 +27,8 @@ def _get_sem() -> asyncio.Semaphore:
 
 class SSHSession:
     def __init__(self, host: str, port: int, username: str, password: str):
-        self.host     = host
-        self.port     = port
+        self.host = host
+        self.port = port
         self.username = username
         self.password = password
         self._conn: Optional[asyncssh.SSHClientConnection] = None
@@ -77,9 +78,7 @@ class SSHSession:
 
         rc = process.exit_status if process.exit_status is not None else 0
         if check and rc != 0:
-            raise RuntimeError(
-                f"Command failed (exit {rc}): {command[:120]}"
-            )
+            raise RuntimeError(f"Command failed (exit {rc}): {command[:120]}")
         return rc
 
     async def run_script(
@@ -125,6 +124,29 @@ class SSHSession:
             raise RuntimeError("SSH session not connected")
         result = await self._conn.run(command, check=False)
         return (result.stdout or "").strip()
+
+    async def get_script_output(
+        self, script: str, timeout: Optional[float] = None
+    ) -> str:
+        """Run a multi-line bash script silently and return its stdout. The script
+        is piped to `bash -s` over stdin (NOT passed as argv) — so credentials it
+        embeds never appear in the remote process's /proc/<pid>/cmdline. On timeout
+        the channel is closed explicitly so a hung probe (and its trap-based
+        cleanup) does not linger until the whole session is torn down."""
+        if self._conn is None:
+            raise RuntimeError("SSH session not connected")
+        async with _get_sem():
+            process = await self._conn.create_process("bash -s")
+            try:
+                process.stdin.write(script)
+                process.stdin.write_eof()
+                coro = process.stdout.read()
+                out = await (
+                    asyncio.wait_for(coro, timeout=timeout) if timeout else coro
+                )
+                return (out or "").strip()
+            finally:
+                process.close()
 
     async def close(self) -> None:
         if self._conn:

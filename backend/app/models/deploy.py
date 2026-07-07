@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class DeployRequest(BaseModel):
     # Deploy mode — "remnanode" (default, full Xray/Remnawave stack) or "haproxy"
-    # (isolated TCP relay; skips pipeline steps 7–11).
+    # (isolated TCP relay; reuses step slot 10, skips pipeline steps 11–14).
     mode: Literal["remnanode", "haproxy"] = Field(default="remnanode")
 
     ip: str = Field(..., description="Server IPv4 address")
@@ -37,6 +37,9 @@ class DeployRequest(BaseModel):
     update_system: bool = Field(default=False)
     install_vnstat: bool = Field(default=True)
     install_trafficguard: bool = Field(default=True)
+    # Test toolkit (iperf3 + speedtest CLI + xray-core) for the speed-test probes
+    # (Ф2 wave1). Gates pipeline step 5 «Тест-инструменты»; non-fatal install.
+    install_test_tools: bool = Field(default=True)
     # OS optimization (node-accelerator)
     optimize: bool = Field(default=True)
     opt_network_tuning: bool = Field(default=True)

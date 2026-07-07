@@ -7,6 +7,7 @@ export const DEPLOY_STEPS = [
   "Обновление системы",
   "Node Accelerator",
   "TrafficGuard",
+  "Тест-инструменты",
   "Добавление порта SSH",
   "Перезагрузка",
   "Проверка нового порта SSH",
@@ -19,11 +20,11 @@ export const DEPLOY_STEPS = [
 ];
 
 // Collapsible groups over the flat step list (1-indexed, inclusive). Steps not
-// covered by any group render standalone (Подключение=1, Обновление=2, SSL=9).
+// covered by any group render standalone (Подключение=1, Обновление=2, SSL=10).
 const STEP_GROUPS: { title: string; from: number; to: number }[] = [
-  { title: "Оптимизация ОС",      from: 3,  to: 4  },
-  { title: "Сеть",                from: 5,  to: 8  },
-  { title: "Установка remnanode", from: 10, to: 13 },
+  { title: "Оптимизация ОС",      from: 3,  to: 5  },
+  { title: "Сеть",                from: 6,  to: 9  },
+  { title: "Установка remnanode", from: 11, to: 14 },
 ];
 
 export const RENEW_STEPS = [

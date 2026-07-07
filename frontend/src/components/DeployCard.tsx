@@ -1,13 +1,14 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   X, Square, Server, CheckCircle2, XCircle, Loader2,
   Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck,
   Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
-  ShieldAlert, RefreshCw, Trash2, Wrench,
+  ShieldAlert, RefreshCw, Trash2, Wrench, Gauge, Play,
 } from "lucide-react";
 import { StepProgress, DEPLOY_STEPS } from "./StepProgress";
 import { TerminalOutput } from "./TerminalOutput";
 import { useTaskStream, type StatusFrame, type TaskStatus } from "../hooks/useTaskStream";
+import { toast } from "./infra/Toast";
 import type { DeployJobSummary } from "./DeployDashboard";
 import type { FormData } from "./DeployForm";
 
@@ -41,12 +42,14 @@ export function manageableComponents(f: FormData): { id: string; label: string }
     return [
       ...(f.optimize ? [{ id: "node_accelerator", label: "Node Accelerator" }] : []),
       ...(f.install_trafficguard !== false ? [{ id: "trafficguard", label: "TrafficGuard" }] : []),
+      ...(f.install_test_tools !== false ? [{ id: "test_tools", label: "Тест-инструменты" }] : []),
       { id: "haproxy", label: "HAProxy" },
     ];
   }
   return [
     ...(f.optimize ? [{ id: "node_accelerator", label: "Node Accelerator" }] : []),
     ...(f.install_trafficguard !== false ? [{ id: "trafficguard", label: "TrafficGuard" }] : []),
+    ...(f.install_test_tools !== false ? [{ id: "test_tools", label: "Тест-инструменты" }] : []),
     { id: "remnanode", label: "Remnanode" },
     { id: "masking",   label: "Маскировочный сайт" },
     ...(f.install_warp ? [{ id: "warp", label: "WARP Native" }] : []),
@@ -282,6 +285,7 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
             <SecurityBlock stats={security} />
             {job.savedForm.install_vnstat !== false && <TrafficBlock stats={traffic} />}
             {job.savedForm.mode !== "haproxy" && <CertBlock cert={cert} />}
+            <SpeedtestBlock form={job.savedForm} />
             <ManageBlock form={job.savedForm} onOp={runOp} busy={opBusy} />
           </>
         )}
@@ -396,6 +400,189 @@ function CertBlock({ cert }: { cert: CertInfo | null }) {
       {cert?.notAfter && (
         <p className="text-[10px] text-[var(--t-faint)] mt-1">до {cert.notAfter}</p>
       )}
+    </div>
+  );
+}
+
+// ── Speedtest block — «Характеристики и скорость» (SUCCESS, both modes) ──
+// Shows the last stored run on mount (GET history — no SSH), and runs a new
+// probe on demand: POST /api/stats/node-speedtest with the node's own SSH creds
+// from savedForm (per-request, never stored server-side).
+
+interface SpeedtestRun {
+  ts?: number;
+  iperf_mbps?: number | null; iperf_jitter?: number | null; ping_ms?: number | null;
+  traceroute?: string | null;
+  st_down?: number | null; st_up?: number | null; st_ping?: number | null;
+  xray_down?: number | null; xray_up?: number | null; xray_ping?: number | null;
+  cpu?: string | null; ram_mb?: number | null; disk?: string | null;
+}
+interface TestServer { id: string; name: string; ip: string; iperf_port: number }
+
+const fmtMbps = (v?: number | null) => (v == null ? "—" : `${v.toFixed(1)} Мбит/с`);
+const fmtMs   = (v?: number | null) => (v == null ? "—" : `${v.toFixed(1)} мс`);
+
+// Cumulative metric levels for the iperf run (1=throughput, 2=+ping, 3=+traceroute).
+const METRIC_LEVELS: { level: number; label: string }[] = [
+  { level: 1, label: "Скорость" },
+  { level: 2, label: "+пинг/джиттер" },
+  { level: 3, label: "+трассировка" },
+];
+
+function SpeedtestBlock({ form }: { form: FormData }) {
+  const [last,     setLast]     = useState<SpeedtestRun | null>(null);
+  const [servers,  setServers]  = useState<TestServer[]>([]);
+  const [serverId, setServerId] = useState("");
+  const [xrayLink, setXrayLink] = useState("");
+  const [level,    setLevel]    = useState(1);
+  const [running,  setRunning]  = useState(false);
+  // A run takes minutes; guard the post-await setState against unmount (retry
+  // recreates the card). Same pattern as the stats poll above.
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/stats/node-speedtest/history?resource_key=${encodeURIComponent(form.ip)}&limit=1`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (alive && d?.history?.length) setLast(d.history[0]); })
+      .catch(() => {});
+    fetch("/api/testservers")
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (alive && Array.isArray(d?.servers)) setServers(d.servers); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [form.ip]);
+
+  const runTest = async () => {
+    setRunning(true);
+    try {
+      // Same SSH-port rule as the stats poll: the deployed node already
+      // switched to the new port when change_ssh_port was on.
+      const sshPort = parseInt(
+        form.change_ssh_port ? form.new_ssh_port : form.current_ssh_port, 10,
+      ) || 22;
+      const res = await fetch("/api/stats/node-speedtest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ip: form.ip, ssh_port: sshPort, ssh_user: form.ssh_user, ssh_password: form.ssh_password,
+          testserver_id: serverId || null,
+          xray_link: xrayLink.trim() || null,
+          metrics: Array.from({ length: level }, (_, i) => i + 1),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        if (aliveRef.current)
+          toast(typeof err.detail === "string" ? err.detail : "Ошибка теста скорости", "error");
+        return;
+      }
+      const d = await res.json();
+      if (!aliveRef.current) return;
+      if (d.current) setLast(d.current);
+      (d.warnings ?? []).forEach((w: string) => toast(w, "info"));
+    } catch (e) {
+      if (aliveRef.current) toast((e as Error).message, "error");
+    } finally {
+      if (aliveRef.current) setRunning(false);
+    }
+  };
+
+  const Row = ({ label, value }: { label: string; value: string }) => (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[var(--t-low)] shrink-0">{label}</span>
+      <span className="text-[var(--t-hi)] tabular-nums text-right truncate">{value}</span>
+    </div>
+  );
+
+  return (
+    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5"
+      onClick={e => e.stopPropagation()}>
+      <div className="flex items-center gap-1.5 mb-2">
+        <Gauge size={12} className="text-[var(--t-low)]" />
+        <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest">
+          Характеристики и скорость
+        </span>
+      </div>
+
+      {/* Last stored result (characteristics + speeds) */}
+      <div className="flex flex-col gap-1.5 text-[11px] mb-2">
+        <Row label="ЦП" value={last?.cpu || "—"} />
+        <Row label="RAM" value={last?.ram_mb != null ? `${(last.ram_mb / 1024).toFixed(1)} ГБ` : "—"} />
+        <Row label="Диск" value={last?.disk || "—"} />
+        <div className="pt-1 border-t border-[var(--line-soft)] flex flex-col gap-1.5">
+          <Row label="iperf3" value={
+            last?.iperf_mbps != null
+              ? `${fmtMbps(last.iperf_mbps)}${last.ping_ms != null ? ` · пинг ${fmtMs(last.ping_ms)}` : ""}`
+              : "—"
+          } />
+          <Row label="Speedtest" value={
+            last?.st_down != null || last?.st_up != null
+              ? `↓ ${fmtMbps(last?.st_down)} · ↑ ${fmtMbps(last?.st_up)}`
+              : "—"
+          } />
+          <Row label="Xray-туннель" value={
+            last?.xray_down != null || last?.xray_up != null
+              ? `↓ ${fmtMbps(last?.xray_down)} · ↑ ${fmtMbps(last?.xray_up)}`
+              : "—"
+          } />
+        </div>
+      </div>
+
+      {/* Run controls */}
+      <div className="flex flex-col gap-1.5 pt-1.5 border-t border-[var(--line-soft)]">
+        {servers.length === 0 ? (
+          <p className="text-[10px] text-[var(--t-faint)]">
+            Нет тест-серверов (Настройки → Сервера для тестирования) — iperf3-проба недоступна.
+          </p>
+        ) : (
+          <select
+            value={serverId}
+            onChange={e => setServerId(e.target.value)}
+            disabled={running}
+            className="bg-[var(--bg2)] border border-[var(--line)] rounded px-1.5 py-1
+                       text-[11px] text-[var(--t-mid)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-dim)]"
+          >
+            <option value="">Тест-сервер: не использовать</option>
+            {servers.map(s => (
+              <option key={s.id} value={s.id}>{s.name} ({s.ip}:{s.iperf_port})</option>
+            ))}
+          </select>
+        )}
+        <input
+          type="password"
+          value={xrayLink}
+          onChange={e => setXrayLink(e.target.value)}
+          disabled={running}
+          placeholder="Xray-ссылка (vless/trojan/vmess/ss, опционально)"
+          autoComplete="off"
+          spellCheck={false}
+          className="bg-[var(--bg2)] border border-[var(--line)] rounded px-1.5 py-1
+                     text-[11px] text-[var(--t-mid)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-dim)]"
+        />
+        <div className="flex items-center gap-1">
+          {METRIC_LEVELS.map(m => (
+            <button key={m.level} type="button" disabled={running}
+              onClick={() => setLevel(m.level)}
+              className={`px-1.5 py-0.5 rounded border text-[10px] transition-colors ${
+                level === m.level
+                  ? "bg-[var(--accent-dim)] border-[var(--accent-line)] text-[var(--accent-hi)]"
+                  : "bg-[var(--bg2)] border-[var(--line)] text-[var(--t-low)] hover:bg-[var(--bg3)]"
+              }`}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <button type="button" onClick={runTest} disabled={running}
+          className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-[11px] font-medium
+                     border border-[var(--line)] bg-[var(--bg2)] text-[var(--t-mid)]
+                     hover:bg-[var(--bg3)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+          {running
+            ? <><Loader2 size={11} className="animate-spin" /> Тест выполняется…</>
+            : <><Play size={11} /> Запустить тест</>}
+        </button>
+      </div>
     </div>
   );
 }

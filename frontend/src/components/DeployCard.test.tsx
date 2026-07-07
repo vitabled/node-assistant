@@ -9,13 +9,20 @@ describe("manageableComponents", () => {
   it("lists remnanode components incl warp/ssl/hysteria2 when enabled", () => {
     const ids = manageableComponents(remna).map(c => c.id);
     expect(ids).toEqual([
-      "node_accelerator", "trafficguard", "remnanode", "masking", "warp", "ssl", "hysteria2",
+      "node_accelerator", "trafficguard", "test_tools", "remnanode", "masking", "warp", "ssl", "hysteria2",
     ]);
   });
 
   it("omits warp when install_warp is off", () => {
     const ids = manageableComponents({ ...remna, install_warp: false }).map(c => c.id);
     expect(ids).not.toContain("warp");
+  });
+
+  it("lists test_tools in both modes, omitted when install_test_tools is off", () => {
+    expect(manageableComponents(remna).map(c => c.id)).toContain("test_tools");
+    expect(manageableComponents(haproxy).map(c => c.id)).toContain("test_tools");
+    expect(manageableComponents({ ...remna, install_test_tools: false }).map(c => c.id))
+      .not.toContain("test_tools");
   });
 
   it("omits node_accelerator when optimize is off and trafficguard when disabled", () => {
