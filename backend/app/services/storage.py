@@ -5,6 +5,7 @@ resolved from the `current_account` ContextVar (set per-request by the
 `require_account` dependency); background callers with no request context (e.g.
 the xray-checker poller) pass an explicit `account_id`.
 """
+
 import json
 from pathlib import Path
 from typing import Any, Optional
@@ -87,3 +88,11 @@ def load_checkers(account_id: Optional[str] = None) -> list:
 
 def save_checkers(checkers: list, account_id: Optional[str] = None) -> None:
     _write(_dir(account_id) / "checkers.json", {"checkers": checkers})
+
+
+def load_testservers(account_id: Optional[str] = None) -> list:
+    return _read(_dir(account_id) / "testservers.json").get("testservers", [])
+
+
+def save_testservers(servers: list, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "testservers.json", {"testservers": servers})
