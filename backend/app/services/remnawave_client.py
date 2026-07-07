@@ -261,6 +261,26 @@ class RemnavaveClient:
         payload = _unwrap(data)
         return payload if isinstance(payload, list) else []
 
+    async def get_nodes_metrics(self) -> list[dict]:
+        """GET /api/system/nodes/metrics — per-node live metrics.
+        Response: { response: { nodes: [{ nodeUuid, nodeName, countryEmoji,
+        providerName, usersOnline, inboundsStats, outboundsStats }] } }.
+        `usersOnline` is a COUNT — the reliable signal for node-load stats."""
+        data = await self._req("GET", "/api/system/nodes/metrics")
+        payload = _unwrap(data)
+        if isinstance(payload, dict):
+            nodes = payload.get("nodes", [])
+            return nodes if isinstance(nodes, list) else []
+        return []
+
+    async def get_node_users_usage(self, node_uuid: str) -> dict:
+        """GET /api/bandwidth-stats/nodes/{uuid}/users — cumulative top users on a node.
+        Response: { response: { categories, sparklineData, topUsers: [{ username, total }] } }.
+        Best-effort user↔node membership (cumulative usage, NOT live-online)."""
+        data = await self._req("GET", f"/api/bandwidth-stats/nodes/{node_uuid}/users")
+        payload = _unwrap(data)
+        return payload if isinstance(payload, dict) else {}
+
     async def update_node_traffic(
         self,
         node_uuid: str,
