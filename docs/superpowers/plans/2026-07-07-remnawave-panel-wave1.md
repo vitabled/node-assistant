@@ -285,7 +285,7 @@ py_compile` + `tsc --noEmit`.
 **Контракт:** Tab'ы `rw-*` + группа. следующий шаг: Ф4-Ф9 монтируют контент в эти Tab'ы.
 
 ## Фаза 4 — Установка панели/подписки: бэкенд-пайплайн
-<!-- circle: status=pending order=40 deps=[] autonomy=auto obstacle="" -->
+<!-- circle: status=done order=40 deps=[] autonomy=auto obstacle="" -->
 
 **Подход:** новый пайплайн установки Remnawave (панель И/ИЛИ страница подписок) по образцу `run_pipeline`,
 переиспользуя `SSHSession`/`Task`/`build_ssl_script` (отвергнуто: расширять деплой-ноды пайплайн — другой
@@ -471,6 +471,25 @@ pg_dump/tar самим — distillium уже покрывает + аплоады
 **Контракт:** `GET /api/backup/status` (питает виджет Ф6). следующий шаг: none (Волна 1 завершена).
 
 ## Журнал
+
+### Ф4 — done (2026-07-08)
+`models/panel_deploy.py` (`PanelDeployRequest`+`SubServer`: валидаторы IPv4/домен/email/cf/extra_env/webhook,
+`validate_by_target`). `services/panel_pipeline.py`: `PANEL_STEP_LABELS` (8 шагов, ЛОКАЛЬНО, не в task_store),
+чистые генераторы `_env_file` (`secrets.token_hex` 64/24/32/16, все обязательные ключи, DSN пересчитывается
+ПОСЛЕ extra_env, `.env` не перезаписывается при повторе — `__ENV_EXISTS__`), `_compose_yml` (backend:2+
+postgres:18.4+valkey, TZ=UTC статично, ${VAR}/$${VAR} экранирование), `_caddyfile`/`_nginx_conf` (обе ветки
+reverse-proxy: caddy авто-TLS / nginx через `build_ssl_script`), `_subpage_env`/`_subpage_compose` (bundled
+external-net vs separate); `run_panel_pipeline` (8 шагов, separate sub_server = 2-я SSH-сессия, skip-логика
+target). `api/panel_deploy.py`: `/api/panel/{deploy,detect,step}` (транзитные креды, стрим-Task). Секреты
+только через тихий `get_script_output`, HTML через base64. TDD: генераторы+валидаторы. Ревью (code+security):
+security чисто по High (heredoc-побег невозможен, идемпотентность .env корректна); применены — **HIGH CF
+A-запись на `ssh.host` (был `req.ip` → separate-подписка указывала не туда)**, MED DATABASE_URL после
+extra_env / верификация контейнера подписки / email required (nginx+le/zerossl), LOW PANEL_DOMAIN /
+cf_api_key гейт на nginx / sub_server только target=both, SEC-LOW `umask 077` для .env + запрет override
+секрет-ключей через extra_env. Отклонены/defer: непинованные образы (`:latest`, консистентно с pipeline.py),
+SSH к произвольному IP (паттерн продукта), known_hosts=None (унаследовано), `/deploy/stop` (background_tasks
+без cancellable-handle — Ф7 добавит через create_task). Отклонение от плана: reverse-proxy caddy+nginx (не
+4 — traefik/angie в Волну 2). Verify: backend **277 passed** (+38), py_compile OK.
 
 ### Ф3 — done (2026-07-07)
 Сайдбар-группа «Remnawave» (плоская секция, как «Статистика»/«Инфра-биллинг») + Tab-union `rw-install/
