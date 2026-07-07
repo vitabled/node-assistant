@@ -34,6 +34,8 @@ export interface FormData {
   external_squad_ids:  string[];
   plugin_uuid:         string;
   template_id:         string;
+  // Components already present on the box → skip during deploy (add-existing-server flow)
+  skip_components:     string[];
   // OS optimization (node-accelerator)
   optimize:            boolean;
   opt_network_tuning:  boolean;
@@ -91,6 +93,7 @@ export const FORM_DEFAULT: FormData = {
   external_squad_ids:  [],
   plugin_uuid:         "",
   template_id:         "",
+  skip_components:     [],
   optimize:            true,
   opt_network_tuning:  true,
   opt_bbr:             true,
@@ -283,10 +286,15 @@ interface Props {
   onSubmit:   (data: FormData) => Promise<void>;
   onCancel?:  () => void;
   initial?:   Partial<FormData>;
+  // Add-existing-server flow: detected server creds + skip_components. Unlike
+  // `initial` it does NOT suppress the settings-defaults overlay (the operator
+  // still needs email/Cloudflare/etc prefilled) — it's re-applied ON TOP of the
+  // defaults so the detected values win.
+  preset?:    Partial<FormData>;
 }
 
-export function DeployForm({ onSubmit, onCancel, initial }: Props) {
-  const [form,       setForm]       = useState<FormData>({ ...FORM_DEFAULT, ...initial });
+export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
+  const [form,       setForm]       = useState<FormData>({ ...FORM_DEFAULT, ...initial, ...preset });
   const [errors,     setErrors]     = useState<Partial<Record<keyof FormData, string>>>({});
   const [touched,    setTouched]    = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -349,6 +357,8 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
             haproxy_timeout_client:  d.haproxy_timeout_client  ?? prev.haproxy_timeout_client,
             haproxy_timeout_server:  d.haproxy_timeout_server  ?? prev.haproxy_timeout_server,
             haproxy_timeout_tunnel:  d.haproxy_timeout_tunnel  ?? prev.haproxy_timeout_tunnel,
+            // Detected server creds + skip_components win over settings defaults.
+            ...preset,
           }));
         }
 

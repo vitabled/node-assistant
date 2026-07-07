@@ -65,8 +65,8 @@ function useStepTimer(running: boolean): string {
 
 interface StepState { currentStep: number; status: TaskStatus; isRunning: boolean; elapsed: string }
 
-function StepRow({ stepNum, label, s, nested }: {
-  stepNum: number; label: string; s: StepState; nested?: boolean;
+function StepRow({ stepNum, displayNum, label, s, nested }: {
+  stepNum: number; displayNum?: string; label: string; s: StepState; nested?: boolean;
 }) {
   const isDone   = s.status === "success" || s.currentStep > stepNum;
   const isActive = s.currentStep === stepNum && s.isRunning;
@@ -91,7 +91,7 @@ function StepRow({ stepNum, label, s, nested }: {
         :             <Circle size={13} />}
       </span>
       <span className="flex-1 leading-tight">
-        <span className="text-xs faint mr-1.5">{stepNum}.</span>
+        <span className="text-xs faint mr-1.5">{displayNum ?? stepNum}.</span>
         {label}
       </span>
       {isActive && (
@@ -103,8 +103,8 @@ function StepRow({ stepNum, label, s, nested }: {
   );
 }
 
-function StepGroup({ title, from, to, steps, s }: {
-  title: string; from: number; to: number; steps: string[]; s: StepState;
+function StepGroup({ major, title, from, to, steps, s }: {
+  major: number; title: string; from: number; to: number; steps: string[]; s: StepState;
 }) {
   const activeInside = s.currentStep >= from && s.currentStep <= to;
   const allDone = s.status === "success" || s.currentStep > to;
@@ -124,7 +124,7 @@ function StepGroup({ title, from, to, steps, s }: {
                    hover:bg-[var(--bg3)] transition-colors">
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dot }} />
         <span className="text-[11px] font-semibold uppercase tracking-wider flex-1" style={{ color: "var(--t-low)" }}>
-          {title}
+          <span className="faint mr-1.5">{major}.</span>{title}
         </span>
         {allDone && <CheckCircle2 size={12} style={{ color: "var(--ok)" }} />}
         <ChevronDown size={13} style={{ color: "var(--t-faint)", transform: open ? "none" : "rotate(-90deg)", transition: "transform .15s" }} />
@@ -133,7 +133,7 @@ function StepGroup({ title, from, to, steps, s }: {
         <div className="flex flex-col gap-0.5 px-1 pb-1">
           {Array.from({ length: to - from + 1 }, (_, k) => {
             const stepNum = from + k;
-            return <StepRow key={stepNum} stepNum={stepNum} label={steps[stepNum - 1]} s={s} nested />;
+            return <StepRow key={stepNum} stepNum={stepNum} displayNum={`${major}.${k + 1}`} label={steps[stepNum - 1]} s={s} nested />;
           })}
         </div>
       )}
@@ -178,19 +178,25 @@ export function StepProgress({ currentStep, totalSteps, status, steps = DEPLOY_S
               <StepRow key={i + 1} stepNum={i + 1} label={label} s={s} />
             ))
           : (() => {
+              // Cosmetic hierarchical numbering (1, 2, 3.1, 3.2, …): each
+              // top-level block (standalone step or group) gets a major number;
+              // group children get major.child. The flat 13-index → backend-step
+              // mapping is untouched (StepRow still keys its status off stepNum).
               const rows: ReactNode[] = [];
               let n = 1;
+              let major = 1;
               while (n <= steps.length) {
                 const grp = STEP_GROUPS.find(g => g.from === n);
                 if (grp) {
                   rows.push(
-                    <StepGroup key={`g-${grp.title}`} title={grp.title} from={grp.from} to={grp.to} steps={steps} s={s} />,
+                    <StepGroup key={`g-${grp.title}`} major={major} title={grp.title} from={grp.from} to={grp.to} steps={steps} s={s} />,
                   );
                   n = grp.to + 1;
                 } else {
-                  rows.push(<StepRow key={n} stepNum={n} label={steps[n - 1]} s={s} />);
+                  rows.push(<StepRow key={n} stepNum={n} displayNum={String(major)} label={steps[n - 1]} s={s} />);
                   n += 1;
                 }
+                major += 1;
               }
               return rows;
             })()}

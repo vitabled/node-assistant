@@ -79,6 +79,15 @@ def _begin_step(task: Task, index: int, label: Optional[str] = None) -> None:
     task.add_log(f"\x1b[36m{'─' * 56}\x1b[0m")
 
 
+def _skip_component(task: Task, index: int, comp: str, label: Optional[str] = None) -> None:
+    """Mark a manageable step as begun but skipped because the component is
+    already installed (the "add existing server" flow's skip_components). Mirrors
+    the existing install_vnstat=false skip pattern: still advances the progress
+    bar so the step shows as done, without running the install work."""
+    _begin_step(task, index, label)
+    task.add_log(f"\x1b[90m[{comp}] Пропущено — уже установлено (skip_components).\x1b[0m")
+
+
 def _effective_open_ports(req: "DeployRequest") -> str:
     """User-specified UFW/accelerator ports, plus the HAProxy relay source port
     in haproxy mode (so the host firewall passes transit traffic)."""
@@ -116,17 +125,26 @@ def _trafficguard_fallback(backend_ip: str) -> str:
 # Whitelist deploy panel BEFORE any DROP rules
 {whitelist_rule}
 
+# Rules are added idempotently (`iptables -C … || iptables -A …`) so a re-run
+# (e.g. re-deploying an existing server) never duplicates them.
 # Drop NULL packets
-iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+iptables -C INPUT -p tcp --tcp-flags ALL NONE -j DROP 2>/dev/null \\
+    || iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
 # Drop SYN floods
-iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
+iptables -C INPUT -p tcp ! --syn -m state --state NEW -j DROP 2>/dev/null \\
+    || iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
 # Drop XMAS packets
-iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+iptables -C INPUT -p tcp --tcp-flags ALL ALL -j DROP 2>/dev/null \\
+    || iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
 # Rate-limit new SSH connections (10/min)
-iptables -A INPUT -p tcp --dport 22 -m state --state NEW \\
-    -m recent --set --name SSH_SCAN
-iptables -A INPUT -p tcp --dport 22 -m state --state NEW \\
-    -m recent --update --seconds 60 --hitcount 10 --name SSH_SCAN -j DROP
+iptables -C INPUT -p tcp --dport 22 -m state --state NEW \\
+    -m recent --set --name SSH_SCAN 2>/dev/null \\
+    || iptables -A INPUT -p tcp --dport 22 -m state --state NEW \\
+        -m recent --set --name SSH_SCAN
+iptables -C INPUT -p tcp --dport 22 -m state --state NEW \\
+    -m recent --update --seconds 60 --hitcount 10 --name SSH_SCAN -j DROP 2>/dev/null \\
+    || iptables -A INPUT -p tcp --dport 22 -m state --state NEW \\
+        -m recent --update --seconds 60 --hitcount 10 --name SSH_SCAN -j DROP
 
 # Persist rules
 {save_rules}
@@ -1859,8 +1877,19 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         else:
             task.add_log("\x1b[90m[vnstat] Пропущено по настройке (install_vnstat=false).\x1b[0m")
 
-        await step_node_accelerator(ssh, task, req)
-        if req.install_trafficguard:
+        # skip_components (add-existing-server flow): components already present on
+        # the box are begun-but-skipped. Dependency order is preserved (skipping is
+        # per-component, the step sequence is unchanged), so you can't skip a
+        # prerequisite in a way that breaks a later step.
+        skip = set(req.skip_components or [])
+
+        if "node_accelerator" in skip:
+            _skip_component(task, 3, "node-accelerator")
+        else:
+            await step_node_accelerator(ssh, task, req)
+        if "trafficguard" in skip:
+            _skip_component(task, 4, "TrafficGuard")
+        elif req.install_trafficguard:
             await step_traffic_guard(ssh, task, backend_ip)
         else:
             _begin_step(task, 4)
@@ -1876,36 +1905,52 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         # ── Mode branch: haproxy relay (step 9, skips 10–13) vs full remnanode
         #    stack (steps 9–13) ──
         if req.mode == "haproxy":
-            await step_haproxy_deploy(ssh, task, req)
+            if "haproxy" in skip:
+                _skip_component(task, 9, "HAProxy", label="Установка HAProxy-реле")
+            else:
+                await step_haproxy_deploy(ssh, task, req)
         else:
-            await step_ssl(ssh, task, req.domain, req.email, req.cloudflare_api_key,
-                           req.ip, req.cert_provider)
+            if "ssl" in skip:
+                _skip_component(task, 9, "SSL")
+            else:
+                await step_ssl(ssh, task, req.domain, req.email, req.cloudflare_api_key,
+                               req.ip, req.cert_provider)
 
             # ── Remnawave pre-deploy: create node, get token ──────
+            # (Panel-side registration — independent of whether the on-server
+            # remnanode install is skipped.)
             remnanode_token = req.remnanode_token  # manual token (may be None)
+            _uuid = None
             if req.create_in_remnawave:
                 token, _uuid = await step_remnawave_pre_deploy(task, req)
                 remnanode_token = token
 
-            if not remnanode_token:
-                raise RuntimeError(
-                    "Токен Remnanode не указан и не получен из панели. "
-                    "Укажите токен вручную или включите «Зарегистрировать в Remnawave»."
+            if "remnanode" in skip:
+                _skip_component(task, 10, "remnanode")
+            else:
+                if not remnanode_token:
+                    raise RuntimeError(
+                        "Токен Remnanode не указан и не получен из панели. "
+                        "Укажите токен вручную или включите «Зарегистрировать в Remnawave»."
+                    )
+                await step_remnanode(
+                    ssh, task, remnanode_token, req.domain,
+                    node_port=req.remnanode_port,
+                    xhttp_path=req.xhttp_path,
                 )
-
-            await step_remnanode(
-                ssh, task, remnanode_token, req.domain,
-                node_port=req.remnanode_port,
-                xhttp_path=req.xhttp_path,
-            )
 
             # ── Step 11: uniquize the masking decoy site — runs BEFORE WARP ──
             # (masking mutates /var/www/html and must not be affected by WARP's
             # routing changes; ordering: Remnanode → Masking → WARP → Hysteria2).
-            await step_sni_masking(ssh, task)
+            if "masking" in skip:
+                _skip_component(task, 11, "masking")
+            else:
+                await step_sni_masking(ssh, task)
 
             # ── Step 12: WARP Native (non-fatal) ──
-            if req.install_warp:
+            if "warp" in skip:
+                _skip_component(task, 12, "warp")
+            elif req.install_warp:
                 try:
                     await step_warp(ssh, task)
                 except Exception as _warp_exc:
@@ -1918,7 +1963,10 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                 task.add_log("\x1b[90m[skip] WARP не выбран.\x1b[0m")
 
             # ── Step 13: Hysteria2 (Certbot standalone SSL — label only renamed) ──
-            await step_certbot_ssl(ssh, task, req.domain, req.email)
+            if "hysteria2" in skip:
+                _skip_component(task, 13, "hysteria2")
+            else:
+                await step_certbot_ssl(ssh, task, req.domain, req.email)
 
             # ── Remnawave post-deploy: assign users to squads ─────
             if req.create_in_remnawave:
