@@ -7,22 +7,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api import (
     auth, deploy, certs, ws, stats, settings as settings_router, traffic_rules,
-    xray_checker, infra_billing, node_ops, subscriptions, domains, hosts,
+    xray_checker, infra_billing, node_ops, subscriptions, domains, hosts, user_stats,
 )
 from app.api.auth import require_account
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Background poller: samples xray-checker into the SQLite metrics store so
-    # the dashboard's 24h graphs have history. Skips work when the checker is off.
+    # Background workers:
+    #  - poller: samples xray-checker into the SQLite metrics store (24h graphs).
+    #  - collector: snapshots Remnawave per-node usersOnline into the user-stats
+    #    store (node-load history + best-effort migrations).
+    # Both skip work when their source is unconfigured/off.
     poller = asyncio.create_task(xray_checker.poller_loop())
+    collector = asyncio.create_task(user_stats.collector_loop())
     try:
         yield
     finally:
-        poller.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await poller
+        for t in (poller, collector):
+            t.cancel()
+        for t in (poller, collector):
+            with contextlib.suppress(asyncio.CancelledError):
+                await t
 
 
 # The encryption key signs session JWTs AND derives the infra-billing vault key.
@@ -62,6 +68,7 @@ app.include_router(infra_billing.router, dependencies=_auth)
 app.include_router(subscriptions.router, dependencies=_auth)
 app.include_router(domains.router, dependencies=_auth)
 app.include_router(hosts.router, dependencies=_auth)
+app.include_router(user_stats.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.

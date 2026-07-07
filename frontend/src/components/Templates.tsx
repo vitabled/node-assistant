@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Plus, Pencil, Trash2, CheckCircle2, Star, X, Save, Loader2 } from "lucide-react";
+import { MultiSelect, type SelectOption } from "./MultiSelect";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -8,6 +9,8 @@ interface Template {
   name: string;
   config: string;
   is_default: boolean;
+  // Local host-templates auto-created as Remnawave hosts at deploy time (Ф6).
+  host_template_ids?: string[];
 }
 
 // ── Template form modal ───────────────────────────────────────
@@ -18,14 +21,27 @@ function TemplateModal({
   onClose,
 }: {
   initial?: Template;
-  onSave: (name: string, config: string, is_default: boolean) => Promise<void>;
+  onSave: (name: string, config: string, is_default: boolean, host_template_ids: string[]) => Promise<void>;
   onClose: () => void;
 }) {
   const [name,       setName]       = useState(initial?.name ?? "");
   const [config,     setConfig]     = useState(initial?.config ?? "");
   const [isDefault,  setIsDefault]  = useState(initial?.is_default ?? false);
+  const [hostIds,    setHostIds]    = useState<string[]>(initial?.host_template_ids ?? []);
+  const [hostOpts,   setHostOpts]   = useState<SelectOption[]>([]);
   const [saving,     setSaving]     = useState(false);
   const [jsonError,  setJsonError]  = useState<string | null>(null);
+
+  // Host-templates to bind → auto-created as Remnawave hosts at deploy (Ф6).
+  useEffect(() => {
+    fetch("/api/hosts")
+      .then(r => r.json())
+      .then(list => {
+        if (Array.isArray(list))
+          setHostOpts(list.map((h: { id: string; remark: string }) => ({ value: h.id, label: h.remark })));
+      })
+      .catch(() => {});
+  }, []);
 
   const validateJson = (v: string) => {
     try { JSON.parse(v); setJsonError(null); }
@@ -43,7 +59,7 @@ function TemplateModal({
     if (config) validateJson(config);
     if (jsonError) return;
     setSaving(true);
-    try { await onSave(name, config, isDefault); }
+    try { await onSave(name, config, isDefault, hostIds); }
     finally { setSaving(false); }
   };
 
@@ -123,6 +139,16 @@ function TemplateModal({
               Шаблон по умолчанию
             </span>
           </label>
+
+          {/* Host-templates → auto-created as Remnawave hosts at deploy (Ф6). */}
+          <MultiSelect
+            label="Хосты Remnawave (создать при деплое)"
+            selected={hostIds}
+            onChange={setHostIds}
+            options={hostOpts}
+            placeholder={hostOpts.length ? "— без хостов —" : "Нет сохранённых хостов"}
+            disabled={!hostOpts.length}
+          />
         </div>
 
         {/* Footer */}
@@ -231,21 +257,21 @@ export function Templates() {
 
   useEffect(() => { load(); }, []);
 
-  const create = async (name: string, config: string, is_default: boolean) => {
+  const create = async (name: string, config: string, is_default: boolean, host_template_ids: string[]) => {
     await fetch("/api/templates", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, config, is_default }),
+      body: JSON.stringify({ name, config, is_default, host_template_ids }),
     });
     setModal(null);
     load();
   };
 
-  const update = async (id: string, name: string, config: string, is_default: boolean) => {
+  const update = async (id: string, name: string, config: string, is_default: boolean, host_template_ids: string[]) => {
     await fetch(`/api/templates/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, config, is_default }),
+      body: JSON.stringify({ name, config, is_default, host_template_ids }),
     });
     setModal(null);
     load();
@@ -327,7 +353,7 @@ export function Templates() {
           initial={modal.editing}
           onSave={
             modal.editing
-              ? (n, c, d) => update(modal.editing!.id, n, c, d)
+              ? (n, c, d, h) => update(modal.editing!.id, n, c, d, h)
               : create
           }
           onClose={() => setModal(null)}

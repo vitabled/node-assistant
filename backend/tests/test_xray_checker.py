@@ -84,7 +84,7 @@ def test_statuspage_filters_and_strips_tag_per_account(monkeypatch):
     async def running():
         return "running"
 
-    async def proxies():
+    async def proxies(base_url=None):
         return [
             _mk_proxy(f"{_acc(a)}:s1|Alpha", "n1", online=True),
             _mk_proxy(f"{_acc(a)}:s1|Beta", "n2", online=False),
@@ -119,19 +119,19 @@ def test_status_summary_recomputed_per_account(monkeypatch):
     async def running():
         return "running"
 
-    async def fake_summary():
+    async def fake_summary(base_url=None):
         return {"total": 99, "online": 99, "offline": 0, "avgLatencyMs": 5}  # global — must be ignored
 
-    async def fake_proxies():
+    async def fake_proxies(base_url=None):
         return [
             _mk_proxy(f"{_acc(a)}:s1|A", "n1", online=True),
             _mk_proxy("otheracct:s1|B", "n2", online=True),
         ]
 
-    async def fake_info():
+    async def fake_info(base_url=None):
         return {}
 
-    async def fake_uptime(_h):
+    async def fake_uptime(_h, _cid=None):
         return {}
 
     monkeypatch.setattr(xcapi.xc, "container_state", running)

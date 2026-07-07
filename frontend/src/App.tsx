@@ -12,6 +12,7 @@ import { Hosts }                           from "./components/Hosts";
 import { CertsForm, type CertsFormData }  from "./components/CertsForm";
 import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
+import { UsersStats }                      from "./components/stats/UsersStats";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
 import { InfraProjects }                  from "./components/infra/InfraProjects";
@@ -45,6 +46,7 @@ const CRUMB: Record<Tab, [string, string]> = {
   "hosts":           ["Node Installer", "Хосты"],
   "traffic":         ["Node Installer", "Трафик"],
   "settings":        ["Node Installer", "Настройки"],
+  "stats-users":     ["Статистика", "Пользователи"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
   "infra-projects":  ["Инфра-биллинг", "Проекты"],
@@ -146,19 +148,23 @@ export default function App() {
           height: 52, flex: "none", borderBottom: "1px solid var(--line-soft)",
           background: "var(--topbar-bg)", backdropFilter: "blur(var(--glass-blur))",
           display: "flex", alignItems: "center", gap: 12, padding: "0 20px",
+          position: "relative",
         }}>
           <nav style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, minWidth: 0 }}>
             <span className="dim trunc">{crumb[0]}</span>
             <ChevronRight size={13} style={{ color: "var(--t-faint)", flex: "none" }} />
             <span className="hi trunc" style={{ fontWeight: 600 }}>{crumb[1]}</span>
           </nav>
+          {/* Remnawave status — centered in the header (hidden ≤820px via .ni-clock) */}
+          <div className="ni-clock" style={{
+            position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)",
+            display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, whiteSpace: "nowrap",
+          }}>
+            <span className="dot" style={{ background: "var(--ok)" }} />
+            <span className="dim">Remnawave</span>
+            <span className="chip ok" style={{ padding: "1px 7px", fontSize: 10 }}>онлайн</span>
+          </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-            {/* Remnawave status (moved here from the sidebar footer) */}
-            <div className="ni-clock" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5 }}>
-              <span className="dot" style={{ background: "var(--ok)" }} />
-              <span className="dim">Remnawave</span>
-              <span className="chip ok" style={{ padding: "1px 7px", fontSize: 10 }}>онлайн</span>
-            </div>
             <AccountMenu />
           </div>
         </header>
@@ -171,6 +177,7 @@ export default function App() {
           {tab === "hosts" && <Hosts />}
           {tab === "settings" && <Settings />}
           {tab === "traffic" && <TrafficRules />}
+          {tab === "stats-users" && <UsersStats />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}

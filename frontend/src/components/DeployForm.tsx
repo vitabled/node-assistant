@@ -34,6 +34,11 @@ export interface FormData {
   external_squad_ids:  string[];
   plugin_uuid:         string;
   template_id:         string;
+  // Components already present on the box → skip during deploy (add-existing-server flow)
+  skip_components:     string[];
+  // Host-templates (of the selected deploy-template) the operator UNchecked →
+  // NOT auto-created as Remnawave hosts at deploy (Ф6).
+  disabled_host_template_ids: string[];
   // OS optimization (node-accelerator)
   optimize:            boolean;
   opt_network_tuning:  boolean;
@@ -54,7 +59,8 @@ export interface FormData {
   haproxy_timeout_tunnel:  string;
 }
 
-interface Template { id: string; name: string; is_default: boolean }
+interface Template { id: string; name: string; is_default: boolean; host_template_ids?: string[] }
+interface HostTemplate { id: string; remark: string }
 
 const CERT_PROVIDERS: { value: string; label: string }[] = [
   { value: "cloudflare",  label: "Cloudflare (DNS-01)" },
@@ -91,6 +97,8 @@ export const FORM_DEFAULT: FormData = {
   external_squad_ids:  [],
   plugin_uuid:         "",
   template_id:         "",
+  skip_components:     [],
+  disabled_host_template_ids: [],
   optimize:            true,
   opt_network_tuning:  true,
   opt_bbr:             true,
@@ -283,10 +291,15 @@ interface Props {
   onSubmit:   (data: FormData) => Promise<void>;
   onCancel?:  () => void;
   initial?:   Partial<FormData>;
+  // Add-existing-server flow: detected server creds + skip_components. Unlike
+  // `initial` it does NOT suppress the settings-defaults overlay (the operator
+  // still needs email/Cloudflare/etc prefilled) — it's re-applied ON TOP of the
+  // defaults so the detected values win.
+  preset?:    Partial<FormData>;
 }
 
-export function DeployForm({ onSubmit, onCancel, initial }: Props) {
-  const [form,       setForm]       = useState<FormData>({ ...FORM_DEFAULT, ...initial });
+export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
+  const [form,       setForm]       = useState<FormData>({ ...FORM_DEFAULT, ...initial, ...preset });
   const [errors,     setErrors]     = useState<Partial<Record<keyof FormData, string>>>({});
   const [touched,    setTouched]    = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -302,6 +315,7 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
   const [squadsExt,      setSquadsExt]      = useState<SelectOption[]>([]);
   const [plugins,        setPlugins]        = useState<SelectOption[]>([]);
   const [templates,      setTemplates]      = useState<Template[]>([]);
+  const [hostTemplates,  setHostTemplates]  = useState<HostTemplate[]>([]);
   const [remnavaveReady, setRemnavaveReady] = useState(false);
   const [squadsLoading,  setSquadsLoading]  = useState(false);
   // Tracks the "intended" new_ssh_port so toggling change_ssh_port off and
@@ -349,6 +363,8 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
             haproxy_timeout_client:  d.haproxy_timeout_client  ?? prev.haproxy_timeout_client,
             haproxy_timeout_server:  d.haproxy_timeout_server  ?? prev.haproxy_timeout_server,
             haproxy_timeout_tunnel:  d.haproxy_timeout_tunnel  ?? prev.haproxy_timeout_tunnel,
+            // Detected server creds + skip_components win over settings defaults.
+            ...preset,
           }));
         }
 
@@ -384,7 +400,20 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
         }
       })
       .catch(() => {});
+
+    // Host-templates → resolve the selected template's host_template_ids to
+    // remarks for the deploy-time auto-create checkbox list (Ф6).
+    fetch("/api/hosts")
+      .then(r => r.json())
+      .then(list => {
+        if (!Array.isArray(list)) return;
+        setHostTemplates(list.map((h: { id: string; remark: string }) => ({ id: h.id, remark: h.remark })));
+      })
+      .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selTemplate = templates.find(t => t.id === form.template_id);
+  const selHostIds  = selTemplate?.host_template_ids ?? [];
 
   const set = (name: keyof FormData, value: string | boolean | string[]) =>
     setForm(f => {
@@ -562,6 +591,44 @@ export function DeployForm({ onSubmit, onCancel, initial }: Props) {
                 : <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>Xray JSON с подстановкой $domain, $name, $privkey, $shortid</p>
               }
             </div>
+
+            {/* Host-templates → auto-create Remnawave hosts at deploy (Ф6).
+                All checked by default; unchecked → disabled_host_template_ids. */}
+            {form.create_in_remnawave && remnavaveReady && selHostIds.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
+                  Хосты Remnawave
+                </label>
+                <div className="flex flex-col gap-1.5 rounded-lg border p-2.5"
+                     style={{ borderColor: "var(--line-soft)", background: "var(--bg2)" }}>
+                  {selHostIds.map(hid => {
+                    const h = hostTemplates.find(x => x.id === hid);
+                    const checked = !form.disabled_host_template_ids.includes(hid);
+                    return (
+                      <label key={hid}
+                             className="flex items-center gap-2 cursor-pointer select-none text-sm"
+                             style={{ color: "var(--t-low)" }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={f}
+                          onChange={() => {
+                            const cur = form.disabled_host_template_ids;
+                            set("disabled_host_template_ids",
+                                checked ? [...cur, hid] : cur.filter(x => x !== hid));
+                          }}
+                          style={{ accentColor: "var(--accent)" }}
+                        />
+                        <span className="truncate">{h ? h.remark : hid}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>
+                  address = домен ноды; снятые не создаются.
+                </p>
+              </div>
+            )}
 
             {/* Internal squads multi-select */}
             <MultiSelect

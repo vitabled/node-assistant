@@ -178,6 +178,42 @@ class RemnavaveClient:
         data = await self._req("POST", "/api/nodes", json=body)
         return _unwrap(data)
 
+    # ── Hosts ──────────────────────────────────────────────────
+
+    async def create_host(
+        self,
+        *,
+        inbound: dict,
+        remark: str,
+        address: str,
+        port: int,
+        nodes: Optional[list[str]] = None,
+        **optional: Any,
+    ) -> dict:
+        """
+        POST /api/hosts (CreateHostRequestDto).
+        Required: inbound (OBJECT {configProfileUuid, configProfileInboundUuid}),
+        remark, address, port. Optional CreateHostRequestDto fields (already in
+        Remnawave camelCase, e.g. sni/host/path/alpn/fingerprint/securityLayer/
+        isHidden/vlessRouteId/shuffleHost/serverDescription/overrideSniFromAddress/
+        keepSniBlank/excludedInternalSquads/xhttpExtraParams/…) are passed through
+        **optional; None values are dropped so the API keeps its own defaults.
+        Response: { response: { uuid, ... } }. Returns the `response` payload.
+        """
+        body: dict[str, Any] = {
+            "inbound": inbound,
+            "remark": remark,
+            "address": address,
+            "port": port,
+        }
+        if nodes:
+            body["nodes"] = nodes
+        for key, value in optional.items():
+            if value is not None:
+                body[key] = value
+        data = await self._req("POST", "/api/hosts", json=body)
+        return _unwrap(data)
+
     async def get_internal_squad(self, squad_uuid: str) -> dict:
         """
         GET /api/internal-squads/{uuid}
@@ -260,6 +296,26 @@ class RemnavaveClient:
         data = await self._req("GET", "/api/nodes")
         payload = _unwrap(data)
         return payload if isinstance(payload, list) else []
+
+    async def get_nodes_metrics(self) -> list[dict]:
+        """GET /api/system/nodes/metrics — per-node live metrics.
+        Response: { response: { nodes: [{ nodeUuid, nodeName, countryEmoji,
+        providerName, usersOnline, inboundsStats, outboundsStats }] } }.
+        `usersOnline` is a COUNT — the reliable signal for node-load stats."""
+        data = await self._req("GET", "/api/system/nodes/metrics")
+        payload = _unwrap(data)
+        if isinstance(payload, dict):
+            nodes = payload.get("nodes", [])
+            return nodes if isinstance(nodes, list) else []
+        return []
+
+    async def get_node_users_usage(self, node_uuid: str) -> dict:
+        """GET /api/bandwidth-stats/nodes/{uuid}/users — cumulative top users on a node.
+        Response: { response: { categories, sparklineData, topUsers: [{ username, total }] } }.
+        Best-effort user↔node membership (cumulative usage, NOT live-online)."""
+        data = await self._req("GET", f"/api/bandwidth-stats/nodes/{node_uuid}/users")
+        payload = _unwrap(data)
+        return payload if isinstance(payload, dict) else {}
 
     async def update_node_traffic(
         self,

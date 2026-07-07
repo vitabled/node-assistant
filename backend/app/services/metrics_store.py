@@ -18,7 +18,7 @@ import time
 from collections import deque
 from itertools import groupby
 from pathlib import Path
-from typing import Any, Deque
+from typing import Any, Deque, Optional
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -35,8 +35,13 @@ _RING_MAX = 90
 # bars are served from here so frequent dashboard polls don't hit the disk.
 # SQLite remains the source of truth for 30-day uptime and incidents.
 # (Single-process/single-worker backend; SQLite is the cross-process fallback.)
-_RING: dict[str, Deque[dict[str, Any]]] = {}
-_META: dict[str, dict[str, str]] = {}   # stable_id -> {name, group_name, protocol}
+# Keyed by (checker_id, stable_id): the same stable_id can exist on different
+# checker instances (local + remotes), so the checker id disambiguates.
+_RING: dict[tuple[str, str], Deque[dict[str, Any]]] = {}
+_META: dict[tuple[str, str], dict[str, str]] = {}   # (checker_id, stable_id) -> {name, group_name, protocol}
+
+# Default instance id for the shared local Docker checker.
+LOCAL_CHECKER_ID = "local"
 
 
 def _tick_status(online: int, latency_ms: int) -> str:
@@ -64,11 +69,23 @@ def _init() -> None:
                 name       TEXT    NOT NULL,
                 group_name TEXT    DEFAULT '',
                 online     INTEGER NOT NULL,           -- 0/1
-                latency_ms INTEGER NOT NULL            -- -1 when offline/unknown
+                latency_ms INTEGER NOT NULL,           -- -1 when offline/unknown
+                checker_id TEXT    NOT NULL DEFAULT 'local'  -- which checker instance sampled this
             );
             CREATE INDEX IF NOT EXISTS idx_samples_ts ON proxy_samples(ts);
             CREATE INDEX IF NOT EXISTS idx_samples_sid_ts ON proxy_samples(stable_id, ts);
             """
+        )
+        # Migration for DBs created before checker_id existed: add the column
+        # (SQLite backfills existing rows to the DEFAULT 'local') + its index.
+        # Idempotent — guarded on PRAGMA so re-runs are no-ops.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(proxy_samples)")}
+        if "checker_id" not in cols:
+            conn.execute(
+                "ALTER TABLE proxy_samples ADD COLUMN checker_id TEXT NOT NULL DEFAULT 'local'"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_cid_ts ON proxy_samples(checker_id, ts)"
         )
 
 
@@ -84,20 +101,20 @@ def _warm_ring() -> None:
         with _connect() as conn:
             cur = conn.execute(
                 """
-                SELECT stable_id, name, group_name, ts, online, latency_ms FROM (
+                SELECT checker_id, stable_id, name, group_name, ts, online, latency_ms FROM (
                     SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY stable_id ORDER BY ts DESC) AS rn
+                        PARTITION BY checker_id, stable_id ORDER BY ts DESC) AS rn
                     FROM proxy_samples WHERE ts >= ?
-                ) WHERE rn <= ? ORDER BY stable_id, ts ASC
+                ) WHERE rn <= ? ORDER BY checker_id, stable_id, ts ASC
                 """,
                 (since, _RING_MAX),
             )
             for r in cur.fetchall():
-                sid = r["stable_id"]
-                _RING.setdefault(sid, deque(maxlen=_RING_MAX)).append(
+                key = (r["checker_id"] or LOCAL_CHECKER_ID, r["stable_id"])
+                _RING.setdefault(key, deque(maxlen=_RING_MAX)).append(
                     {"ts": r["ts"], "status": _tick_status(r["online"], r["latency_ms"])}
                 )
-                _META[sid] = {"name": r["name"], "group_name": r["group_name"] or "", "protocol": ""}
+                _META[key] = {"name": r["name"], "group_name": r["group_name"] or "", "protocol": ""}
     except Exception:
         pass  # window functions need sqlite >= 3.25 — degrade gracefully to live-only
 
@@ -105,27 +122,28 @@ def _warm_ring() -> None:
 _warm_ring()
 
 
-def _insert_batch(samples: list[dict[str, Any]]) -> None:
+def _insert_batch(samples: list[dict[str, Any]], checker_id: str = LOCAL_CHECKER_ID) -> None:
     ts = int(time.time())
     rows = []
     for s in samples:
         sid = s.get("stableId", "")
         online = 1 if s.get("online") else 0
         latency = int(s.get("latencyMs", -1)) if s.get("online") else -1
-        rows.append((ts, sid, s.get("name", ""), s.get("groupName", "") or "", online, latency))
+        rows.append((ts, sid, s.get("name", ""), s.get("groupName", "") or "", online, latency, checker_id))
         # Update the in-memory ring buffer alongside the DB write.
-        _RING.setdefault(sid, deque(maxlen=_RING_MAX)).append(
+        key = (checker_id, sid)
+        _RING.setdefault(key, deque(maxlen=_RING_MAX)).append(
             {"ts": ts, "status": _tick_status(online, latency)}
         )
-        _META[sid] = {
+        _META[key] = {
             "name": s.get("name", ""),
             "group_name": s.get("groupName", "") or "",
             "protocol": s.get("protocol", "") or "",
         }
     with _connect() as conn:
         conn.executemany(
-            "INSERT INTO proxy_samples (ts, stable_id, name, group_name, online, latency_ms) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO proxy_samples (ts, stable_id, name, group_name, online, latency_ms, checker_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         # Opportunistic retention cleanup.
@@ -133,41 +151,67 @@ def _insert_batch(samples: list[dict[str, Any]]) -> None:
 
 
 # ── Status-page queries ───────────────────────────────────────
+# Every read accepts an optional `checker_id`: None = aggregate across ALL
+# instances (back-compat), a value = restrict to that one checker instance.
 
-def _bars(n: int) -> dict[str, list[dict[str, Any]]]:
-    """Last `n` ticks per node from the ring: [{ts, status: up|slow|down}]."""
+def _cid_clause(checker_id: Optional[str]) -> tuple[str, tuple]:
+    """SQL fragment + params for an optional checker_id filter.
+
+    CAVEAT: `checker_id=None` aggregates across ALL instances keyed by stable_id
+    alone (`_bars`, and GROUP BY stable_id in `_uptime_30d`/`_node_uptime`). If two
+    instances ever share a stable_id, that view silently merges them. No API route
+    calls these with None today — they always pass an explicit checker_id — so this
+    is latent. A future "all instances merged" view must group by (checker_id,
+    stable_id), not stable_id alone.
+    """
+    if checker_id is None:
+        return "", ()
+    return " AND checker_id = ?", (checker_id,)
+
+
+def _bars(n: int, checker_id: Optional[str] = None) -> dict[str, list[dict[str, Any]]]:
+    """Last `n` ticks per node from the ring: [{ts, status: up|slow|down}].
+    Filtered to `checker_id` when given; keyed by stable_id in the result."""
     n = max(1, min(n, _RING_MAX))
-    return {sid: list(dq)[-n:] for sid, dq in _RING.items()}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for (cid, sid), dq in _RING.items():
+        if checker_id is not None and cid != checker_id:
+            continue
+        out[sid] = list(dq)[-n:]
+    return out
 
 
-def _uptime_30d() -> dict[str, Any]:
+def _uptime_30d(checker_id: Optional[str] = None) -> dict[str, Any]:
     """Per-node and global uptime % over the last 30 days (from SQLite)."""
     since = int(time.time()) - 30 * 24 * 3600
+    cc, cp = _cid_clause(checker_id)
     with _connect() as conn:
         cur = conn.execute(
             "SELECT stable_id, AVG(online) * 100.0 AS up FROM proxy_samples "
-            "WHERE ts >= ? GROUP BY stable_id",
-            (since,),
+            "WHERE ts >= ?" + cc + " GROUP BY stable_id",
+            (since, *cp),
         )
         per = {r["stable_id"]: round(r["up"], 2) if r["up"] is not None else None
                for r in cur.fetchall()}
         g = conn.execute(
-            "SELECT AVG(online) * 100.0 AS up FROM proxy_samples WHERE ts >= ?", (since,)
+            "SELECT AVG(online) * 100.0 AS up FROM proxy_samples WHERE ts >= ?" + cc,
+            (since, *cp),
         ).fetchone()
         glob = round(g["up"], 2) if g and g["up"] is not None else None
     return {"global": glob, "per_node": per}
 
 
-def _incidents(days: int) -> list[dict[str, Any]]:
+def _incidents(days: int, checker_id: Optional[str] = None) -> list[dict[str, Any]]:
     """Derive downtime incidents from the samples: a run of consecutive offline
     samples per node becomes one incident (start → recovery, with duration)."""
     since = int(time.time()) - days * 86400
     now = int(time.time())
+    cc, cp = _cid_clause(checker_id)
     with _connect() as conn:
         rows = conn.execute(
             "SELECT stable_id, name, group_name, ts, online FROM proxy_samples "
-            "WHERE ts >= ? ORDER BY stable_id, ts ASC",
-            (since,),
+            "WHERE ts >= ?" + cc + " ORDER BY stable_id, ts ASC",
+            (since, *cp),
         ).fetchall()
 
     incidents: list[dict[str, Any]] = []
@@ -197,11 +241,12 @@ def _incidents(days: int) -> list[dict[str, Any]]:
     return incidents
 
 
-def _history(hours: int) -> dict[str, Any]:
+def _history(hours: int, checker_id: Optional[str] = None) -> dict[str, Any]:
     """Return time-bucketed averages for the ping graph + availability over the window."""
     since = int(time.time()) - hours * 3600
     # Bucket size: aim for ~120 points across the window.
     bucket = max(60, (hours * 3600) // 120)
+    cc, cp = _cid_clause(checker_id)
     with _connect() as conn:
         cur = conn.execute(
             """
@@ -209,11 +254,11 @@ def _history(hours: int) -> dict[str, Any]:
                    AVG(CASE WHEN online = 1 THEN latency_ms END) AS avg_latency,
                    AVG(online) * 100.0 AS availability
             FROM proxy_samples
-            WHERE ts >= ?
+            WHERE ts >= ?""" + cc + """
             GROUP BY bucket_ts
             ORDER BY bucket_ts ASC
             """,
-            (bucket, bucket, since),
+            (bucket, bucket, since, *cp),
         )
         points = [
             {
@@ -226,13 +271,14 @@ def _history(hours: int) -> dict[str, Any]:
     return {"hours": hours, "points": points}
 
 
-def _node_uptime(hours: int) -> dict[str, dict[str, Any]]:
+def _node_uptime(hours: int, checker_id: Optional[str] = None) -> dict[str, dict[str, Any]]:
     """Per-node uptime over the window: online-fraction * 100, keyed by stable_id.
 
     Returns { stable_id: { uptime_pct, checks, last_seen } } where last_seen is
     the unix ts of the most recent successful (online) check, or None.
     """
     since = int(time.time()) - hours * 3600
+    cc, cp = _cid_clause(checker_id)
     with _connect() as conn:
         cur = conn.execute(
             """
@@ -241,10 +287,10 @@ def _node_uptime(hours: int) -> dict[str, dict[str, Any]]:
                    COUNT(*)            AS checks,
                    MAX(CASE WHEN online = 1 THEN ts END) AS last_seen
             FROM proxy_samples
-            WHERE ts >= ?
+            WHERE ts >= ?""" + cc + """
             GROUP BY stable_id
             """,
-            (since,),
+            (since, *cp),
         )
         return {
             r["stable_id"]: {
@@ -258,27 +304,27 @@ def _node_uptime(hours: int) -> dict[str, dict[str, Any]]:
 
 # ── Async wrappers (run the blocking sqlite calls in a thread) ──
 
-async def record_samples(samples: list[dict[str, Any]]) -> None:
+async def record_samples(samples: list[dict[str, Any]], checker_id: str = LOCAL_CHECKER_ID) -> None:
     if not samples:
         return
-    await asyncio.to_thread(_insert_batch, samples)
+    await asyncio.to_thread(_insert_batch, samples, checker_id)
 
 
-async def get_history(hours: int = 24) -> dict[str, Any]:
-    return await asyncio.to_thread(_history, hours)
+async def get_history(hours: int = 24, checker_id: Optional[str] = None) -> dict[str, Any]:
+    return await asyncio.to_thread(_history, hours, checker_id)
 
 
-async def get_node_uptime(hours: int = 24) -> dict[str, dict[str, Any]]:
-    return await asyncio.to_thread(_node_uptime, hours)
+async def get_node_uptime(hours: int = 24, checker_id: Optional[str] = None) -> dict[str, dict[str, Any]]:
+    return await asyncio.to_thread(_node_uptime, hours, checker_id)
 
 
-async def get_bars(n: int = 30) -> dict[str, list[dict[str, Any]]]:
-    return await asyncio.to_thread(_bars, n)
+async def get_bars(n: int = 30, checker_id: Optional[str] = None) -> dict[str, list[dict[str, Any]]]:
+    return await asyncio.to_thread(_bars, n, checker_id)
 
 
-async def get_uptime_30d() -> dict[str, Any]:
-    return await asyncio.to_thread(_uptime_30d)
+async def get_uptime_30d(checker_id: Optional[str] = None) -> dict[str, Any]:
+    return await asyncio.to_thread(_uptime_30d, checker_id)
 
 
-async def get_incidents(days: int = 7) -> list[dict[str, Any]]:
-    return await asyncio.to_thread(_incidents, days)
+async def get_incidents(days: int = 7, checker_id: Optional[str] = None) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(_incidents, days, checker_id)

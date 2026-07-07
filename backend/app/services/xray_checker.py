@@ -26,7 +26,7 @@ from typing import Any, Optional
 
 import httpx
 
-from app.services import storage
+from app.services import net_guard, storage
 from app.models.settings import AppSettings, XrayCheckerConfig
 
 CONTAINER_NAME = "xray-checker"
@@ -198,9 +198,18 @@ async def update() -> dict[str, Any]:
 # ── HTTP bridge to the checker's JSON API ─────────────────────
 
 async def _get_json(path: str, cfg: Optional[XrayCheckerConfig] = None,
-                    timeout: float = 8.0) -> Any:
-    url = f"{_base_url(cfg)}{path}"
-    async with httpx.AsyncClient(timeout=timeout) as client:
+                    timeout: float = 8.0, base_url: Optional[str] = None) -> Any:
+    # base_url set → target a specific (remote) instance; else the local checker.
+    if base_url:
+        root = base_url.rstrip("/")
+        # SSRF: a remote instance URL is account-supplied — re-check at fetch time
+        # (a stored URL can re-resolve to an internal IP later). Local uses the
+        # trusted internal container name, so it's exempt.
+        net_guard.assert_safe_url(root)
+    else:
+        root = _base_url(cfg)
+    url = f"{root}{path}"
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         resp = await client.get(url)
     resp.raise_for_status()
     data = resp.json()
@@ -210,20 +219,20 @@ async def _get_json(path: str, cfg: Optional[XrayCheckerConfig] = None,
     return data
 
 
-async def fetch_status() -> dict[str, Any]:
+async def fetch_status(base_url: Optional[str] = None) -> dict[str, Any]:
     """GET /api/v1/status -> {total, online, offline, avgLatencyMs}."""
-    return await _get_json("/api/v1/status")
+    return await _get_json("/api/v1/status", base_url=base_url)
 
 
-async def fetch_proxies() -> list[dict[str, Any]]:
-    """GET /api/v1/proxies -> list of proxy dicts."""
-    data = await _get_json("/api/v1/proxies")
+async def fetch_proxies(base_url: Optional[str] = None) -> list[dict[str, Any]]:
+    """GET /api/v1/proxies -> list of proxy dicts. Pass base_url for a remote instance."""
+    data = await _get_json("/api/v1/proxies", base_url=base_url)
     return data if isinstance(data, list) else data.get("proxies", []) if isinstance(data, dict) else []
 
 
-async def fetch_system_info() -> dict[str, Any]:
+async def fetch_system_info(base_url: Optional[str] = None) -> dict[str, Any]:
     try:
-        return await _get_json("/api/v1/system/info")
+        return await _get_json("/api/v1/system/info", base_url=base_url)
     except Exception:
         return {}
 

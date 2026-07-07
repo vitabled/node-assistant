@@ -9,7 +9,14 @@ domain (openssl probe), it reports that and skips — unless `force` is set.
 Sub-steps (streamed via the generic /ws/logs task, own labels — not the 13-step
 deploy numbering): 1 connect + probe, 2 issue+install, 3 restart services.
 """
-from fastapi import APIRouter, BackgroundTasks
+import base64
+import io
+import re
+import zipfile
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, field_validator
 
 from app.models.deploy import DeployCertRequest
 from app.services.task_store import task_store, TaskStatus
@@ -18,6 +25,18 @@ from app.services import pipeline
 from app.services.cloudflare import upsert_a_record
 
 router = APIRouter(prefix="/api")
+
+# FQDN allowlist — `domain` is interpolated into a remote file path, so restrict
+# it to hostname chars (no shell/path metacharacters) before use.
+_DOMAIN_RE = re.compile(
+    r"^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+    r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$"
+)
+# Selectable cert files → (remote path template, download filename template).
+_CERT_FILES = {
+    "fullchain": ("/etc/ssl/certs/{d}_fullchain.pem", "{d}_fullchain.pem"),
+    "key":       ("/etc/ssl/private/{d}.key",          "{d}.key"),
+}
 
 # Labels sent via WebSocket — must match RENEW_STEPS in StepProgress.tsx
 DEPLOY_STEP_LABELS = [
@@ -143,3 +162,83 @@ systemctl list-units --type=service --state=running \\
     | grep -E "nginx|hysteria|remna|xray|sing-box|v2ray" || echo "(none matched)"
 """
     await ssh.run_script(full_script, task, timeout=60)
+
+
+# ── cert download (Ф8) ────────────────────────────────────────
+
+class DownloadCertRequest(BaseModel):
+    """Read a node's installed cert files over SSH and stream them back. SSH creds
+    are per-request/transient (never persisted). `files` ⊆ {fullchain, key}."""
+    ip: str
+    ssh_user: str = "root"
+    ssh_password: str
+    ssh_port: int = 22
+    domain: str
+    files: list[str] = []
+
+    @field_validator("domain")
+    @classmethod
+    def _validate_domain(cls, v: str) -> str:
+        # fullmatch (not match): `$` alone would accept a trailing newline.
+        if not _DOMAIN_RE.fullmatch(v):
+            raise ValueError("Invalid domain (hostname expected)")
+        return v
+
+
+async def _read_remote_file(ssh: SSHSession, path: str) -> bytes | None:
+    """base64-read a remote file SILENTLY (get_output logs nothing — the private
+    key must never hit a task log). Returns None if the file is absent/empty."""
+    # `path` is safe: domain is FQDN-validated, the rest is a fixed literal.
+    # Cap the read at 8 MiB (certs are KB) so a stray huge file at the cert path
+    # can't OOM the backend buffering all stdout.
+    script = f'F="{path}"; if [ -s "$F" ]; then echo __OK__; head -c 8388608 "$F" | base64; else echo __MISSING__; fi'
+    out = await ssh.get_output(script)
+    if "__OK__" not in out:
+        return None
+    b64 = out.split("__OK__", 1)[1].strip()
+    try:
+        return base64.b64decode(b64)
+    except Exception:
+        return None
+
+
+@router.post("/certs/download")
+async def download_cert(req: DownloadCertRequest):
+    sel = [f for f in req.files if f in _CERT_FILES]
+    if not sel:
+        raise HTTPException(422, "Не выбраны файлы для скачивания")
+
+    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    collected: list[tuple[str, bytes]] = []
+    try:
+        await ssh.connect()
+        for f in sel:
+            path_tpl, name_tpl = _CERT_FILES[f]
+            data = await _read_remote_file(ssh, path_tpl.format(d=req.domain))
+            name = name_tpl.format(d=req.domain)
+            if data is None:
+                raise HTTPException(404, f"Сертификат не найден на ноде: {name}")
+            collected.append((name, data))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"Не удалось прочитать сертификаты по SSH: {str(exc)[:200]}")
+    finally:
+        await ssh.close()
+
+    # Single file → return it directly; multiple → zip them.
+    if len(collected) == 1:
+        name, data = collected[0]
+        return Response(
+            content=data, media_type="application/x-pem-file",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in collected:
+            zf.writestr(name, data)
+    buf.seek(0)
+    return StreamingResponse(
+        buf, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{req.domain}-certs.zip"'},
+    )

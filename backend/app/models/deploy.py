@@ -50,6 +50,15 @@ class DeployRequest(BaseModel):
     external_squad_ids: list[str] = Field(default_factory=list)
     plugin_uuid: Optional[str] = Field(default=None)
     template_id: Optional[str] = Field(default=None)
+    # Components to SKIP during the pipeline (already present on the box). Used by
+    # the "add existing server" flow: a read-only detect (/api/node/detect) marks
+    # which components are installed, and the operator re-runs the deploy with only
+    # the missing ones. Values are the node_ops `Component` names (unknown ones are
+    # ignored by the pipeline). Empty (default) → full deploy.
+    skip_components: list[str] = Field(default_factory=list)
+    # Host-templates (from the deploy Template's host_template_ids) the operator
+    # UNchecked in the form → NOT auto-created as Remnawave hosts at deploy (Ф6).
+    disabled_host_template_ids: list[str] = Field(default_factory=list)
 
     # ── HAProxy relay mode ────────────────────────────────────
     haproxy_source_port: int = Field(default=443, ge=1, le=65535)
@@ -94,7 +103,7 @@ class DeployRequest(BaseModel):
     @classmethod
     def validate_ipv4(cls, v: str) -> str:
         pattern = r"^(\d{1,3}\.){3}\d{1,3}$"
-        if not re.match(pattern, v):
+        if not re.fullmatch(pattern, v):
             raise ValueError("Invalid IPv4 address")
         parts = v.split(".")
         if any(int(p) > 255 for p in parts):
@@ -114,7 +123,7 @@ class DeployRequest(BaseModel):
             r"^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
             r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$"
         )
-        if not re.match(pattern, v):
+        if not re.fullmatch(pattern, v):
             raise ValueError("Invalid domain (hostname expected)")
         return v
 
@@ -126,7 +135,7 @@ class DeployRequest(BaseModel):
         # the acme.sh install / zerossl register commands can't break out.
         if not v:
             return v
-        if not re.match(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", v):
+        if not re.fullmatch(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", v):
             raise ValueError("Invalid email")
         return v
 
@@ -161,7 +170,7 @@ class DeployCertRequest(BaseModel):
             r"^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
             r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$"
         )
-        if not re.match(pattern, v):
+        if not re.fullmatch(pattern, v):
             raise ValueError("Invalid domain (hostname expected)")
         return v
 
@@ -170,7 +179,7 @@ class DeployCertRequest(BaseModel):
     def _validate_email(cls, v: str) -> str:
         if not v:
             return v
-        if not re.match(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", v):
+        if not re.fullmatch(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", v):
             raise ValueError("Invalid email")
         return v
 

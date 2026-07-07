@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Globe, Trash2, Plus, ShieldCheck, Loader2 } from "lucide-react";
+import { Globe, Trash2, Plus, ShieldCheck, Loader2, Download } from "lucide-react";
 import { deployJobsKey } from "../auth/store";
 import type { FormData } from "./DeployForm";
 
@@ -18,6 +18,90 @@ function loadDeployDomains(): Row[] {
       .filter(j => j.finalStatus === "success" && j.domain && j.savedForm?.mode !== "haproxy")
       .map(j => ({ domain: j.domain, ip: j.ip, form: j.savedForm }));
   } catch { return []; }
+}
+
+// Per-row cert download. Deployed rows carry SSH creds (from savedForm) so we can
+// read the installed cert files; manual domains have none → the control is
+// disabled with a hint. Creds are sent per-request and never persisted.
+function DownloadCtl({ row }: { row: Row }) {
+  const [open, setOpen] = useState(false);
+  const [fc, setFc]     = useState(true);
+  const [key, setKey]   = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr]   = useState("");
+
+  if (!row.form) {
+    return (
+      <button className="iconbtn" style={{ width: 22, height: 22, opacity: 0.4 }}
+        disabled title="Нет сохранённых SSH-доступов (домен добавлен вручную)">
+        <Download size={12} />
+      </button>
+    );
+  }
+  const f = row.form;
+  const sshPort = parseInt(f.change_ssh_port ? f.new_ssh_port : f.current_ssh_port, 10) || 22;
+
+  const download = async () => {
+    const files = [fc ? "fullchain" : "", key ? "key" : ""].filter(Boolean);
+    if (!files.length) { setErr("Выберите файлы"); return; }
+    setBusy(true); setErr("");
+    try {
+      const res = await fetch("/api/certs/download", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ip: f.ip, ssh_user: f.ssh_user, ssh_password: f.ssh_password,
+          ssh_port: sshPort, domain: row.domain, files,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({ detail: res.statusText }));
+        setErr(typeof j.detail === "string" ? j.detail : "Ошибка скачивания");
+        return;
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename="(.+?)"/);
+      const name = m ? m[1] : `${row.domain}-cert`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = name; a.click();
+      URL.revokeObjectURL(url);
+      setOpen(false);
+    } catch { setErr("Сеть недоступна"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ position: "relative", flex: "none" }}>
+      <button className="iconbtn" style={{ width: 22, height: 22 }}
+        title="Скачать сертификат" onClick={() => setOpen(o => !o)}>
+        <Download size={12} />
+      </button>
+      {open && (
+        <div className="rounded-lg border" style={{
+          position: "absolute", right: 0, top: 26, zIndex: 20, width: 220, padding: 10,
+          background: "var(--bg1)", borderColor: "var(--line-soft)", boxShadow: "var(--shadow-pop)",
+          display: "flex", flexDirection: "column", gap: 8,
+        }}>
+          <label className="flex items-center gap-2 text-xs" style={{ color: "var(--t-mid)" }}>
+            <input type="checkbox" checked={fc} onChange={e => setFc(e.target.checked)} /> fullchain.pem
+          </label>
+          <label className="flex items-center gap-2 text-xs" style={{ color: "var(--t-mid)" }}>
+            <input type="checkbox" checked={key} onChange={e => setKey(e.target.checked)} /> приватный ключ
+          </label>
+          {key && (
+            <p className="text-[10px]" style={{ color: "var(--warn)" }}>
+              Ключ передаётся — используйте только по HTTPS.
+            </p>
+          )}
+          <button className="btn btn-primary" style={{ height: 28 }} disabled={busy} onClick={download}>
+            {busy ? <Loader2 size={13} className="animate-spin" /> : "Скачать"}
+          </button>
+          {err && <p className="errmsg" style={{ margin: 0 }}>{err}</p>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function DomainsPanel() {
@@ -112,6 +196,7 @@ export function DomainsPanel() {
               <span className="text-sm truncate flex-1" style={{ color: "var(--t-mid)" }}>{row.domain}</span>
               {row.ip && <span className="text-[10px] tabular-nums" style={{ color: "var(--t-faint)" }}>{row.ip}</span>}
               <span className="text-xs tabular-nums" style={{ color: cl.tone }}>{cl.text}</span>
+              <DownloadCtl row={row} />
               {row.manualId && (
                 <button onClick={() => removeManual(row.manualId!)} title="Удалить"
                   className="iconbtn danger" style={{ width: 22, height: 22 }}>

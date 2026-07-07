@@ -79,3 +79,11 @@ def load_hosts(account_id: Optional[str] = None) -> list:
 
 def save_hosts(hosts: list, account_id: Optional[str] = None) -> None:
     _write(_dir(account_id) / "hosts.json", {"hosts": hosts})
+
+
+def load_checkers(account_id: Optional[str] = None) -> list:
+    return _read(_dir(account_id) / "checkers.json").get("checkers", [])
+
+
+def save_checkers(checkers: list, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "checkers.json", {"checkers": checkers})

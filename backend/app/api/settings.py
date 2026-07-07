@@ -153,6 +153,7 @@ async def create_template(body: TemplateCreate):
         "name": body.name,
         "config": body.config,
         "is_default": body.is_default,
+        "host_template_ids": body.host_template_ids,
     }
     templates.append(tpl)
     storage.save_templates(templates)
@@ -174,6 +175,8 @@ async def update_template(template_id: str, body: TemplateUpdate):
         templates[idx]["config"] = body.config
     if body.is_default is not None:
         templates[idx]["is_default"] = body.is_default
+    if body.host_template_ids is not None:
+        templates[idx]["host_template_ids"] = body.host_template_ids
     storage.save_templates(templates)
     return templates[idx]
 

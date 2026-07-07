@@ -67,15 +67,20 @@ class Template(BaseModel):
     name: str
     config: str
     is_default: bool = False
+    # Local host-template ids (accounts/<id>/hosts.json) auto-created as Remnawave
+    # hosts at deploy time (Ф6).
+    host_template_ids: list[str] = []
 
 
 class TemplateCreate(BaseModel):
     name: str
     config: str
     is_default: bool = False
+    host_template_ids: list[str] = []
 
 
 class TemplateUpdate(BaseModel):
     name: Optional[str] = None
     config: Optional[str] = None
     is_default: Optional[bool] = None
+    host_template_ids: Optional[list[str]] = None

@@ -131,3 +131,76 @@ def test_domains_crud_and_isolation():
 
 def test_domains_requires_auth():
     assert client.get("/api/domains").status_code == 401
+
+
+# ── cert download (Ф8) ────────────────────────────────────────
+
+import base64 as _b64
+import io as _io
+import zipfile as _zip
+
+
+class _DownloadSSH:
+    """Mock SSH: returns base64 of fixture file contents for present files, the
+    __MISSING__ sentinel otherwise."""
+    def __init__(self, present=("fullchain", "key")):
+        self.present = present
+
+    async def connect(self, *a, **k):
+        pass
+
+    async def get_output(self, script):
+        if "_fullchain.pem" in script:
+            return "__OK__\n" + _b64.b64encode(b"FULLCHAIN-PEM").decode() if "fullchain" in self.present else "__MISSING__"
+        if ".key" in script:
+            return "__OK__\n" + _b64.b64encode(b"PRIVATE-KEY").decode() if "key" in self.present else "__MISSING__"
+        return "__MISSING__"
+
+    async def close(self):
+        pass
+
+
+def _dl_body(files, domain="n.example.com"):
+    return {"ip": "1.2.3.4", "ssh_user": "root", "ssh_password": "pw",
+            "ssh_port": 22, "domain": domain, "files": files}
+
+
+def test_download_single_file_returns_pem(monkeypatch):
+    monkeypatch.setattr(certsapi, "SSHSession", lambda *a, **k: _DownloadSSH())
+    r = client.post("/api/certs/download", headers=_auth(), json=_dl_body(["fullchain"]))
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/x-pem-file")
+    assert r.content == b"FULLCHAIN-PEM"
+
+
+def test_download_multiple_files_returns_zip(monkeypatch):
+    monkeypatch.setattr(certsapi, "SSHSession", lambda *a, **k: _DownloadSSH())
+    r = client.post("/api/certs/download", headers=_auth(), json=_dl_body(["fullchain", "key"]))
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/zip")
+    zf = _zip.ZipFile(_io.BytesIO(r.content))
+    assert set(zf.namelist()) == {"n.example.com_fullchain.pem", "n.example.com.key"}
+    assert zf.read("n.example.com.key") == b"PRIVATE-KEY"
+
+
+def test_download_missing_file_404(monkeypatch):
+    monkeypatch.setattr(certsapi, "SSHSession", lambda *a, **k: _DownloadSSH(present=()))
+    r = client.post("/api/certs/download", headers=_auth(), json=_dl_body(["fullchain"]))
+    assert r.status_code == 404
+
+
+def test_download_empty_files_422(monkeypatch):
+    monkeypatch.setattr(certsapi, "SSHSession", lambda *a, **k: _DownloadSSH())
+    r = client.post("/api/certs/download", headers=_auth(), json=_dl_body([]))
+    assert r.status_code == 422
+
+
+def test_download_requires_auth():
+    assert client.post("/api/certs/download", json=_dl_body(["fullchain"])).status_code == 401
+
+
+@pytest.mark.parametrize("bad", ['n.ex.com";reboot', "x$(id).com", "../etc/passwd", "a b.com"])
+def test_download_domain_fqdn_allowlist(monkeypatch, bad):
+    monkeypatch.setattr(certsapi, "SSHSession", lambda *a, **k: _DownloadSSH())
+    r = client.post("/api/certs/download", headers=_auth(), json=_dl_body(["fullchain"], domain=bad))
+    assert r.status_code == 422   # path/shell-injection blocked by the FQDN validator
