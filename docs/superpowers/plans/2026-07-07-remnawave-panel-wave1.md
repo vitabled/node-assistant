@@ -181,7 +181,7 @@ API + роутер в `main.py` → вкладка Settings + UI.
 следующий шаг: Ф2 использует хелперы для проб ноды; Ф2b — для матрицы/xray-link; Ф4 — инсталлер в деплое панели.
 
 ## Фаза 2 — Тесты ноды: характеристики/speedtest/xray-link + тумблер install_test_tools
-<!-- circle: status=pending order=20 deps=[1] autonomy=auto obstacle="" -->
+<!-- circle: status=done order=20 deps=[1] autonomy=auto obstacle="" -->
 
 **Подход:** по образцу `POST /api/stats/node` — одна SSH-сессия, параллельные read/бенч-пробы, креды
 per-request; история в per-account SQLite (отвергнуто: хранить креды и гонять по cron — нарушает no-secrets).
@@ -471,6 +471,23 @@ pg_dump/tar самим — distillium уже покрывает + аплоады
 **Контракт:** `GET /api/backup/status` (питает виджет Ф6). следующий шаг: none (Волна 1 завершена).
 
 ## Журнал
+
+### Ф2 — done (2026-07-07)
+Пайплайн **13→14 шагов**: `step_test_tools` на позиции 5 (внутри «Оптимизация ОС», гейт `install_test_tools`
++ `skip_components`, не-фатален, оба режима до mode-branch); сдвиг ВСЕХ индексов `_begin_step`/`_skip_component`/
+haproxy-слот 9→10/skip 11–14; `STEP_LABELS`↔`DEPLOY_STEPS` 14:1, `STEP_GROUPS` 3-5/6-9/11-14. `node_ops`:
+компонент `test_tools` (reinstall/uninstall/detect). `models/deploy.install_test_tools=True`, `DeployForm`
+тумблер. `speedtest_store.py` (per-account SQLite, explicit account_id, retention 90д). `POST /api/stats/
+node-speedtest` (одна SSH-сессия: lazy-install→характеристики→speedtest Ookla/python→iperf3 к тест-серверу
++ping/traceroute по метрикам→xray-туннель; 422 битая ссылка без утечки, 404 чужой testserver, 502 SSH,
+warnings не 500) + `GET …/history`. `DeployCard` блок «Характеристики и скорость» (селектор тест-сервера/
+xray-ссылка/метрики 1-3/запуск). TDD: парсеры первыми. Ревью (code+security): security чисто по инъекциям/
+изоляции; применены — **LOW-1/MED-2 креды xray-ссылки в argv → `SSHSession.get_script_output` (stdin,
+явное закрытие канала при таймауте)**, LOW-2 mktemp вместо `/tmp/xray-$$-$RANDOM`, LOW-3/apt-lock per-node
+`_INFLIGHT`-lock (409), MED-3 alive-ref против stale-setState, LOW устаревшие комментарии шагов (deploy.py/
+pipeline.py). Отклонены/defer: MED-1 (долгий синхронный эндпоинт — per-node lock смягчил, полный Task-стрим
+непропорционален), haproxy-рантайм-тест (статический индекс-тест мод-агностичен), юнит `SpeedtestBlock`.
+Verify: backend **239 passed** (+32), frontend **104 passed**, tsc clean.
 
 ### Ф1 — done (2026-07-07)
 `test_tools.py` (инсталлер iperf3+Ookla speedtest c python-fallback+xray-core, все опц. сбои → `[warn]`;
