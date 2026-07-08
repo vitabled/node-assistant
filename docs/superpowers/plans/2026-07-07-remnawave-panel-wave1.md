@@ -413,7 +413,7 @@ localStorage.
 **Контракт:** лист домена. следующий шаг: none.
 
 ## Фаза 8 — Переменные: редактор .env панели
-<!-- circle: status=pending order=80 deps=[6] autonomy=auto obstacle="" -->
+<!-- circle: status=done order=80 deps=[6] autonomy=auto obstacle="" -->
 
 **Подход:** чтение/запись `/opt/remnawave/.env` на сервере панели по SSH (creds per-request из `panel_jobs`),
 редактор key-value (отвергнуто: хранить .env у нас — секреты панели остаются на её сервере).
@@ -438,7 +438,7 @@ localStorage.
 **Контракт:** лист домена. следующий шаг: none.
 
 ## Фаза 9 — Резервное копирование (distillium): дэшборд + интерактивная настройка
-<!-- circle: status=pending order=90 deps=[6] autonomy=auto obstacle="" -->
+<!-- circle: status=done order=90 deps=[6] autonomy=auto obstacle="" -->
 
 **Подход:** ставить/конфигурировать distillium `backup-restore.sh` НА сервере панели по SSH (его секреты в
 `config.env` chmod 600 на целевом сервере), дэшборд-обёртка над его функционалом (отвергнуто: реализовывать
@@ -471,6 +471,36 @@ pg_dump/tar самим — distillium уже покрывает + аплоады
 **Контракт:** `GET /api/backup/status` (питает виджет Ф6). следующий шаг: none (Волна 1 завершена).
 
 ## Журнал
+
+### Ф9 — done (2026-07-08)
+`backup_service.py` (чистые SSH-генераторы distillium-обёртки: `install_script` ставит wrapper в
+`/opt/rw-backup-restore` + aws/rclone (best-effort) + `chmod 700`; `config_env_script` — секреты в
+одинарно-кавыченном heredoc `<<'RWCFG_EOF'` + `umask 077` + `chmod 600`, каждое значение `_shell_safe`;
+`setup_cron_script` marker-запись; `run_backup_script`; `restore_script(confirm)` — реальный только при
+confirm; `status_script`; wrapper `cmd_backup` под `umask 077` — дампы БД 0600). `api/backup.py`
+(`/api/backup/{setup,run,restore,status}`, restore без confirm→400, run/restore rc→FAILED). `rw/Backup.tsx`
+(выбор панели, метод аплоада + секреты, двойной confirm restore + предупреждение про том, «TLS не бэкапится»).
+Ревью (code+security): security **чисто по 5 областям** (инъекция через секреты блокирована 2 слоями +
+одинарные кавычки; restore-guard 3 слоя; тихий канал; auth). Применены — HIGH **GD_TOKEN прокинут в rclone**
+(`RCLONE_CONFIG_DRIVE_*` — метод Google Drive физически не работал), M aws/rclone ставятся в install, M
+**run/restore rc→FAILED** (был всегда SUCCESS даже при сбое), M gd-валидатор обязательных полей, L убран
+мёртвый `external` из Literal, SEC s3_access_key type=password + `umask 077` на дампы БД (были world-readable),
++тесты (rc→FAILED, gd-обязательность, newline/quote breakout в config.env). Отклонены: проброс backup-статуса
+в подрамку виджета Ф6 (требует SSH-поллинга из виджета — лишняя нагрузка; статус живёт в разделе), SSH-пароль
+в localStorage (унаследованная архитектура). Verify: backend **359 passed**, frontend **133 passed**, tsc clean.
+
+### Ф8 — done (2026-07-08)
+`api/panel_deploy.py` env-роуты `POST /api/panel/env/{read,write}` (маскировка секретов `_is_secret_env_key`,
+merge поверх текущего .env через тихий `get_script_output`, `umask 077`+`chmod 600`, `docker compose up -d`
+для применения), `rw/PanelVariables.tsx` (выбор панели, таблица key-value, секреты скрыты + type=password).
+Ревью (code+security): heredoc-побег через value невозможен (`<<'ENV_WRITE_EOF'` + значения без `\n` + формат
+`KEY=`), auth/тихий-канал/compose чисто. Применены — **HIGH METRICS_PASS маскируется** (`PASS`≠`PASSWORD` →
+утекал plaintext в /read; +PWD/PRIVATE/CREDENTIAL для запаса), M **проверка контейнера после compose up**
+(`restarted` по `docker ps status=running`, не только rc — bad .env крашит панель в restart-loop), M+SEC
+**пустой секрет не затирает** (серверный merge-guard) + дубликат-ключ по всем rows, M гонка `load()` (reqSeq
+guard против stale-ответа), L read-дедуп по ключу, L `__ENV_SAVED__` гейт на `$?` от cat + явный chmod 600,
+SEC новый секрет `type=password`. Отклонены: парсер не снимает кавычки (наш формат без кавычек, round-trip
+верен), SSH к любому IP (паттерн продукта). Verify: backend **20 env-тестов**, frontend tsc+npm clean.
 
 ### Ф7 — done (2026-07-08)
 `rw/PanelManageModal.tsx` (модалка 2 вкладки `.seg`; **Компоненты**: `panelManageableComponents(savedForm)` —
