@@ -17,6 +17,8 @@ import { SpeedTests }                      from "./components/stats/SpeedTests";
 import { Placeholder }                     from "./components/rw/Placeholder";
 import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
+import { PanelVariables }                  from "./components/rw/PanelVariables";
+import { Backup }                          from "./components/rw/Backup";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
 import { InfraProjects }                  from "./components/infra/InfraProjects";
@@ -193,8 +195,8 @@ export default function App() {
 
           {tab === "rw-install"   && <PanelDashboard />}
           {tab === "rw-subpages"  && <SubPages />}
-          {tab === "rw-variables" && <Placeholder title="Переменные" note="Появится в следующих фазах Волны 1" />}
-          {tab === "rw-backup"    && <Placeholder title="Резервное копирование" note="Появится в следующих фазах Волны 1" />}
+          {tab === "rw-variables" && <PanelVariables />}
+          {tab === "rw-backup"    && <Backup />}
           {tab === "rw-migration" && <Placeholder title="Миграция" note="Раздел появится в Волне 2" />}
           {tab === "rw-profiles"  && <Placeholder title="Профили" note="Раздел появится в Волне 2" />}
 

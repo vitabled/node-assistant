@@ -25,7 +25,12 @@ from typing import Literal, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from app.models.panel_deploy import PanelDeployRequest, SubServer
+from app.models.panel_deploy import (
+    _ENV_KEY_RE,
+    PanelDeployRequest,
+    SubServer,
+    _valid_ipv4,
+)
 from app.services import panel_pipeline
 from app.services.ssh_manager import SSHSession
 from app.services.task_store import TaskStatus, task_store
@@ -287,3 +292,257 @@ async def _panel_uninstall(ssh: SSHSession, task, req: PanelOpRequest) -> None:
             f"(удаление Docker под работающей панелью — деструктивная операция)."
         )
     await ssh.run_script(script, task, check=False, timeout=180)
+
+
+# ──────────────────────────────────────────────────────────────
+# Ф8 — Переменные: read / write the panel's /opt/remnawave/.env over SSH
+#
+# Both routes are SYNCHRONOUS (no Task) and use the SILENT SSH channel
+# (`get_script_output`) so the .env values NEVER reach a task log. Secret keys are
+# masked in the READ response (the client sees "••••••••", never the real value);
+# untouched masked secrets are preserved by a server-side MERGE on WRITE (the
+# client simply doesn't send them). Applying the change re-runs `docker compose
+# up -d` so the panel picks up the new env.
+# ──────────────────────────────────────────────────────────────
+
+_ENV_PATH = "/opt/remnawave/.env"
+_ENV_MAX_BYTES = 8 * 1024 * 1024  # 8 MiB read cap (a .env is a few KiB)
+_ENV_MASK = "••••••••"
+
+
+def _is_secret_env_key(key: str) -> bool:
+    """A key whose VALUE must be masked in the read response. `PASS` (not just
+    `PASSWORD`) so METRICS_PASS — a generated basic-auth secret — is masked too;
+    plus PWD/PRIVATE/CREDENTIAL for headroom. Over-masking is fail-safe; a missed
+    secret leaks. DATABASE_URL is matched exactly (its DSN embeds the PG pw)."""
+    up = key.upper()
+    if up == "DATABASE_URL":
+        return True
+    return any(
+        tok in up
+        for tok in ("SECRET", "PASS", "TOKEN", "KEY", "PWD", "PRIVATE", "CREDENTIAL")
+    )
+
+
+def _parse_env_text(text: str) -> list[tuple[str, str]]:
+    """Parse `.env` text into ordered (key, value) pairs. Blank lines and `#`
+    comments are dropped; the first `=` splits key/value (later `=` stay in the
+    value). Duplicate keys keep both here — the merge de-dups (last wins)."""
+    pairs: list[tuple[str, str]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            pairs.append((key, value))
+    return pairs
+
+
+def _read_env_script() -> str:
+    """Read `.env` via the silent channel. Echoes a one-line marker first so an
+    absent file (404) is distinguishable from an empty one; content is capped."""
+    return (
+        f"if [ -f {_ENV_PATH} ]; then "
+        f"echo __ENV_PRESENT__; head -c {_ENV_MAX_BYTES} {_ENV_PATH}; "
+        f"else echo __ENV_ABSENT__; fi\n"
+    )
+
+
+def _write_env_file_script(env_text: str) -> str:
+    """Overwrite `.env` via a quoted heredoc under `umask 077`, then chmod 600
+    (a `>`-truncate of an existing file keeps its old mode, so set it explicitly).
+    Quoted heredoc → no shell expansion of values. The __ENV_SAVED__ sentinel is
+    gated on the write actually succeeding (no false-positive on a full disk)."""
+    return (
+        "mkdir -p /opt/remnawave\n"
+        "if ( umask 077; cat > /opt/remnawave/.env <<'ENV_WRITE_EOF'\n"
+        + env_text
+        + "ENV_WRITE_EOF\n); then\n"
+        "  chmod 600 /opt/remnawave/.env\n"
+        "  echo __ENV_SAVED__\n"
+        "fi\n"
+    )
+
+
+# Apply the new .env by recreating the compose stack. Plain (non-f) string so the
+# `$out`/`$?`/`$(...)` survive untouched. No secrets are echoed (only container
+# names/status from compose).
+_COMPOSE_UP_SCRIPT = """\
+cd /opt/remnawave || { echo __NO_DIR__; exit 0; }
+out=$(docker compose up -d 2>&1 || docker-compose up -d 2>&1)
+echo "$out"
+# A 0 exit from `up -d` doesn't mean the backend stayed up (a bad .env can crash
+# it into a restart loop) — verify the container is actually running, like the
+# install pipeline does.
+for i in $(seq 1 6); do
+    if docker ps --filter name=remnawave-backend --filter status=running \
+        --format '{{.Names}}' 2>/dev/null | grep -q remnawave-backend; then
+        echo __COMPOSE_OK__; exit 0
+    fi
+    sleep 3
+done
+echo __COMPOSE_FAIL__
+"""
+
+
+class EnvReadRequest(BaseModel):
+    """Creds-per-request body for reading the panel `.env`. Transient (never
+    persisted); `ip` reuses the shared IPv4 shell-safety guard."""
+
+    ip: str
+    ssh_user: str = "root"
+    ssh_password: str = Field(..., min_length=1)
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+
+    @field_validator("ip")
+    @classmethod
+    def _validate_ip(cls, v: str) -> str:
+        if not _valid_ipv4(v):
+            raise ValueError("Invalid IPv4 address")
+        return v
+
+
+class EnvPairIn(BaseModel):
+    """One .env pair to upsert. Key = POSIX env-var name; value single-line (both
+    land in the file that root's compose reads)."""
+
+    key: str
+    value: str = ""
+
+    @field_validator("key")
+    @classmethod
+    def _validate_key(cls, v: str) -> str:
+        if not _ENV_KEY_RE.fullmatch(v):
+            raise ValueError("Invalid .env key (expected [A-Z_][A-Z0-9_]*)")
+        return v
+
+    @field_validator("value")
+    @classmethod
+    def _validate_value(cls, v: str) -> str:
+        if "\n" in v or "\r" in v:
+            raise ValueError(".env value must be single-line (no newlines)")
+        return v
+
+
+class EnvWriteRequest(EnvReadRequest):
+    """Merge-write: `pairs` are upserts (new + edited, incl. an explicitly-typed
+    new secret value), `deleted` are keys to remove. Anything NOT mentioned is
+    preserved from the server's current .env — so untouched masked secrets stay."""
+
+    pairs: list[EnvPairIn] = Field(default_factory=list)
+    deleted: list[str] = Field(default_factory=list)
+
+    @field_validator("deleted")
+    @classmethod
+    def _validate_deleted(cls, v: list[str]) -> list[str]:
+        for key in v:
+            if not _ENV_KEY_RE.fullmatch(key):
+                raise ValueError(f"Invalid .env key to delete: {key!r}")
+        return v
+
+
+async def _read_env_pairs(ssh: SSHSession) -> list[tuple[str, str]]:
+    """Silently read + parse the panel .env. Raises HTTPException(404) when the
+    file is absent, (502) on an unexpected/garbled read."""
+    out = await ssh.get_script_output(_read_env_script(), timeout=30)
+    marker, _, rest = out.partition("\n")
+    marker = marker.strip()
+    if marker == "__ENV_ABSENT__":
+        raise HTTPException(
+            status_code=404,
+            detail=f"Файл {_ENV_PATH} не найден (панель не установлена?).",
+        )
+    if marker != "__ENV_PRESENT__":
+        raise HTTPException(status_code=502, detail="Не удалось прочитать .env панели.")
+    return _parse_env_text(rest)
+
+
+@router.post("/env/read")
+async def panel_env_read(req: EnvReadRequest) -> dict:
+    """Read the panel `/opt/remnawave/.env` and return its pairs with secret
+    values masked. SSH failure → 502; missing file → 404. Values go through the
+    SILENT channel and are never logged; secret values never leave the server."""
+    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    try:
+        try:
+            await ssh.connect()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Не удалось подключиться к серверу {req.ip}:{req.ssh_port}: {exc}",
+            )
+        pairs = await _read_env_pairs(ssh)
+        # De-dup by key (last wins) so the UI matches what WRITE's merge treats as
+        # in-effect — a hand-edited .env with a duplicate key won't show two rows.
+        deduped = list(dict(pairs).items())
+        return {
+            "present": True,
+            "pairs": [
+                {
+                    "key": key,
+                    "value": _ENV_MASK if _is_secret_env_key(key) else value,
+                    "masked": _is_secret_env_key(key),
+                }
+                for key, value in deduped
+            ],
+        }
+    finally:
+        await ssh.close()
+
+
+@router.post("/env/write")
+async def panel_env_write(req: EnvWriteRequest) -> dict:
+    """Merge `pairs`/`deleted` onto the server's current .env, write it back
+    (silent, 0600), then `docker compose up -d` to apply. Missing .env → 404, SSH
+    failure → 502. Returns {ok, applied, removed, restarted, detail}; `restarted`
+    is false (with a compose-output `detail`) if the container failed to come up.
+    Values are never logged (silent channel)."""
+    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    try:
+        try:
+            await ssh.connect()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Не удалось подключиться к серверу {req.ip}:{req.ssh_port}: {exc}",
+            )
+        # Merge onto the current file (preserves untouched masked secrets).
+        merged: dict[str, str] = dict(await _read_env_pairs(ssh))
+        for key in req.deleted:
+            merged.pop(key, None)
+        for pair in req.pairs:
+            # Defense-in-depth: an empty value for an EXISTING secret key keeps the
+            # current secret (a masked field the client left blank must not wipe
+            # it). The client already avoids sending these, but don't rely on it.
+            if pair.value == "" and pair.key in merged and _is_secret_env_key(pair.key):
+                continue
+            merged[pair.key] = pair.value  # upsert; last duplicate wins
+        env_text = "".join(f"{k}={v}\n" for k, v in merged.items())
+
+        saved = await ssh.get_script_output(
+            _write_env_file_script(env_text), timeout=60
+        )
+        if "__ENV_SAVED__" not in saved:
+            raise HTTPException(status_code=502, detail="Не удалось записать .env.")
+
+        applied = await ssh.get_script_output(_COMPOSE_UP_SCRIPT, timeout=300)
+        restarted = "__COMPOSE_OK__" in applied
+        detail = ""
+        if not restarted:
+            tail = "\n".join(
+                ln
+                for ln in applied.splitlines()
+                if ln.strip() and not ln.startswith("__")
+            )
+            detail = tail[-1500:] if tail else "docker compose up завершился с ошибкой."
+        return {
+            "ok": True,
+            "applied": len(req.pairs),
+            "removed": len(req.deleted),
+            "restarted": restarted,
+            "detail": detail,
+        }
+    finally:
+        await ssh.close()
