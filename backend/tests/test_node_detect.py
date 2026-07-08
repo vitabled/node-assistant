@@ -50,6 +50,11 @@ def test_detect_scripts_contain_expected_probes():
     s = {c: b(d) for c, b in node_ops._DETECT_SCRIPTS.items()}
     assert "test -d /opt/node-accelerator" in s["node_accelerator"]
     assert "test -d /opt/TrafficGuard-auto" in s["trafficguard"]
+    # test_tools: iperf3 + either speedtest CLI (Ookla `speedtest` or python
+    # `speedtest-cli` — Ф1 installs whichever works, the probe accepts both)
+    assert "command -v iperf3" in s["test_tools"]
+    assert "command -v speedtest" in s["test_tools"]
+    assert "command -v speedtest-cli" in s["test_tools"]
     assert "docker ps --filter name=remnanode" in s["remnanode"]
     assert "/var/www/html" in s["masking"]
     assert "wg show warp" in s["warp"]
@@ -96,7 +101,7 @@ def test_skip_components_is_a_valid_field():
 
 
 class _Task:
-    total_steps = 13
+    total_steps = 14
 
     def __init__(self):
         self.begun: list[int] = []
@@ -153,7 +158,8 @@ def _run_pipeline_with_spies(monkeypatch, req):
     monkeypatch.setattr(pipeline, "SSHSession", _SSH)
     monkeypatch.setattr(pipeline, "get_backend_ip", backend_ip)
     for name in (
-        "step_node_accelerator", "step_traffic_guard", "step_system_optimize",
+        "step_node_accelerator", "step_traffic_guard", "step_test_tools",
+        "step_system_optimize",
         "step_ssl", "step_remnanode", "step_sni_masking", "step_warp",
         "step_certbot_ssl", "step_haproxy_deploy",
     ):
@@ -179,10 +185,19 @@ def test_run_pipeline_skips_listed_components(monkeypatch):
     assert "step_remnanode" in called
     assert "step_certbot_ssl" in called
     # … and the skipped step indices were still begun (progress bar advances).
-    for idx in (3, 9, 11):
+    # (Ф2 wave1 renumber: ssl=10, masking=12 after the step-5 «Тест-инструменты» insert.)
+    for idx in (3, 10, 12):
         assert idx in task.begun
     # a skip log was emitted
     assert any("Пропущено — уже установлено" in ln for ln in task.logs)
+
+
+def test_run_pipeline_skips_test_tools_component(monkeypatch):
+    req = _mk_req(skip_components=["test_tools"])
+    called, task = _run_pipeline_with_spies(monkeypatch, req)
+    assert task.status == TaskStatus.SUCCESS
+    assert "step_test_tools" not in called
+    assert 5 in task.begun  # step 5 still begun (progress bar advances)
 
 
 def test_run_pipeline_empty_skip_runs_everything(monkeypatch):

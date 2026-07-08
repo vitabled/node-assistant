@@ -28,6 +28,7 @@ export interface FormData {
   install_warp:        boolean;
   install_vnstat:      boolean;
   install_trafficguard: boolean;
+  install_test_tools:  boolean;
   update_system:       boolean;
   create_in_remnawave: boolean;
   internal_squad_ids:  string[];
@@ -91,6 +92,7 @@ export const FORM_DEFAULT: FormData = {
   install_warp:        false,
   install_vnstat:      true,
   install_trafficguard: true,
+  install_test_tools:  true,
   update_system:       false,
   create_in_remnawave: false,
   internal_squad_ids:  [],
@@ -808,6 +810,9 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
         <Toggle label="Установить TrafficGuard"
           checked={form.install_trafficguard}
           onChange={() => set("install_trafficguard", !form.install_trafficguard)} disabled={f} />
+        <Toggle label="Установить инструменты тестирования"
+          checked={form.install_test_tools}
+          onChange={() => set("install_test_tools", !form.install_test_tools)} disabled={f} />
 
         <div className="flex flex-col gap-1">
           <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>

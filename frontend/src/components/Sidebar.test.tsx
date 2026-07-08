@@ -35,4 +35,21 @@ describe("Sidebar", () => {
     expect(screen.getByText("Провайдеры")).toBeInTheDocument();
     expect(screen.getByText("API токены")).toBeInTheDocument();
   });
+
+  it("renders the Remnawave group with its six tabs", () => {
+    renderSidebar();
+    expect(screen.getByText("Remnawave")).toBeInTheDocument();
+    for (const label of [
+      "Установка", "Страницы подписок", "Переменные",
+      "Резервное копирование", "Миграция", "Профили",
+    ]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("dispatches the rw tab id when a Remnawave item is clicked", () => {
+    const { onTabChange } = renderSidebar();
+    fireEvent.click(screen.getByText("Установка"));
+    expect(onTabChange).toHaveBeenCalledWith("rw-install");
+  });
 });

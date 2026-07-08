@@ -13,6 +13,12 @@ import { CertsForm, type CertsFormData }  from "./components/CertsForm";
 import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
 import { UsersStats }                      from "./components/stats/UsersStats";
+import { SpeedTests }                      from "./components/stats/SpeedTests";
+import { Placeholder }                     from "./components/rw/Placeholder";
+import { PanelDashboard }                   from "./components/rw/PanelDashboard";
+import { SubPages }                        from "./components/rw/SubPages";
+import { PanelVariables }                  from "./components/rw/PanelVariables";
+import { Backup }                          from "./components/rw/Backup";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
 import { InfraProjects }                  from "./components/infra/InfraProjects";
@@ -47,6 +53,13 @@ const CRUMB: Record<Tab, [string, string]> = {
   "traffic":         ["Node Installer", "Трафик"],
   "settings":        ["Node Installer", "Настройки"],
   "stats-users":     ["Статистика", "Пользователи"],
+  "stats-speedtests": ["Статистика", "Тесты скорости"],
+  "rw-install":      ["Remnawave", "Установка"],
+  "rw-subpages":     ["Remnawave", "Страницы подписок"],
+  "rw-variables":    ["Remnawave", "Переменные"],
+  "rw-backup":       ["Remnawave", "Резервное копирование"],
+  "rw-migration":    ["Remnawave", "Миграция"],
+  "rw-profiles":     ["Remnawave", "Профили"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
   "infra-projects":  ["Инфра-биллинг", "Проекты"],
@@ -178,6 +191,14 @@ export default function App() {
           {tab === "settings" && <Settings />}
           {tab === "traffic" && <TrafficRules />}
           {tab === "stats-users" && <UsersStats />}
+          {tab === "stats-speedtests" && <SpeedTests />}
+
+          {tab === "rw-install"   && <PanelDashboard />}
+          {tab === "rw-subpages"  && <SubPages />}
+          {tab === "rw-variables" && <PanelVariables />}
+          {tab === "rw-backup"    && <Backup />}
+          {tab === "rw-migration" && <Placeholder title="Миграция" note="Раздел появится в Волне 2" />}
+          {tab === "rw-profiles"  && <Placeholder title="Профили" note="Раздел появится в Волне 2" />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}

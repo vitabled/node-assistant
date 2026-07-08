@@ -255,6 +255,7 @@ function DeployFormModal({
 const DETECT_LABELS: Record<string, string> = {
   node_accelerator: "Node Accelerator",
   trafficguard:     "TrafficGuard",
+  test_tools:       "Тест-инструменты",
   remnanode:        "Remnanode",
   masking:          "Маскировочный сайт",
   warp:             "WARP Native",

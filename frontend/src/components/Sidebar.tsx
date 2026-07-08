@@ -2,12 +2,14 @@ import {
   Activity, Rocket, ShieldCheck, FileCode2, Network, Gauge, Settings2, Server,
   PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal, Users,
+  ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
-  | "stats-users"
+  | "stats-users" | "stats-speedtests"
+  | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
@@ -23,7 +25,17 @@ const NAV_MAIN: NavItemDef[] = [
 ];
 
 const STATS_TABS: NavItemDef[] = [
-  { tab: "stats-users", label: "Пользователи", Icon: Users },
+  { tab: "stats-users",      label: "Пользователи",   Icon: Users },
+  { tab: "stats-speedtests", label: "Тесты скорости", Icon: Zap   },
+];
+
+const RW_TABS: NavItemDef[] = [
+  { tab: "rw-install",   label: "Установка",            Icon: ServerCog      },
+  { tab: "rw-subpages",  label: "Страницы подписок",    Icon: LayoutTemplate },
+  { tab: "rw-variables", label: "Переменные",           Icon: SlidersHorizontal },
+  { tab: "rw-backup",    label: "Резервное копирование", Icon: DatabaseBackup },
+  { tab: "rw-migration", label: "Миграция",             Icon: ArrowLeftRight },
+  { tab: "rw-profiles",  label: "Профили",              Icon: UserCog        },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
@@ -92,6 +104,10 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Статистика</p>
         {STATS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
+
+        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Remnawave</p>
+        {RW_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Инфра-биллинг</p>

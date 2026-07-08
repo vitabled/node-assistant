@@ -29,7 +29,7 @@ from app.services import pipeline
 router = APIRouter(prefix="/api/node")
 
 Component = Literal[
-    "node_accelerator", "trafficguard", "remnanode",
+    "node_accelerator", "trafficguard", "test_tools", "remnanode",
     "masking", "warp", "hysteria2", "ssl", "haproxy",
 ]
 Action = Literal["reinstall", "reconfigure", "uninstall"]
@@ -38,6 +38,7 @@ Action = Literal["reinstall", "reconfigure", "uninstall"]
 _COMPONENT_LABEL = {
     "node_accelerator": "Node Accelerator",
     "trafficguard": "TrafficGuard",
+    "test_tools": "Тест-инструменты",
     "remnanode": "Remnanode",
     "masking": "Маскировочный сайт",
     "warp": "WARP Native",
@@ -112,6 +113,12 @@ def _detect_cmd(test: str) -> str:
 _DETECT_SCRIPTS: dict[Component, Callable[[str], str]] = {
     "node_accelerator": lambda d: _detect_cmd("test -d /opt/node-accelerator"),
     "trafficguard": lambda d: _detect_cmd("test -d /opt/TrafficGuard-auto"),
+    # iperf3 + either speedtest CLI (Ookla `speedtest` or the python fallback
+    # `speedtest-cli` — Ф1 installs whichever works, so accept both).
+    "test_tools": lambda d: _detect_cmd(
+        "command -v iperf3 >/dev/null 2>&1 && "
+        "( command -v speedtest >/dev/null 2>&1 || command -v speedtest-cli >/dev/null 2>&1 )"
+    ),
     "remnanode": lambda d: _detect_cmd(
         "docker ps --filter name=remnanode --filter status=running "
         "--format '{{.Names}}' 2>/dev/null | grep -q remnanode"
@@ -219,6 +226,8 @@ async def _reinstall(ssh: SSHSession, task, req: NodeOpRequest) -> None:
         await pipeline.step_node_accelerator(ssh, task, req)
     elif c == "trafficguard":
         await pipeline.step_traffic_guard(ssh, task, get_backend_ip() or "")
+    elif c == "test_tools":
+        await pipeline.step_test_tools(ssh, task, req)
     elif c == "remnanode":
         token = req.remnanode_token
         if not token and req.create_in_remnawave:
@@ -350,6 +359,20 @@ echo "[ssl] Сертификат удалён."
 """
 
 
+def _u_test_tools(_req: NodeOpRequest) -> str:
+    # Removes the Ф1 toolkit: iperf3 + both speedtest CLIs + the xray binary,
+    # plus the iperf3-server unit a test-server deploy may have installed.
+    return """\
+echo "[test-tools] Удаляю инструменты тестирования..."
+systemctl disable --now iperf3-server 2>/dev/null || true
+rm -f /etc/systemd/system/iperf3-server.service 2>/dev/null || true
+systemctl daemon-reload 2>/dev/null || true
+DEBIAN_FRONTEND=noninteractive apt-get remove -y iperf3 speedtest speedtest-cli 2>/dev/null || true
+rm -f /usr/local/bin/xray 2>/dev/null || true
+echo "[test-tools] Удалены."
+"""
+
+
 def _u_haproxy(_req: NodeOpRequest) -> str:
     return """\
 echo "[haproxy] Останавливаю и удаляю HAProxy..."
@@ -381,6 +404,7 @@ echo "[node-accelerator] Удалён (правила ядра остаются 
 _UNINSTALL_SCRIPTS = {
     "warp": _u_warp,
     "trafficguard": _u_trafficguard,
+    "test_tools": _u_test_tools,
     "remnanode": _u_remnanode,
     "masking": _u_masking,
     "hysteria2": _u_hysteria2,

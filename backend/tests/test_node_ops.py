@@ -77,6 +77,14 @@ def test_masking_uninstall_restores_default_page():
     assert "index.html" in s
 
 
+def test_test_tools_uninstall_removes_tools_and_iperf_service():
+    s = _UNINSTALL_SCRIPTS["test_tools"](_req(component="test_tools"))
+    assert "apt-get remove -y iperf3 speedtest speedtest-cli" in s
+    assert "rm -f /usr/local/bin/xray" in s
+    assert "iperf3-server" in s
+    assert "rm -f /etc/systemd/system/iperf3-server.service" in s
+
+
 def test_all_uninstall_scripts_are_idempotent_guarded():
     # every uninstall must tolerate an absent component (|| true / 2>/dev/null)
     for c in typing.get_args(Component):

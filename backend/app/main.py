@@ -6,8 +6,25 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.api import (
-    auth, deploy, certs, ws, stats, settings as settings_router, traffic_rules,
-    xray_checker, infra_billing, node_ops, subscriptions, domains, hosts, user_stats,
+    auth,
+    deploy,
+    certs,
+    ws,
+    stats,
+    settings as settings_router,
+    traffic_rules,
+    xray_checker,
+    infra_billing,
+    node_ops,
+    subscriptions,
+    domains,
+    hosts,
+    user_stats,
+    testservers,
+    panel_deploy,
+    backup,
+    subpages,
+    speedtest,
 )
 from app.api.auth import require_account
 
@@ -69,6 +86,11 @@ app.include_router(subscriptions.router, dependencies=_auth)
 app.include_router(domains.router, dependencies=_auth)
 app.include_router(hosts.router, dependencies=_auth)
 app.include_router(user_stats.router, dependencies=_auth)
+app.include_router(testservers.router, dependencies=_auth)
+app.include_router(panel_deploy.router, dependencies=_auth)
+app.include_router(backup.router, dependencies=_auth)
+app.include_router(subpages.router, dependencies=_auth)
+app.include_router(speedtest.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.
