@@ -55,6 +55,19 @@ services:
     networks:
       - app-net
 
+  # MCP server image. Built here so it exists for the backend's DooD orchestrator
+  # to `docker run` (managed like the xray-checker container — see services/
+  # mcp_server.py). Profile-gated so `compose up` does NOT start it; build with:
+  #   docker compose --profile mcp-build build mcp
+  mcp:
+    build:
+      context: ./mcp
+      dockerfile: Dockerfile
+    image: node-installer-mcp:latest
+    profiles: ["mcp-build"]
+    networks:
+      - app-net
+
   frontend:
     build:
       context: ./frontend

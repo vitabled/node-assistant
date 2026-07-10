@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
@@ -18,6 +18,8 @@ if (config.http) {
     app.use(express.json({ limit: '4mb' }));
 
     const transports: Record<string, StreamableHTTPServerTransport> = {};
+    const MAX_SESSIONS = 128; // bound memory: a client that never sends DELETE
+    const authTokenBuf = Buffer.from(authToken);
 
     // Unauthenticated liveness probe (used by the backend orchestrator).
     app.get('/health', (_req, res) => {
@@ -27,7 +29,11 @@ if (config.http) {
     const authed = (req: express.Request): boolean => {
         const h = req.header('authorization') || '';
         const token = h.startsWith('Bearer ') ? h.slice(7) : '';
-        return !!token && token === authToken;
+        if (!token) return false;
+        const buf = Buffer.from(token);
+        // Length guard first (timingSafeEqual throws on unequal lengths), then a
+        // constant-time compare so the token isn't recoverable via timing.
+        return buf.length === authTokenBuf.length && timingSafeEqual(buf, authTokenBuf);
     };
     const forbidden = (res: express.Response) =>
         res.status(403).json({
@@ -50,6 +56,13 @@ if (config.http) {
                     id: null,
                 });
                 return;
+            }
+            // Bound the session map: evict the oldest if we're at the cap (a
+            // client that initialized then vanished without DELETE would leak).
+            const ids = Object.keys(transports);
+            if (ids.length >= MAX_SESSIONS) {
+                transports[ids[0]]?.close();
+                delete transports[ids[0]];
             }
             // New session on initialize.
             transport = new StreamableHTTPServerTransport({

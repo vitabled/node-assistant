@@ -26,6 +26,7 @@ from app.api import (
     subpages,
     speedtest,
     rules,
+    mcp,
 )
 from app.api.auth import require_account
 
@@ -98,6 +99,7 @@ app.include_router(backup.router, dependencies=_auth)
 app.include_router(subpages.router, dependencies=_auth)
 app.include_router(speedtest.router, dependencies=_auth)
 app.include_router(rules.router, dependencies=_auth)
+app.include_router(mcp.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.

@@ -46,13 +46,28 @@ class XrayCheckerConfig(BaseModel):
     """Config for the headless xray-checker container that node-assistant
     supervises. `subscription_url` is the Remnawave subscription the checker
     probes; the rest map 1:1 to the checker's env vars."""
+
     enabled: bool = False
     subscription_url: str = ""
-    check_interval: int = 300          # PROXY_CHECK_INTERVAL (seconds)
-    check_method: str = "ip"           # PROXY_CHECK_METHOD: ip|status|download
-    metrics_port: int = 2112           # METRICS_PORT (host port we scrape)
+    check_interval: int = 300  # PROXY_CHECK_INTERVAL (seconds)
+    check_method: str = "ip"  # PROXY_CHECK_METHOD: ip|status|download
+    metrics_port: int = 2112  # METRICS_PORT (host port we scrape)
     image: str = "kutovoys/xray-checker:latest"
-    poll_interval: int = 60            # how often node-assistant samples the checker
+    poll_interval: int = 60  # how often node-assistant samples the checker
+
+
+class McpConfig(BaseModel):
+    """Config for the node-installer MCP container (Ф3). The MCP_AUTH_TOKEN is
+    stored Fernet-encrypted (`auth_token_enc`); the plaintext is returned only to
+    the authenticated owner via the config endpoint so they can copy it into an
+    external client. Remnawave creds + a node-assistant JWT are injected at
+    container start from the active account's settings."""
+
+    enabled: bool = False
+    readonly: bool = True  # only read/list tools when true
+    http_port: int = 3100  # MCP_HTTP_PORT (host + container)
+    image: str = "node-installer-mcp:latest"
+    auth_token_enc: str = ""  # Fernet ciphertext (base64); never plaintext
 
 
 class AppSettings(BaseModel):
@@ -60,6 +75,7 @@ class AppSettings(BaseModel):
     deploy_defaults: DeployDefaults = DeployDefaults()
     optimization: OptimizationSettings = OptimizationSettings()
     xray_checker: XrayCheckerConfig = XrayCheckerConfig()
+    mcp: McpConfig = McpConfig()
 
 
 class Template(BaseModel):
