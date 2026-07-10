@@ -15,6 +15,7 @@ import { TrafficRules }                   from "./components/TrafficRules";
 import { UsersStats }                      from "./components/stats/UsersStats";
 import { SpeedTests }                      from "./components/stats/SpeedTests";
 import { Placeholder }                     from "./components/rw/Placeholder";
+import { Profiles }                         from "./components/profiles/Profiles";
 import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
 import { PanelVariables }                  from "./components/rw/PanelVariables";
@@ -198,7 +199,7 @@ export default function App() {
           {tab === "rw-variables" && <PanelVariables />}
           {tab === "rw-backup"    && <Backup />}
           {tab === "rw-migration" && <Placeholder title="Миграция" note="Раздел появится в Волне 2" />}
-          {tab === "rw-profiles"  && <Placeholder title="Профили" note="Раздел появится в Волне 2" />}
+          {tab === "rw-profiles"  && <Profiles />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}
