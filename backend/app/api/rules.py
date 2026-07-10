@@ -192,17 +192,12 @@ async def delete_rule(rule_id: str) -> None:
         raise HTTPException(404, "Правило не найдено")
 
 
-@router.post("/{rule_id}/test")
-async def test_rule(rule_id: str) -> dict:
-    """Dry-run: evaluate the rule against a fixture event (trigger-forced) and
-    return the would-run action plan — nothing is sent/changed."""
-    aid = accounts.current_account.get() or ""
-    rule = rules_store.get_rule(rule_id)
-    if not rule:
-        raise HTTPException(404, "Правило не найдено")
+async def _dry_run(rule: dict, aid: str) -> dict:
+    """Evaluate a rule against a fixture event (trigger-forced, cooldown cleared)
+    and return the would-run action plan. Pure dry-run: nothing is sent/changed,
+    and the plan masks secrets (see rule_actions._plan)."""
     now = int(time.time())
     event = _fixture_event(rule)
-    # Force enabled + clear cooldown so the test reflects trigger/conditions only.
     probe = {**rule, "enabled": True, "last_fired_at": None, "last_fired": {}}
     res = rule_engine.evaluate(probe, event, now, {})
     ctx = _context(event, aid)
@@ -214,6 +209,25 @@ async def test_rule(rule_id: str) -> dict:
         "evaluation": {k: res[k] for k in ("should_fire", "reason", "dry_run")},
         "plan": plan,
     }
+
+
+@router.post("/test")
+async def test_rule_draft(body: RuleCreate) -> dict:
+    """Dry-run a rule DRAFT (an unsaved rule body) — nothing is persisted and no
+    secret is vaulted. This lets the UI preview a new/edited rule without creating
+    an orphan rule + orphan vault secret on cancel."""
+    aid = accounts.current_account.get() or ""
+    return await _dry_run(body.model_dump(), aid)
+
+
+@router.post("/{rule_id}/test")
+async def test_rule(rule_id: str) -> dict:
+    """Dry-run a PERSISTED rule by id (nothing is sent/changed)."""
+    aid = accounts.current_account.get() or ""
+    rule = rules_store.get_rule(rule_id)
+    if not rule:
+        raise HTTPException(404, "Правило не найдено")
+    return await _dry_run(rule, aid)
 
 
 # ── webhook receiver (ungated, HMAC-verified) ─────────────────

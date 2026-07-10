@@ -16,6 +16,8 @@ import { UsersStats }                      from "./components/stats/UsersStats";
 import { SpeedTests }                      from "./components/stats/SpeedTests";
 import { Placeholder }                     from "./components/rw/Placeholder";
 import { Profiles }                         from "./components/profiles/Profiles";
+import { RuleBuilder }                      from "./components/automation/RuleBuilder";
+import { Notifications }                    from "./components/automation/Notifications";
 import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
 import { PanelVariables }                  from "./components/rw/PanelVariables";
@@ -55,6 +57,8 @@ const CRUMB: Record<Tab, [string, string]> = {
   "settings":        ["Node Installer", "Настройки"],
   "stats-users":     ["Статистика", "Пользователи"],
   "stats-speedtests": ["Статистика", "Тесты скорости"],
+  "automation":      ["Автоматизация", "Правила"],
+  "notifications":   ["Автоматизация", "Уведомления"],
   "rw-install":      ["Remnawave", "Установка"],
   "rw-subpages":     ["Remnawave", "Страницы подписок"],
   "rw-variables":    ["Remnawave", "Переменные"],
@@ -193,6 +197,9 @@ export default function App() {
           {tab === "traffic" && <TrafficRules />}
           {tab === "stats-users" && <UsersStats />}
           {tab === "stats-speedtests" && <SpeedTests />}
+
+          {tab === "automation" && <RuleBuilder />}
+          {tab === "notifications" && <Notifications />}
 
           {tab === "rw-install"   && <PanelDashboard />}
           {tab === "rw-subpages"  && <SubPages />}

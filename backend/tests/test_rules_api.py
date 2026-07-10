@@ -138,6 +138,32 @@ def test_test_endpoint_404_for_missing_rule():
     assert client.post("/api/rules/nope/test", headers=h).status_code == 404
 
 
+def test_draft_test_endpoint_does_not_persist(monkeypatch):
+    """POST /api/rules/test dry-runs a rule BODY without creating a rule or
+    vaulting its token (fixes the orphan-on-cancel bug in the UI)."""
+    h, aid = _auth()
+    sent = {"n": 0}
+
+    async def _send(*a, **k):
+        sent["n"] += 1
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram, "send_message", _send)
+    r = client.post("/api/rules/test", headers=h, json=_rule_body(enabled=False))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["evaluation"]["should_fire"] is True  # fixture xray_down 6 min
+    # The draft's plaintext token is stripped from the plan (masked to ""/MASK) —
+    # never echoed back.
+    assert body["plan"][0]["plan"]["bot_token"] in ("", rules_store.MASK)
+    assert "REALtoken" not in json.dumps(body)
+    assert sent["n"] == 0  # nothing sent
+    assert client.get("/api/rules", headers=h).json() == []  # NO rule persisted
+    # And no secret vaulted: the account's secrets db has no rows for this draft.
+    raw = accounts.data_dir(aid) / "rules.json"
+    assert not raw.exists() or raw.read_text(encoding="utf-8").strip() in ("[]", "")
+
+
 # ── webhook receiver (HMAC) ───────────────────────────────────
 def _sign(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
