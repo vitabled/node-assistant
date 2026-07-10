@@ -418,3 +418,23 @@ SPA — нужен единый скин/аккаунт-контекст; сте
 **Контракт:** лист домена (Волна 2 завершена). следующий шаг: none.
 
 ## Журнал
+
+### Ф1 — движок правил (бэкенд) — ГОТОВО (commit bc19134)
+- `services/rule_engine.py` (чистый эвалюатор), `rules_store.py` (JSON + Fernet-vault), `rule_actions.py`, `telegram.py`, `api/rules.py` (gated CRUD + `/test` dry-run + ungated HMAC webhook + `rules_loop`). `remnawave_client`: enable/disable node+user, list/bulk hide-show hosts. `config.webhook_secret_header`, `main.py` wiring.
+- Self-review (2 сабагента: code+security) применён. Значимые фиксы:
+  - **HIGH** cooldown был per-rule → сделан **per-(rule,node)** (`cooldown_scope`, `mark_fired` read-modify-write); `_xray_down_events` эмитит событие на КАЖДУЮ down-ноду (была только worst → правила с node-фильтром для не-worst не срабатывали).
+  - **MED/HIGH** `hide/show_hosts` без селектора прятал ВСЕ хосты → селектор обязателен, иначе отказ.
+  - **LOW** anti-replay по подписанному телу (±300с); GC token_ref при `update_rule`; `redact()` во всех exc-логах цикла; валидация uuid до URL-интерполяции.
+- Тесты: `test_rule_engine/rule_actions/rules_api`. Полный backend — **413 passed**.
+
+### Ф9 — редактор Xray-профилей (фронтенд) — ГОТОВО (commit d3aa71b)
+- `components/profiles/**` (форк bropines/xray-config-ui-editor): `core/{types,schema,validators,diagnostics,crypto,factories,warp,links}`, `store/configStore`, модалки + `Profiles.tsx`. Роут `rw-profiles` в `App.tsx`. Деп: zustand/immer/ajv/tweetnacl/@codemirror.
+- Self-review применён. Значимые фиксы:
+  - **MED** `crypto`: Math.random → **CSPRNG** для UUID/shortId/spiderX (REALITY-материал).
+  - **MED** `links`: реализован **vmess://** парсер (был в placeholder/генераторе, но не парсился).
+  - **MED** `validators`+`DiagnosticsPanel`: enum-нарушения (закрытые enum) → **warning**, не блокер синка; `validateBalancer` учитывает ajv-ошибки; убран неиспользуемый `ajv-formats`.
+  - **LOW** лимит импорта 5 МБ; лейбл «не синхронизировано».
+- Тесты: `crypto/configStore/links(vmess)/validators`. Полный frontend — **167 passed**, tsc чист.
+
+### Осталось (Волна 2)
+Ф2 (фронт правил, deps Ф1) · Ф3 (MCP-форк) · Ф4 (ИИ-агент, deps Ф3) · Ф5/Ф6 (синк бэк/фронт) · Ф7/Ф8 (миграция бэк/фронт) · задача финализации.
