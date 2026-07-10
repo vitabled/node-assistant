@@ -445,5 +445,17 @@ SPA — нужен единый скин/аккаунт-контекст; сте
   - **security** токен existing → `••••`/`type=password`, plaintext не рендерится/не логируется; XSS чисто.
 - Тесты: `RuleBuilder.test.tsx` (10) + backend `test_draft_test_endpoint_does_not_persist`. Frontend **177 passed**, backend **414 passed**, tsc чист, build успешен.
 
+### Ф3 — MCP-сервер — ГОТОВО (commits beb2f25 Ф3a + 76573c7 Ф3b)
+- **Ф3a** `mcp/` — форк TrackLine/mcp-remnawave (MIT): бамп `@remnawave/backend-contract` 2.6.27→**2.9.14** + починка разломов (`USERS.GET_BY.{TELEGRAM_ID,EMAIL,TAG,SUBSCRIPTION_UUID}`/`HOSTS.BULK.{SET_INBOUND,SET_PORT}` удалены; `IP_CONTROL`→`CONNECTIONS`), zod 3.x. `tools/node-assistant.ts` (read-only в наш backend), Streamable HTTP транспорт (session-based, Bearer-гейт). Smoke: **156 инструментов**, initialize+tools/list, 403.
+- **Ф3b** `services/mcp_server.py` (DooD-оркестрация) + `api/mcp.py` + `settings/McpTab.tsx` + compose-сервис `mcp`.
+- Self-review (2 сабагента) применён. Значимые фиксы:
+  - **HIGH**: owner-маркер (`mcp_owner.json`) — статус аккаунта-не-владельца больше не врёт «running/reachable» (показывает «foreign»); `stop()` не рушит чужой контейнер.
+  - **HIGH**: McpTab порт-поле контролируемое+валидация.
+  - **MED security**: секреты через `--env-file` 0600 (не argv).
+  - **MED**: единая запись settings; GET без сайд-эффекта; `_docker` ловит OSError; `container_state` дизамбигуирует зависший демон; McpTab `res.ok`+422-формат.
+  - **security/LOW**: timing-safe токен, кап сессий, `_decrypt` узкий except, guard образа.
+  - **Отклонено (обоснованно)**: JWT-exp (правка auth-ядра §1b), DNS-rebinding (Bearer-гейт достаточен), extract docker_cli.
+- Тесты: `test_mcp.py` (9), MCP `smoke.mjs`. Backend **423**, frontend **177**, tsc/build чисто.
+
 ### Осталось (Волна 2)
-Ф3 (MCP-форк) · Ф4 (ИИ-агент, deps Ф3) · Ф5/Ф6 (синк бэк/фронт) · Ф7/Ф8 (миграция бэк/фронт) · задача финализации.
+Ф4 (ИИ-агент, deps Ф3) · Ф5/Ф6 (синк бэк/фронт) · Ф7/Ф8 (миграция бэк/фронт) · задача финализации.
