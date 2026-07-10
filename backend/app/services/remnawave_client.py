@@ -214,6 +214,27 @@ class RemnavaveClient:
         data = await self._req("POST", "/api/hosts", json=body)
         return _unwrap(data)
 
+    async def list_hosts(self) -> list[dict]:
+        """GET /api/hosts (HostsController_getAllHosts).
+        Response: { response: [{ uuid, isDisabled, nodes:[uuid], inbound:{...} }] }.
+        Returns the host list (each carries `nodes` and `inbound.configProfileUuid`,
+        used to select hosts by node / config-profile for hide/show actions)."""
+        data = await self._req("GET", "/api/hosts")
+        payload = _unwrap(data)
+        return payload if isinstance(payload, list) else []
+
+    async def bulk_disable_hosts(self, uuids: list[str]) -> dict:
+        """POST /api/hosts/bulk/disable — body { uuids }. Hides hosts from subs."""
+        if not uuids:
+            return {}
+        return _unwrap(await self._req("POST", "/api/hosts/bulk/disable", json={"uuids": uuids}))
+
+    async def bulk_enable_hosts(self, uuids: list[str]) -> dict:
+        """POST /api/hosts/bulk/enable — body { uuids }. Re-shows hidden hosts."""
+        if not uuids:
+            return {}
+        return _unwrap(await self._req("POST", "/api/hosts/bulk/enable", json={"uuids": uuids}))
+
     async def get_internal_squad(self, squad_uuid: str) -> dict:
         """
         GET /api/internal-squads/{uuid}
@@ -297,6 +318,14 @@ class RemnavaveClient:
         payload = _unwrap(data)
         return payload if isinstance(payload, list) else []
 
+    async def enable_node(self, node_uuid: str) -> dict:
+        """POST /api/nodes/{uuid}/actions/enable (no body). Idempotent server-side."""
+        return _unwrap(await self._req("POST", f"/api/nodes/{node_uuid}/actions/enable"))
+
+    async def disable_node(self, node_uuid: str) -> dict:
+        """POST /api/nodes/{uuid}/actions/disable (no body). Idempotent server-side."""
+        return _unwrap(await self._req("POST", f"/api/nodes/{node_uuid}/actions/disable"))
+
     async def get_nodes_metrics(self) -> list[dict]:
         """GET /api/system/nodes/metrics — per-node live metrics.
         Response: { response: { nodes: [{ nodeUuid, nodeName, countryEmoji,
@@ -365,6 +394,14 @@ class RemnavaveClient:
                 break
             start += page_size
         return result
+
+    async def enable_user(self, user_uuid: str) -> dict:
+        """POST /api/users/{uuid}/actions/enable (no body). Idempotent server-side."""
+        return _unwrap(await self._req("POST", f"/api/users/{user_uuid}/actions/enable"))
+
+    async def disable_user(self, user_uuid: str) -> dict:
+        """POST /api/users/{uuid}/actions/disable (no body). Idempotent server-side."""
+        return _unwrap(await self._req("POST", f"/api/users/{user_uuid}/actions/disable"))
 
     async def bulk_update_users_traffic(
         self,

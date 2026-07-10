@@ -25,6 +25,7 @@ from app.api import (
     backup,
     subpages,
     speedtest,
+    rules,
 )
 from app.api.auth import require_account
 
@@ -36,14 +37,19 @@ async def lifespan(app: FastAPI):
     #  - collector: snapshots Remnawave per-node usersOnline into the user-stats
     #    store (node-load history + best-effort migrations).
     # Both skip work when their source is unconfigured/off.
+    #  - rules: evaluates xray_down/cron rules per-account and runs their actions
+    #    (telegram / hide-hosts / disable node|user); webhook rules run in the
+    #    receiver, not here.
     poller = asyncio.create_task(xray_checker.poller_loop())
     collector = asyncio.create_task(user_stats.collector_loop())
+    rules_task = asyncio.create_task(rules.rules_loop())
+    tasks = (poller, collector, rules_task)
     try:
         yield
     finally:
-        for t in (poller, collector):
+        for t in tasks:
             t.cancel()
-        for t in (poller, collector):
+        for t in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await t
 
@@ -91,6 +97,7 @@ app.include_router(panel_deploy.router, dependencies=_auth)
 app.include_router(backup.router, dependencies=_auth)
 app.include_router(subpages.router, dependencies=_auth)
 app.include_router(speedtest.router, dependencies=_auth)
+app.include_router(rules.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.
@@ -100,6 +107,10 @@ app.include_router(ws.router)
 # it without a host port and nginx does not proxy /internal. Same ungated posture
 # as ws.router, justified by network isolation.
 app.include_router(subscriptions.internal_router)
+# Remnawave webhook receiver — NOT account-gated. Its capability is a valid
+# HMAC-SHA256 signature (shared WEBHOOK_SECRET_HEADER secret); a browser can't
+# forge one. Same ungated posture as ws.router, justified by the signature gate.
+app.include_router(rules.webhook_router)
 
 
 @app.get("/api/health")
