@@ -436,5 +436,14 @@ SPA — нужен единый скин/аккаунт-контекст; сте
   - **LOW** лимит импорта 5 МБ; лейбл «не синхронизировано».
 - Тесты: `crypto/configStore/links(vmess)/validators`. Полный frontend — **167 passed**, tsc чист.
 
+### Ф2 — фронтенд движка правил — ГОТОВО (commit после d3aa71b)
+- `components/automation/`: `rulesApi.ts` (общий клиент), `RuleBuilder.tsx` (билдер триггер/условия/действия + dry-run), `Notifications.tsx` (упрощённые telegram-нотифы), `RuleBuilder.test.tsx`. Проводка Sidebar («Автоматизация» группа + «Уведомления» над «Настройки») + App.tsx.
+- Self-review применён. Значимые фиксы:
+  - **HIGH** «Проверить» на новом правиле создавал orphan-правило + orphan vault-токен при отмене → добавлен stateless `POST /api/rules/test` (dry-run драфта без персиста); фронт превьюит не сохраняя.
+  - **MED** `listRules` бросает при не-OK (ошибка ≠ пустой список); `in`-условие → список (иначе backend деградирует в substring); Notifications валидирует minutes>0; toggle/delete-ошибки → toast; 422 форматируется без эха `input` (утечка plaintext-токена).
+  - **MED/LOW** пустой bot_token при token_ref вычищается (не затирает vault); служебные `_`-ключи strip; пустое поле условия блокирует сохранение; dry-run-план показывает цели не-telegram действий; убран мёртвый `EMPTY_TRIGGER`.
+  - **security** токен existing → `••••`/`type=password`, plaintext не рендерится/не логируется; XSS чисто.
+- Тесты: `RuleBuilder.test.tsx` (10) + backend `test_draft_test_endpoint_does_not_persist`. Frontend **177 passed**, backend **414 passed**, tsc чист, build успешен.
+
 ### Осталось (Волна 2)
-Ф2 (фронт правил, deps Ф1) · Ф3 (MCP-форк) · Ф4 (ИИ-агент, deps Ф3) · Ф5/Ф6 (синк бэк/фронт) · Ф7/Ф8 (миграция бэк/фронт) · задача финализации.
+Ф3 (MCP-форк) · Ф4 (ИИ-агент, deps Ф3) · Ф5/Ф6 (синк бэк/фронт) · Ф7/Ф8 (миграция бэк/фронт) · задача финализации.
