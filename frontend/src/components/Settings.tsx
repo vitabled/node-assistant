@@ -12,6 +12,7 @@ import { CheckerControls } from "./monitoring/CheckerControls";
 import { CheckerRegistry } from "./monitoring/CheckerRegistry";
 import { TestServers } from "./settings/TestServers";
 import { McpTab } from "./settings/McpTab";
+import { AiChat } from "./settings/AiChat";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -741,7 +742,7 @@ export function Settings() {
         {sub === "optimization" && <OptimizationTab />}
         {sub === "monitoring"   && <MonitoringTab />}
         {sub === "testservers"  && <TestServersTab />}
-        {sub === "mcp"          && <McpTab />}
+        {sub === "mcp"          && <div className="flex flex-col gap-4 max-w-2xl"><McpTab /><AiChat /></div>}
         {sub === "theme"        && <ThemeTab />}
       </div>
     </div>

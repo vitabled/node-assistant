@@ -70,12 +70,26 @@ class McpConfig(BaseModel):
     auth_token_enc: str = ""  # Fernet ciphertext (base64); never plaintext
 
 
+class AiConfig(BaseModel):
+    """Config for the built-in AI agent (Ф4). The provider API key is stored
+    Fernet-encrypted (`api_key_enc`) and NEVER returned to the client (masked)."""
+
+    enabled: bool = False
+    provider: str = "openai"  # openai (OpenAI-compatible) | anthropic
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "gpt-4o-mini"
+    api_key_enc: str = ""  # Fernet ciphertext (base64); never plaintext
+    max_steps: int = 6  # tool-calling loop cap (anti-runaway)
+    readonly: bool = True  # only read-only tools exposed to the agent
+
+
 class AppSettings(BaseModel):
     remnawave: RemnavaveConfig = RemnavaveConfig()
     deploy_defaults: DeployDefaults = DeployDefaults()
     optimization: OptimizationSettings = OptimizationSettings()
     xray_checker: XrayCheckerConfig = XrayCheckerConfig()
     mcp: McpConfig = McpConfig()
+    ai: AiConfig = AiConfig()
 
 
 class Template(BaseModel):
