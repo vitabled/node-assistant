@@ -29,6 +29,7 @@ from app.api import (
     mcp,
     ai,
     panel_sync,
+    migrate,
 )
 from app.api.auth import require_account
 
@@ -104,6 +105,7 @@ app.include_router(rules.router, dependencies=_auth)
 app.include_router(mcp.router, dependencies=_auth)
 app.include_router(ai.router, dependencies=_auth)
 app.include_router(panel_sync.router, dependencies=_auth)
+app.include_router(migrate.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.
