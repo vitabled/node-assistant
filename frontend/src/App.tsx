@@ -18,6 +18,7 @@ import { Placeholder }                     from "./components/rw/Placeholder";
 import { Profiles }                         from "./components/profiles/Profiles";
 import { RuleBuilder }                      from "./components/automation/RuleBuilder";
 import { Notifications }                    from "./components/automation/Notifications";
+import { Migration }                        from "./components/rw/Migration";
 import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
 import { PanelVariables }                  from "./components/rw/PanelVariables";
@@ -205,7 +206,7 @@ export default function App() {
           {tab === "rw-subpages"  && <SubPages />}
           {tab === "rw-variables" && <PanelVariables />}
           {tab === "rw-backup"    && <Backup />}
-          {tab === "rw-migration" && <Placeholder title="Миграция" note="Раздел появится в Волне 2" />}
+          {tab === "rw-migration" && <Migration />}
           {tab === "rw-profiles"  && <Profiles />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
