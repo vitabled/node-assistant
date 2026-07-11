@@ -457,5 +457,22 @@ SPA — нужен единый скин/аккаунт-контекст; сте
   - **Отклонено (обоснованно)**: JWT-exp (правка auth-ядра §1b), DNS-rebinding (Bearer-гейт достаточен), extract docker_cli.
 - Тесты: `test_mcp.py` (9), MCP `smoke.mjs`. Backend **423**, frontend **177**, tsc/build чисто.
 
-### Осталось (Волна 2)
-Ф4 (ИИ-агент, deps Ф3) · Ф5/Ф6 (синк бэк/фронт) · Ф7/Ф8 (миграция бэк/фронт) · задача финализации.
+### Ф4 — встроенный ИИ-агент — ГОТОВО (commit 5b8b4a8)
+- `services/ai_agent.py` (agent-loop, OpenAI-совместимый + Anthropic, read-only tools) + `api/ai.py` (config/chat ndjson-стрим) + `settings/AiChat.tsx` (под MCP-вкладкой). `AiConfig` в модели.
+- Self-review применён: **HIGH SSRF** (base_url → `net_guard.is_safe_url` фетч-тайм); **HIGH** Anthropic system→top-level; **HIGH** guard парсинга ответа; MED last-step tools-off, unknown-provider→422, `_cfg`-дедуп; frontend patchLast-иммутабельность/AbortController/id-матч; cap истории 4000. Отклонено: extract crypto (4 модуля), httpx-per-turn.
+- Тесты: `test_ai.py` (18), `AiChat.test.tsx` (3). Backend **441**, frontend **180**.
+
+### Ф5 — синхронизация панелей (backend) — ГОТОВО (commit f75bd96)
+sync_store (группы/приоритеты/nearest_higher_primary) + panel_sync (backup→SFTP-релей→restore) + api/panel_sync. Self-review HIGH: restore восстанавливал ЛОКАЛЬНЫЙ бэкап standby → добавлен реальный SFTP-перенос бандла + restore конкретного бандла; in-flight lock; backup-fail-stops-restore. `test_panel_sync.py` (17).
+
+### Ф6 — синхронизация (frontend) — ГОТОВО (commit cf13a3c)
+`rw/SyncGroupPanel.tsx` в PanelDashboard. Self-review HIGH: fresh re-load групп перед вычислением nearest-primary (устаревшие роли); модалка всегда закрываема; guard двойного клика. `SyncGroupPanel.test.tsx` (6).
+
+### Ф7 — миграция (backend) — ГОТОВО (commit c6de305)
+marzban_migrate (API+docker-обёртка+парсер) + marzban_reality (Reality-патч+legacy) + api/migrate. Self-review MED: SSRF-гард на каждом фетче Marzban + гард remnawave_url; образ пиннится server-side (не произвольный docker через DooD); security=reality форсится. `test_migrate.py` (18).
+
+### Ф8 — миграция (frontend) — ГОТОВО (commit a4c71a3)
+`rw/Migration.tsx` — 5-секционный визард. Self-review (2-агентный заблокирован session-лимитом → самостоятельно): секреты type=password/не логируются, confirm перед migrate, любая операция блокирует все кнопки. `Migration.test.tsx` (5).
+
+### ВОЛНА 2 ЗАВЕРШЕНА
+Все 9 фаз готовы (Ф1-Ф9), закоммичены с per-фазным code+security ревью и применёнными фиксами. Backend **474 passed**, frontend **191 passed**, MCP smoke 156 инструментов, tsc/build чисто. Доки CLAUDE.md §8 в синхроне.
