@@ -2181,8 +2181,11 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                 task.add_log("\x1b[90m[skip] WARP не выбран.\x1b[0m")
 
             # ── Step 14: Hysteria2 (Certbot standalone SSL — label only renamed) ──
-            if "hysteria2" in skip:
+            # Gated on install_hysteria2 (Plan B 2a); skip_components still wins.
+            if "hysteria2" in skip or not req.install_hysteria2:
                 _skip_component(task, 14, "hysteria2")
+                if not req.install_hysteria2 and "hysteria2" not in skip:
+                    task.add_log("\x1b[90m[skip] Hysteria2 не выбран.\x1b[0m")
             else:
                 await step_certbot_ssl(ssh, task, req.domain, req.email)
 
