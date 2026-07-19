@@ -30,6 +30,7 @@ from app.api import (
     ai,
     panel_sync,
     migrate,
+    server_monitor,
 )
 from app.api.auth import require_account
 
@@ -50,7 +51,10 @@ async def lifespan(app: FastAPI):
     collector = asyncio.create_task(user_stats.collector_loop())
     rules_task = asyncio.create_task(rules.rules_loop())
     autostart = asyncio.create_task(xray_checker.autostart_checker())
-    tasks = (poller, collector, rules_task, autostart)
+    #  - server monitor: probes each account's tracked servers by IP (TCP/ICMP)
+    #    for the «Server uptime» dashboard tab.
+    srv_monitor = asyncio.create_task(server_monitor.monitor_loop())
+    tasks = (poller, collector, rules_task, autostart, srv_monitor)
     try:
         yield
     finally:
@@ -109,6 +113,7 @@ app.include_router(mcp.router, dependencies=_auth)
 app.include_router(ai.router, dependencies=_auth)
 app.include_router(panel_sync.router, dependencies=_auth)
 app.include_router(migrate.router, dependencies=_auth)
+app.include_router(server_monitor.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.
