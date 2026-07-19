@@ -3,12 +3,14 @@ import {
   PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
+  Workflow, Bell,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
   | "stats-users" | "stats-speedtests"
+  | "automation" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
@@ -27,6 +29,10 @@ const NAV_MAIN: NavItemDef[] = [
 const STATS_TABS: NavItemDef[] = [
   { tab: "stats-users",      label: "Пользователи",   Icon: Users },
   { tab: "stats-speedtests", label: "Тесты скорости", Icon: Zap   },
+];
+
+const AUTOMATION_TABS: NavItemDef[] = [
+  { tab: "automation", label: "Правила", Icon: Workflow },
 ];
 
 const RW_TABS: NavItemDef[] = [
@@ -106,6 +112,10 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         {STATS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Автоматизация</p>
+        {AUTOMATION_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
+
+        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Remnawave</p>
         {RW_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
@@ -116,8 +126,15 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         {INFRA_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
       </div>
 
-      {/* footer — Настройки (moved out of the main nav) */}
+      {/* footer — Уведомления + Настройки (moved out of the main nav) */}
       <div style={{ paddingTop: 8, borderTop: "1px solid var(--line-soft)", marginTop: 6 }}>
+        <button
+          className={`navitem ${activeTab === "notifications" ? "active" : ""}`}
+          onClick={() => onTabChange("notifications")}
+        >
+          <Bell size={16} style={{ flex: "none" }} />
+          <span className="trunc">Уведомления</span>
+        </button>
         <button
           className={`navitem ${activeTab === "settings" ? "active" : ""}`}
           onClick={() => onTabChange("settings")}

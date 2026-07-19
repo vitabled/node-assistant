@@ -1,0 +1,40 @@
+{
+  "name": "node-installer-mcp",
+  "version": "2.0.0",
+  "description": "MCP server for Remnawave + node-installer panel (fork of TrackLine/mcp-remnawave, MIT). stdio + HTTP/SSE transport, node-assistant tools.",
+  "type": "module",
+  "bin": {
+    "node-installer-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "remnawave",
+    "vpn",
+    "proxy",
+    "xray",
+    "node-installer"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@remnawave/backend-contract": "^2.9.14",
+    "express": "^5.2.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

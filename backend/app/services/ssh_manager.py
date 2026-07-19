@@ -148,6 +148,21 @@ class SSHSession:
             finally:
                 process.close()
 
+    async def download_file(self, remote_path: str, local_path: str) -> None:
+        """SFTP-download a remote file to a local path (used to relay a backup
+        bundle between two panels through the backend)."""
+        if self._conn is None:
+            raise RuntimeError("SSH session not connected")
+        async with self._conn.start_sftp_client() as sftp:
+            await sftp.get(remote_path, local_path)
+
+    async def upload_file(self, local_path: str, remote_path: str) -> None:
+        """SFTP-upload a local file to a remote path."""
+        if self._conn is None:
+            raise RuntimeError("SSH session not connected")
+        async with self._conn.start_sftp_client() as sftp:
+            await sftp.put(local_path, remote_path)
+
     async def close(self) -> None:
         if self._conn:
             self._conn.close()

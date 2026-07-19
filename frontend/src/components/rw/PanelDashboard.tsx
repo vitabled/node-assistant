@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SyncGroupPanel } from "./SyncGroupPanel";
 import { Plus, ServerCog, X } from "lucide-react";
 import { PanelWidget } from "./PanelWidget";
 import { PanelManageModal } from "./PanelManageModal";
@@ -144,6 +145,12 @@ export function PanelDashboard() {
                 onManage={setManageJob}
               />
             ))}
+          </div>
+        )}
+
+        {jobs.length > 0 && (
+          <div className="mt-8 pt-6 border-t border-[var(--line-soft)]">
+            <SyncGroupPanel jobs={jobs} />
           </div>
         )}
       </div>

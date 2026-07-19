@@ -14,6 +14,7 @@ v2.8.0 audit notes (2026-07-01):
   - New OPTIONAL request fields available on nodes (unused by us): proxyUrl,
     nodeConsumptionMultiplier, note. add-users bulk-actions take no request body.
 """
+
 from __future__ import annotations
 from typing import Any, Optional
 import httpx
@@ -123,15 +124,40 @@ class RemnavaveClient:
         """
         # Profile name must match ^[A-Za-z0-9_\s-]+$ (no dots/special chars)
         import re as _re
+
         safe_name = _re.sub(r"[^A-Za-z0-9_\s\-]", "_", name)[:30].strip() or "node"
         if len(safe_name) < 2:
             safe_name = "node_" + safe_name
 
-        data = await self._req("POST", "/api/config-profiles", json={
-            "name": safe_name,
-            "config": config,
-        })
+        data = await self._req(
+            "POST",
+            "/api/config-profiles",
+            json={
+                "name": safe_name,
+                "config": config,
+            },
+        )
         return _unwrap(data)
+
+    async def list_config_profiles(self) -> list[dict]:
+        """GET /api/config-profiles → response.configProfiles list."""
+        payload = _unwrap(await self._req("GET", "/api/config-profiles"))
+        if isinstance(payload, dict):
+            return payload.get("configProfiles", [])
+        return payload if isinstance(payload, list) else []
+
+    async def get_config_profile(self, uuid: str) -> dict:
+        """GET /api/config-profiles/{uuid} → the profile (with its `config`)."""
+        return _unwrap(await self._req("GET", f"/api/config-profiles/{uuid}"))
+
+    async def update_config_profile(self, uuid: str, config: dict) -> dict:
+        """PATCH /api/config-profiles — replace a profile's raw xray `config`
+        (used by the Reality-migration helper to inject realitySettings)."""
+        return _unwrap(
+            await self._req(
+                "PATCH", "/api/config-profiles", json={"uuid": uuid, "config": config}
+            )
+        )
 
     # ── Nodes ──────────────────────────────────────────────────
 
@@ -214,6 +240,31 @@ class RemnavaveClient:
         data = await self._req("POST", "/api/hosts", json=body)
         return _unwrap(data)
 
+    async def list_hosts(self) -> list[dict]:
+        """GET /api/hosts (HostsController_getAllHosts).
+        Response: { response: [{ uuid, isDisabled, nodes:[uuid], inbound:{...} }] }.
+        Returns the host list (each carries `nodes` and `inbound.configProfileUuid`,
+        used to select hosts by node / config-profile for hide/show actions)."""
+        data = await self._req("GET", "/api/hosts")
+        payload = _unwrap(data)
+        return payload if isinstance(payload, list) else []
+
+    async def bulk_disable_hosts(self, uuids: list[str]) -> dict:
+        """POST /api/hosts/bulk/disable — body { uuids }. Hides hosts from subs."""
+        if not uuids:
+            return {}
+        return _unwrap(
+            await self._req("POST", "/api/hosts/bulk/disable", json={"uuids": uuids})
+        )
+
+    async def bulk_enable_hosts(self, uuids: list[str]) -> dict:
+        """POST /api/hosts/bulk/enable — body { uuids }. Re-shows hidden hosts."""
+        if not uuids:
+            return {}
+        return _unwrap(
+            await self._req("POST", "/api/hosts/bulk/enable", json={"uuids": uuids})
+        )
+
     async def get_internal_squad(self, squad_uuid: str) -> dict:
         """
         GET /api/internal-squads/{uuid}
@@ -240,13 +291,19 @@ class RemnavaveClient:
             for ib in (squad.get("inbounds", []) if isinstance(squad, dict) else [])
             if isinstance(ib, dict) and ib.get("uuid")
         ]
-        merged = list(dict.fromkeys(current + list(inbound_uuids)))  # de-dup, keep order
+        merged = list(
+            dict.fromkeys(current + list(inbound_uuids))
+        )  # de-dup, keep order
         if set(merged) == set(current):
             return  # nothing to add
-        await self._req("PATCH", "/api/internal-squads", json={
-            "uuid": squad_uuid,
-            "inbounds": merged,
-        })
+        await self._req(
+            "PATCH",
+            "/api/internal-squads",
+            json={
+                "uuid": squad_uuid,
+                "inbounds": merged,
+            },
+        )
 
     async def get_node_secret_key(self) -> str:
         """
@@ -296,6 +353,18 @@ class RemnavaveClient:
         data = await self._req("GET", "/api/nodes")
         payload = _unwrap(data)
         return payload if isinstance(payload, list) else []
+
+    async def enable_node(self, node_uuid: str) -> dict:
+        """POST /api/nodes/{uuid}/actions/enable (no body). Idempotent server-side."""
+        return _unwrap(
+            await self._req("POST", f"/api/nodes/{node_uuid}/actions/enable")
+        )
+
+    async def disable_node(self, node_uuid: str) -> dict:
+        """POST /api/nodes/{uuid}/actions/disable (no body). Idempotent server-side."""
+        return _unwrap(
+            await self._req("POST", f"/api/nodes/{node_uuid}/actions/disable")
+        )
 
     async def get_nodes_metrics(self) -> list[dict]:
         """GET /api/system/nodes/metrics — per-node live metrics.
@@ -366,6 +435,18 @@ class RemnavaveClient:
             start += page_size
         return result
 
+    async def enable_user(self, user_uuid: str) -> dict:
+        """POST /api/users/{uuid}/actions/enable (no body). Idempotent server-side."""
+        return _unwrap(
+            await self._req("POST", f"/api/users/{user_uuid}/actions/enable")
+        )
+
+    async def disable_user(self, user_uuid: str) -> dict:
+        """POST /api/users/{uuid}/actions/disable (no body). Idempotent server-side."""
+        return _unwrap(
+            await self._req("POST", f"/api/users/{user_uuid}/actions/disable")
+        )
+
     async def bulk_update_users_traffic(
         self,
         user_uuids: list[str],
@@ -379,13 +460,17 @@ class RemnavaveClient:
         """
         for i in range(0, len(user_uuids), 500):
             chunk = user_uuids[i : i + 500]
-            await self._req("POST", "/api/users/bulk/update", json={
-                "uuids": chunk,
-                "fields": {
-                    "trafficLimitBytes": limit_bytes,
-                    "trafficLimitStrategy": strategy,
+            await self._req(
+                "POST",
+                "/api/users/bulk/update",
+                json={
+                    "uuids": chunk,
+                    "fields": {
+                        "trafficLimitBytes": limit_bytes,
+                        "trafficLimitStrategy": strategy,
+                    },
                 },
-            })
+            )
 
     # ── Infra billing (v2.8.0 InfraBillingController) ──────────
     # Remnawave stores only: provider {name, faviconLink, loginUrl}; billing node
@@ -406,17 +491,28 @@ class RemnavaveClient:
             body["faviconLink"] = favicon_link
         if login_url:
             body["loginUrl"] = login_url
-        return _unwrap(await self._req("POST", "/api/infra-billing/providers", json=body))
+        return _unwrap(
+            await self._req("POST", "/api/infra-billing/providers", json=body)
+        )
 
     async def infra_update_provider(
-        self, uuid: str, *, name: Optional[str] = None,
-        favicon_link: Optional[str] = None, login_url: Optional[str] = None,
+        self,
+        uuid: str,
+        *,
+        name: Optional[str] = None,
+        favicon_link: Optional[str] = None,
+        login_url: Optional[str] = None,
     ) -> dict:
         body: dict[str, Any] = {"uuid": uuid}
-        if name is not None:        body["name"] = name
-        if favicon_link is not None: body["faviconLink"] = favicon_link
-        if login_url is not None:    body["loginUrl"] = login_url
-        return _unwrap(await self._req("PATCH", "/api/infra-billing/providers", json=body))
+        if name is not None:
+            body["name"] = name
+        if favicon_link is not None:
+            body["faviconLink"] = favicon_link
+        if login_url is not None:
+            body["loginUrl"] = login_url
+        return _unwrap(
+            await self._req("PATCH", "/api/infra-billing/providers", json=body)
+        )
 
     async def infra_delete_provider(self, uuid: str) -> None:
         await self._req("DELETE", f"/api/infra-billing/providers/{uuid}")
@@ -428,18 +524,32 @@ class RemnavaveClient:
     async def infra_create_node(
         self, *, provider_uuid: str, node_uuid: str, name: str, next_billing_at: str
     ) -> dict:
-        return _unwrap(await self._req("POST", "/api/infra-billing/nodes", json={
-            "providerUuid": provider_uuid,
-            "nodeUuid": node_uuid,
-            "name": name,
-            "nextBillingAt": next_billing_at,
-        }))
+        return _unwrap(
+            await self._req(
+                "POST",
+                "/api/infra-billing/nodes",
+                json={
+                    "providerUuid": provider_uuid,
+                    "nodeUuid": node_uuid,
+                    "name": name,
+                    "nextBillingAt": next_billing_at,
+                },
+            )
+        )
 
-    async def infra_update_nodes(self, uuids: list[str], *, next_billing_at: str) -> dict:
-        return _unwrap(await self._req("PATCH", "/api/infra-billing/nodes", json={
-            "uuids": uuids,
-            "nextBillingAt": next_billing_at,
-        }))
+    async def infra_update_nodes(
+        self, uuids: list[str], *, next_billing_at: str
+    ) -> dict:
+        return _unwrap(
+            await self._req(
+                "PATCH",
+                "/api/infra-billing/nodes",
+                json={
+                    "uuids": uuids,
+                    "nextBillingAt": next_billing_at,
+                },
+            )
+        )
 
     async def infra_delete_node(self, uuid: str) -> None:
         await self._req("DELETE", f"/api/infra-billing/nodes/{uuid}")
@@ -451,11 +561,17 @@ class RemnavaveClient:
     async def infra_create_history(
         self, *, provider_uuid: str, amount: float, billed_at: str
     ) -> dict:
-        return _unwrap(await self._req("POST", "/api/infra-billing/history", json={
-            "providerUuid": provider_uuid,
-            "amount": amount,
-            "billedAt": billed_at,
-        }))
+        return _unwrap(
+            await self._req(
+                "POST",
+                "/api/infra-billing/history",
+                json={
+                    "providerUuid": provider_uuid,
+                    "amount": amount,
+                    "billedAt": billed_at,
+                },
+            )
+        )
 
     async def infra_delete_history(self, uuid: str) -> None:
         await self._req("DELETE", f"/api/infra-billing/history/{uuid}")

@@ -27,6 +27,7 @@ Security posture (mirrors panel_pipeline):
 from __future__ import annotations
 
 import re
+import shlex
 
 # ── fixed paths (the wrapper is non-configurable — one install per server) ──
 _BR_DIR = "/opt/rw-backup-restore"
@@ -296,19 +297,32 @@ def run_backup_script() -> str:
     )
 
 
-def restore_script(confirm: bool) -> str:
-    """DESTRUCTIVE restore of the latest bundle. Generates the REAL script only when
-    `confirm` is True; otherwise a stub that refuses (exit 1) — so a missing confirm
-    can never clear the DB volume."""
+def restore_script(confirm: bool, bundle_path: str = "") -> str:
+    """DESTRUCTIVE restore. Generates the REAL script only when `confirm` is True;
+    otherwise a stub that refuses (exit 1) — so a missing confirm can never clear
+    the DB volume. When `bundle_path` is given, restores THAT specific bundle
+    (used by panel-sync to restore the primary's freshly-transferred backup rather
+    than the standby's newest LOCAL bundle)."""
     if not confirm:
         return 'echo "restore требует подтверждения"; exit 1\n'
+    # bundle_path is a fixed, server-controlled path (never user input); quote it.
+    target = f" {shlex.quote(bundle_path)}" if bundle_path else ""
     return (
         f"if [ ! -x {_BR_SCRIPT} ]; then\n"
         '  echo "backup-restore не установлен — сначала выполните настройку"; exit 1\n'
         "fi\n"
         'echo "[ВНИМАНИЕ] Восстановление ДЕСТРУКТИВНО: том remnawave-db-data будет очищен."\n'
-        f"{_BR_SCRIPT} restore --confirm\n"
+        f"{_BR_SCRIPT} restore --confirm{target}\n"
     )
+
+
+def newest_bundle_cmd() -> str:
+    """One-liner: print the newest backup bundle path (empty if none)."""
+    return f"ls -t {_BR_BACKUPS}/remnawave_backup_*.tar.gz 2>/dev/null | head -1"
+
+
+SYNC_BUNDLE_PATH = f"{_BR_BACKUPS}/synced_from_primary.tar.gz"
+BACKUPS_DIR = _BR_BACKUPS
 
 
 def status_script() -> str:

@@ -90,6 +90,14 @@ def save_checkers(checkers: list, account_id: Optional[str] = None) -> None:
     _write(_dir(account_id) / "checkers.json", {"checkers": checkers})
 
 
+def load_rules(account_id: Optional[str] = None) -> list:
+    return _read(_dir(account_id) / "rules.json").get("rules", [])
+
+
+def save_rules(rules: list, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "rules.json", {"rules": rules})
+
+
 def load_testservers(account_id: Optional[str] = None) -> list:
     return _read(_dir(account_id) / "testservers.json").get("testservers", [])
 

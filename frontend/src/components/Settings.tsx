@@ -11,6 +11,8 @@ import { getActiveId } from "../auth/store";
 import { CheckerControls } from "./monitoring/CheckerControls";
 import { CheckerRegistry } from "./monitoring/CheckerRegistry";
 import { TestServers } from "./settings/TestServers";
+import { McpTab } from "./settings/McpTab";
+import { AiChat } from "./settings/AiChat";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -703,7 +705,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -714,6 +716,7 @@ export function Settings() {
     { id: "optimization", label: "Оптимизация ОС" },
     { id: "monitoring",  label: "Мониторинг" },
     { id: "testservers", label: "Сервера для тестирования" },
+    { id: "mcp",         label: "MCP" },
     { id: "theme",       label: "Тема" },
   ];
 
@@ -739,6 +742,7 @@ export function Settings() {
         {sub === "optimization" && <OptimizationTab />}
         {sub === "monitoring"   && <MonitoringTab />}
         {sub === "testservers"  && <TestServersTab />}
+        {sub === "mcp"          && <div className="flex flex-col gap-4 max-w-2xl"><McpTab /><AiChat /></div>}
         {sub === "theme"        && <ThemeTab />}
       </div>
     </div>
