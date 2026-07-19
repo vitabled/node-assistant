@@ -1612,6 +1612,26 @@ fi
 # Ф6 — Auto-create Remnawave hosts from local host-templates
 # ──────────────────────────────────────────────────────────────
 
+def _subst_host_vars(text, req: "DeployRequest"):
+    """Substitute deploy variables into a host-template STRING field (Plan C 5a).
+    Supported: $domain (node FQDN), $xhttp_path (from the deploy form), $name (the
+    node's subdomain label). These go into a JSON API body (POST /api/hosts), NOT
+    bash — so no shell-escaping. Non-strings pass through unchanged."""
+    if not isinstance(text, str):
+        return text
+    name = (req.domain or "").split(".")[0]
+    return (
+        text
+        .replace("$xhttp_path", (req.xhttp_path or "").strip())
+        .replace("$domain", req.domain or "")
+        .replace("$name", name)
+    )
+
+
+# Host-template string fields into which deploy variables are substituted.
+_HOST_VAR_FIELDS = ("sni", "host", "path", "remark", "server_description")
+
+
 def _map_host_optional(tpl: dict) -> dict:
     """Map a local HostTemplateBody dict (accounts/<id>/hosts.json) → the OPTIONAL
     CreateHostRequestDto fields (Remnawave camelCase). Only non-empty / enabled
@@ -1731,6 +1751,12 @@ async def step_create_hosts(
                 f"пропуск (POST /api/hosts требует inbound).\x1b[0m"
             )
             continue
+        # Substitute deploy variables ($domain/$xhttp_path/$name) into the host
+        # template's string fields (Plan C 5a) before mapping to the API body.
+        tpl = {
+            k: (_subst_host_vars(v, req) if k in _HOST_VAR_FIELDS else v)
+            for k, v in tpl.items()
+        }
         # Remnawave's host `remark` maxLength is 40 (local allows 200) — truncate
         # or the whole create 400s (silently, since failures are caught below).
         remark = f"{tpl.get('remark') or 'host'} · {suffix}"[:40]
@@ -1809,6 +1835,7 @@ async def step_remnawave_pre_deploy(
 
     config_str = (
         tpl["config"]
+        .replace("$xhttp_path", (req.xhttp_path or "").strip())
         .replace("$domain",  domain)
         .replace("$name",    name)
         .replace("$privkey", privkey)
