@@ -116,6 +116,7 @@ function CheckerSelect({ value, onChange, instances }:
       <span className="dim">Инстанс мониторинга</span>
       <select className="selectbox" value={value} onChange={e => onChange(e.target.value)}>
         {instances.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+        <option value="server-monitor">Server uptime (по IP)</option>
       </select>
     </label>
   );
@@ -216,9 +217,16 @@ function WMigrations({ nameMap }: { nameMap: Record<string, string> }) {
   );
 }
 
+// Server-uptime uses its own status-page route; xray checkers use the checker one.
+function _statusUrl(cid: string): string {
+  return cid === "server-monitor"
+    ? "/api/server-monitor/statuspage?ticks=30"
+    : `/api/checker/statuspage?checker_id=${cid}&ticks=30`;
+}
+
 function WStableNodes({ instances }: { instances: Instance[] }) {
   const [cid, setCid] = useState("local");
-  const { data, err, loading } = useFetch<{ nodes: CheckerNode[] }>(`/api/checker/statuspage?checker_id=${cid}&ticks=30`);
+  const { data, err, loading } = useFetch<{ nodes: CheckerNode[] }>(_statusUrl(cid));
   const nodes = [...(data?.nodes ?? [])]
     .filter(n => n.uptime30d != null)
     .sort((a, b) => (b.uptime30d ?? 0) - (a.uptime30d ?? 0)).slice(0, 8);
@@ -239,7 +247,7 @@ function WStableNodes({ instances }: { instances: Instance[] }) {
 
 function WFastNodes({ instances }: { instances: Instance[] }) {
   const [cid, setCid] = useState("local");
-  const { data, err, loading } = useFetch<{ nodes: CheckerNode[] }>(`/api/checker/statuspage?checker_id=${cid}&ticks=30`);
+  const { data, err, loading } = useFetch<{ nodes: CheckerNode[] }>(_statusUrl(cid));
   const online = (data?.nodes ?? []).filter(n => n.online && n.latencyMs >= 0);
   const nodes = [...online].sort((a, b) => a.latencyMs - b.latencyMs).slice(0, 8);
   const max = Math.max(1, ...nodes.map(n => n.latencyMs));
