@@ -19,8 +19,11 @@ import urllib.request
 
 from fastapi import APIRouter, Header, HTTPException
 
+from typing import Optional
+
 from app.models.subscriptions import SubscriptionCreate, SubscriptionUpdate
 from app.services import storage, accounts
+from app.services import xray_checker
 
 router = APIRouter(prefix="/api/subscriptions")
 internal_router = APIRouter(prefix="/internal")
@@ -73,7 +76,9 @@ async def create_subscription(body: SubscriptionCreate):
     subs.append(sub)
     storage.save_subscriptions(subs)
     # No notify: a new sub isn't cached yet — the aggregator re-reads the source
-    # list on the next /sub and fetches it fresh.
+    # list on the next /sub and fetches it fresh. But the checker won't re-pull
+    # until its interval, so nudge it (debounced) to make the new sub visible now.
+    _schedule_checker_reload()
     return sub
 
 
@@ -95,6 +100,10 @@ async def update_subscription(sub_id: str, body: SubscriptionUpdate):
     # toggles just change the source set (re-read every /sub), no notify needed.
     if url_changed:
         _notify_aggregator(_sub_key(sub_id))
+    # Any of url/background/enabled changing the active set warrants a checker
+    # re-pull so the change is reflected without a manual refresh (debounced).
+    if url_changed or body.background is not None or body.enabled is not None:
+        _schedule_checker_reload()
     return found
 
 
@@ -111,6 +120,7 @@ async def refresh_subscription(sub_id: str):
     """Force the aggregator to re-fetch this subscription (clears its no-retry
     error state). This is the ONLY way a failed upstream gets retried."""
     _notify_aggregator(_sub_key(sub_id))
+    _schedule_checker_reload()
     return {"ok": True}
 
 
@@ -173,3 +183,34 @@ def _notify_aggregator(sub_key) -> None:
     the request loop — the CRUD response never waits on the aggregator being
     reachable. Non-fatal on any error."""
     threading.Thread(target=_post_refresh, args=(sub_key,), daemon=True).start()
+
+
+# ── debounced checker reload ──────────────────────────────────
+# The xray-checker only re-reads its SUBSCRIPTION_URL on its own interval, so a
+# newly added/enabled subscription isn't probed until then (the "new sub appears
+# only after a manual refresh / never" bug). We restart the shared checker so it
+# re-pulls the aggregated subscription; a debounce coalesces a burst of CRUD ops
+# into a single restart.
+_reload_task: Optional[asyncio.Task] = None
+
+
+async def _debounced_checker_reload() -> None:
+    try:
+        await asyncio.sleep(8)
+        await xray_checker.restart()  # re-reads SUBSCRIPTION_URL on start
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass  # no Docker / not running — nothing to reload
+
+
+def _schedule_checker_reload() -> None:
+    """Debounced: cancel any pending reload and schedule a fresh one. No-op if
+    there's no running event loop (e.g. under the sync test client at import)."""
+    global _reload_task
+    try:
+        if _reload_task is not None and not _reload_task.done():
+            _reload_task.cancel()
+        _reload_task = asyncio.create_task(_debounced_checker_reload())
+    except RuntimeError:
+        pass  # no running loop

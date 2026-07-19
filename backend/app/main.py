@@ -44,10 +44,13 @@ async def lifespan(app: FastAPI):
     #  - rules: evaluates xray_down/cron rules per-account and runs their actions
     #    (telegram / hide-hosts / disable node|user); webhook rules run in the
     #    receiver, not here.
+    #  - autostart: on boot, start the shared xray-checker if any account has it
+    #    enabled (monitoring is on by default now) and Docker is available.
     poller = asyncio.create_task(xray_checker.poller_loop())
     collector = asyncio.create_task(user_stats.collector_loop())
     rules_task = asyncio.create_task(rules.rules_loop())
-    tasks = (poller, collector, rules_task)
+    autostart = asyncio.create_task(xray_checker.autostart_checker())
+    tasks = (poller, collector, rules_task, autostart)
     try:
         yield
     finally:

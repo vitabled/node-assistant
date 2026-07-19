@@ -67,28 +67,30 @@ def _resolve_instance(checker_id: str) -> Optional[tuple[dict, Optional[str], bo
 # tagged (single-subscription / bare-metal mode, aggregator not in use), show all
 # — so the dashboard still works without the aggregator.
 
-def _parse_tag(name: str) -> tuple[str, str]:
-    """`<account>:<sub>|<orig>` → (account_id, orig_name); untagged → ("", name)."""
+def _parse_tag(name: str) -> tuple[str, str, str]:
+    """`<account>:<sub>|<orig>` → (account_id, sub_id, orig_name); untagged →
+    ("", "", name)."""
     head, sep, orig = name.partition("|")
     if sep and ":" in head:
-        acc, _, _sub = head.partition(":")
+        acc, _, sub = head.partition(":")
         if acc:
-            return acc, orig
-    return "", name
+            return acc, sub, orig
+    return "", "", name
 
 
 def _filter_by_account(items: list[dict], account_id: str, name_key: str = "name") -> list[dict]:
-    """Keep only items belonging to `account_id` (by the name tag) and strip the
-    tag from the display name. If nothing is tagged, return items unchanged."""
+    """Keep only items belonging to `account_id` (by the name tag), strip the tag
+    from the display name, and stash the originating subscription id under `subId`
+    (for per-subscription grouping on the dashboard). If nothing is tagged, return
+    items unchanged."""
     any_tagged = any(_parse_tag(str(i.get(name_key, "")))[0] for i in items)
     if not any_tagged:
         return items
     out = []
     for i in items:
-        acc, orig = _parse_tag(str(i.get(name_key, "")))
+        acc, sub, orig = _parse_tag(str(i.get(name_key, "")))
         if acc == account_id:
-            i = {**i, name_key: orig}
-            out.append(i)
+            out.append({**i, name_key: orig, "subId": sub})
     return out
 
 
@@ -199,6 +201,7 @@ async def checker_statuspage(ticks: int = 30, checker_id: str = metrics_store.LO
             "stableId":  p.get("stableId", ""),
             "name":      p.get("name", ""),
             "groupName": p.get("groupName", "") or "",
+            "subId":     p.get("subId", "") or "",
             "protocol":  p.get("protocol", "") or "",
             "online":    bool(p.get("online")),
             "latencyMs": p.get("latencyMs", -1),
@@ -207,6 +210,16 @@ async def checker_statuspage(ticks: int = 30, checker_id: str = metrics_store.LO
         }
         for p in proxies
     ]
+    # Subscription labels (for the top-level group headers on the dashboard). The
+    # aggregator tags each proxy with its sub_id; map those to a human label.
+    subs_meta: list[dict] = []
+    try:
+        for s in storage.load_subscriptions(accounts.current_account.get() or ""):
+            url = str(s.get("url", ""))
+            label = url if len(url) <= 44 else url[:41] + "…"
+            subs_meta.append({"id": s.get("id", ""), "label": label})
+    except Exception:
+        subs_meta = []
     # Global 30d uptime scoped to THIS account's nodes (up30["global"] is the
     # whole shared DB across all accounts — don't leak that coarse aggregate).
     own_up = [n["uptime30d"] for n in nodes if n["uptime30d"] is not None]
@@ -221,6 +234,7 @@ async def checker_statuspage(ticks: int = 30, checker_id: str = metrics_store.LO
             "total": total, "online": online, "offline": total - online,
         },
         "nodes": nodes,
+        "subscriptions": subs_meta,
     })
     return result
 
@@ -409,6 +423,34 @@ async def _sample_once() -> int:
         return 0
     await metrics_store.record_samples(proxies)
     return len(proxies)
+
+
+async def autostart_checker() -> None:
+    """On boot, start the shared xray-checker if any account has it enabled and
+    Docker is available. Non-fatal: quietly degrades to 'not configured' when
+    Docker is absent or no account has a usable subscription. The container is
+    SHARED (one per host) — the first startable account's config wins (in DooD +
+    aggregator mode the SUBSCRIPTION_URL is the combined aggregator feed anyway)."""
+    try:
+        state = await xc.container_state()
+    except Exception:
+        return
+    if state in ("running", "no-docker"):
+        return
+    for acc in accounts.list_accounts():
+        try:
+            cfg = AppSettings(**storage.load_settings(acc["id"])).xray_checker
+        except Exception:
+            continue
+        if not cfg.enabled:
+            continue
+        try:
+            await xc.start(cfg)
+            return  # single shared container — one successful start is enough
+        except xc.CheckerError:
+            continue  # no subscription on this account (bare metal) — try next
+        except Exception:
+            return  # Docker/other failure — stop trying, stay quiet
 
 
 async def poller_loop() -> None:
