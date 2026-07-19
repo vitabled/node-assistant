@@ -187,7 +187,7 @@ async def patch_rule(rule_id: str, body: RuleUpdate) -> dict:
 
 
 @router.delete("/{rule_id}", status_code=204)
-async def delete_rule(rule_id: str) -> None:
+async def delete_rule(rule_id: str):
     if not rules_store.remove_rule(rule_id):
         raise HTTPException(404, "Правило не найдено")
 

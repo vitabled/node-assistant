@@ -1,11 +1,19 @@
 {
+  "env": {
+    "MAIN_SKILL_VERIFY_IGNORE_GLOBS": "**/backend/tests/**:**/tests/e2e/**:**/backend/app/**:**/frontend/src/components/**:**/subs-aggregator/**"
+  },
   "permissions": {
     "allow": [
       "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) or print\\('OK:', f\\) for f in ['backend/app/api/certs.py','backend/app/api/deploy.py','backend/app/models/deploy.py','backend/app/services/task_store.py','backend/app/main.py','backend/app/config.py']]\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/services/pipeline.py'\\).read\\(\\)\\); print\\('pipeline.py: valid Python'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/app/services/pipeline.py'\\).read\\(\\)\\); print\\('pipeline.py: valid Python'\\)\")",
+      "Bash(git -C 'C:\\\\Users\\\\admin\\\\Desktop\\\\claude-cli\\\\node-installer' status --short)",
+      "PowerShell(fsutil hardlink *)",
+      "Bash(git -C .claude/worktrees/keen-kirch-277f6c status --short)",
+      "Bash(git -C .claude/worktrees/keen-kirch-277f6c log --oneline -5)",
+      "PowerShell(docker compose build *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
-  },
-  "env": {
-    "MAIN_SKILL_VERIFY_IGNORE_GLOBS": "**/backend/tests/**:**/tests/e2e/**:**/backend/app/**:**/frontend/src/components/**:**/subs-aggregator/**"
   }
 }

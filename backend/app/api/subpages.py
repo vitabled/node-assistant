@@ -70,6 +70,6 @@ async def get_page_raw(page_id: str) -> Response:
 
 
 @router.delete("/{page_id}", status_code=204)
-async def delete_page(page_id: str) -> None:
+async def delete_page(page_id: str):
     if not subpage_store.delete_page(page_id):
         raise HTTPException(404, "Страница не найдена")

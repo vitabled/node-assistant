@@ -80,7 +80,7 @@ async def patch_group(group_id: str, body: GroupPatch) -> dict:
 
 
 @router.delete("/groups/{group_id}", status_code=204)
-async def delete_group(group_id: str) -> None:
+async def delete_group(group_id: str):
     if not sync_store.remove_group(group_id):
         raise HTTPException(404, "Группа не найдена")
 
