@@ -166,7 +166,13 @@ function RemnavaveTab() {
     setChecking(true);
     setCheckResult(null);
     try {
-      const res = await fetch("/api/settings/remnawave/check", { method: "POST" });
+      // Send the values currently typed into the form so «Проверить соединение»
+      // tests what the operator entered (not the last-saved settings).
+      const res = await fetch("/api/settings/remnawave/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ panel_url: cfg.panel_url, api_token: cfg.api_token }),
+      });
       if (res.ok) {
         setCheckResult({ ok: true, msg: "Соединение установлено" });
         await loadSquads();
