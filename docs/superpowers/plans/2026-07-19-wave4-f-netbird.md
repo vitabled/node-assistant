@@ -60,6 +60,25 @@
   выпуск setup-key. Тумблер `join_netbird` в форме деплоя ноды.
 - verify: `tsc`, preview — развернуть control plane, увидеть пиров, нода с `join_netbird` появляется в mesh.
 
+## РАЗВЕДКА ВЫПОЛНЕНА (2026-07-19) — факты для реализации
+
+- **Стек (Quickstart, рекомендуемый):** `netbirdio/netbird-server:latest` (комбо management+signal+relay+coturn,
+  **встроенный Dex — внешний IdP НЕ нужен**) + `netbirdio/dashboard:latest` + `netbirdio/reverse-proxy:latest` +
+  `traefik:v3.6`. Разворот скриптом `getting-started.sh`
+  (`github.com/netbirdio/netbird/releases/latest/download/getting-started.sh`), env `NETBIRD_DOMAIN`,
+  `NETBIRD_LETSENCRYPT_EMAIL`. Порты **TCP 80/443, UDP 3478** (+опц. UDP 51820). Нужен FQDN + DNS A-запись; TLS
+  авто через Traefik/LE. Мин: 1 CPU / 2 GB, Docker + jq. (Zitadel-путь устарел — НЕ использовать.)
+- **Setup-key (R1):** `POST https://<domain>/api/setup-keys`, заголовок `Authorization: Token <PAT>`, тело
+  `{"name":"node-assistant","type":"reusable","expires_in":31536000,"auto_groups":[],"usage_limit":0}` → ответ
+  поле **`key`**. PAT создаётся под **service user** в Dashboard → хранить Fernet-encrypted (vault §8).
+- **Агент на ноде (R2):** `curl -fsSL https://pkgs.netbird.io/install.sh | sh` →
+  `netbird up --setup-key <KEY> --management-url https://<domain>:443 --disable-client-routes
+  --disable-server-routes`. Overlay-IP: `netbird status --json | jq -r '.netbirdIp'` (сеть 100.64.0.0/10).
+- **R3 (не потерять SSH):** по умолчанию NetBird безопасен (маршрутизирует только overlay, НЕ 0.0.0.0/0). Флаги
+  **`--disable-client-routes --disable-server-routes` ОБЯЗАТЕЛЬНЫ** (аналог WARP `Table=off`) — не принимать
+  push-маршруты/exit-node. (⚠️ issue #3984 — проверить `--disable-server-routes` на конкретной версии агента.)
+- Источники: docs.netbird.io/selfhosted/selfhosted-quickstart, /api/resources/setup-keys, /how-to/access-netbird-public-api, wiki.egam.es/configuration/netbird.
+
 ## Критерии готовности плана F
 
 - Self-hosted Netbird control plane разворачивается; агенты на нодах/панели подключаются по setup-key **без

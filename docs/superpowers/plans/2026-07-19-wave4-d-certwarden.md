@@ -64,6 +64,27 @@
   креды целевого бокса), статус, список доменов/клиентов. Тумблер `use_certwarden` в форме деплоя ноды.
 - verify: `tsc`, preview — развернуть сервер, увидеть статус; нода с `use_certwarden` берёт серт централизованно.
 
+## РАЗВЕДКА ВЫПОЛНЕНА (2026-07-19) — факты для реализации
+
+- **Образы (ghcr, НЕ Docker Hub):** сервер `ghcr.io/gregtwallace/certwarden:latest`, клиент
+  `ghcr.io/gregtwallace/certwarden-client:latest`. (Проект = бывш. LeGo CertHub; образ сервера включает acme.sh.)
+- **Сервер (R1):** порты `4050` (HTTP UI/API), `4055` (HTTPS UI/API), `4060` (HTTP-01 challenge). Том
+  `./data:/app/data` (sqlite + config.yaml + логи). TLS UI: либо внешний nginx/Caddy (сервер на `127.0.0.1:4050`),
+  либо self-issued серт (`config.yaml::certificate_name` → HTTPS на 4055). eGames-вариант: за nginx на localhost.
+- **Download API (R1) — для неинтерактивной выдачи на ноды:** `GET https://<server>/certwarden/api/v1/download/
+  certificates/[Name]` (заголовок `X-API-Key: <certApiKey>`) → fullchain; `/privatekeys/[Name]`
+  (`X-API-Key: <keyApiKey>`) → privkey. У серта и ключа — отдельные API-ключи. Регистрация/выпуск серта — через
+  Web UI / внутренний REST (в публичных доках не детализирован — только download-API).
+- **Клиент/авто-рестарт (R2):** два пути. (a) **Наш скрипт** на ноде: cron curl'ит два эндпоинта в
+  `/etc/ssl/...` + `docker restart` сам (docker.sock CW-клиенту НЕ отдаём — предпочтительно по безопасности).
+  (b) Официальный `certwarden-client`: env `CW_CLIENT_RESTART_DOCKER_CONTAINER0=<container>`,
+  `CW_CLIENT_SERVER_ADDRESS`, `CW_CLIENT_CERT/KEY_NAME`+`_APIKEY`, `CW_CLIENT_AES_KEY_BASE64`, монтирует
+  docker.sock + слушает push на `5055`, рестарт в окне `CW_CLIENT_FILE_UPDATE_TIME_START/_END`.
+- **Челленджи (R3):** DNS-01 Cloudflare (`dns_01_cloudflare`, `api_token` c Zone:Edit — eGames использует это),
+  HTTP-01 (`http_01_internal`, порт 4060), `dns_01_acme_sh` (любой провайдер acme.sh). Настройка в `config.yaml`.
+- Мин. требования сервера в доках НЕ опубликованы (оценка ~128–256 MB RAM, Go+sqlite, лёгкий).
+- Источники: github.com/gregtwallace/certwarden (+ docker-compose.yml), certwarden.com/docs/using_certificates/{api_calls,client}, config.example.yaml, wiki.egam.es/configuration/certwarden.
+
 ## Критерии готовности плана D
 
 - Certwarden-сервер разворачивается на выбранном боксе; ноды-клиенты тянут серты + авто-рестарт.
