@@ -26,6 +26,13 @@ export interface FormData {
   country_code:        string;
   behind_cdn:          boolean;
   install_warp:        boolean;
+  // Node install variant (Plan B 2b): egames (full stack) | vanilla (official
+  // remnawave/node, no local domain/SSL/masking).
+  node_variant:        string;   // "egames" | "vanilla"
+  install_hysteria2:   boolean;  // gates step 14 (2a)
+  docker_mirror:       boolean;  // E1 — docker registry-mirror (all deploys)
+  install_torrent_blocker: boolean; // E3 (all deploys)
+  cookie_gate:         boolean;  // E4 — nginx cookie-gate (eGames node only)
   install_vnstat:      boolean;
   install_trafficguard: boolean;
   install_test_tools:  boolean;
@@ -90,6 +97,11 @@ export const FORM_DEFAULT: FormData = {
   country_code:        "",
   behind_cdn:          false,
   install_warp:        false,
+  node_variant:        "egames",
+  install_hysteria2:   true,
+  docker_mirror:       false,
+  install_torrent_blocker: false,
+  cookie_gate:         false,
   install_vnstat:      true,
   install_trafficguard: true,
   install_test_tools:  true,
@@ -161,11 +173,22 @@ export function validateForm(f: FormData): Partial<Record<keyof FormData, string
     if (isNaN(mc) || mc < 1) e.haproxy_maxconn = "≥ 1";
   } else {
     // ── Remnanode mode ──
-    if (!DOMAIN.test(f.domain)) e.domain = "Неверный домен";
-    // Cloudflare token is only required for the cloudflare (DNS-01) provider.
-    if (f.cert_provider === "cloudflare" && !f.cloudflare_api_key.trim())
-      e.cloudflare_api_key = "Обязательное поле";
-    if (!EMAIL_RE.test(f.email)) e.email = "Неверный email";
+    const isVanilla = f.node_variant === "vanilla";
+    if (!isVanilla) {
+      // eGames variant: domain/email/cloudflare required (local SSL + masking).
+      if (!DOMAIN.test(f.domain)) e.domain = "Неверный домен";
+      // Cloudflare token is only required for the cloudflare (DNS-01) provider.
+      if (f.cert_provider === "cloudflare" && !f.cloudflare_api_key.trim())
+        e.cloudflare_api_key = "Обязательное поле";
+      if (!EMAIL_RE.test(f.email)) e.email = "Неверный email";
+    } else {
+      // Vanilla: domain/email/cloudflare optional. Hysteria2 still needs a domain;
+      // otherwise a provided domain must still be well-formed.
+      if (f.install_hysteria2 && !DOMAIN.test(f.domain))
+        e.domain = "Для Hysteria2 в режиме Vanilla укажите домен";
+      else if (f.domain && !DOMAIN.test(f.domain))
+        e.domain = "Неверный домен";
+    }
     if (!f.create_in_remnawave && !f.remnanode_token.trim())
       e.remnanode_token = "Обязательное поле";
     if (f.create_in_remnawave && !f.template_id)
@@ -512,6 +535,22 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       {isRemna && (
       <>
       <SectionLabel>Remnanode</SectionLabel>
+      {/* eGames / Vanilla install variant (Plan B 2b) */}
+      <div className="flex rounded-lg border overflow-hidden w-full" style={{ borderColor: "var(--line-soft)" }}>
+        {([["egames", "eGames"], ["vanilla", "Vanilla"]] as const).map(([id, label]) => (
+          <button key={id} type="button" disabled={f}
+            onClick={() => set("node_variant", id)}
+            className={`flex-1 px-3 py-1.5 text-[12px] font-medium transition-colors ${
+              form.node_variant === id ? "bg-[var(--bg3)] text-[var(--t-hi)]" : "text-[var(--t-low)] hover:text-[var(--t-mid)]"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {form.node_variant === "vanilla" && (
+        <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>
+          Vanilla: официальная установка remnawave/node без домена и маскировки (SSL-сертификат отдаёт панель).
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-3">
         <Field label="Порт remnanode" name="remnanode_port" value={form.remnanode_port}
           onChange={set} placeholder="2222" error={errors.remnanode_port} disabled={f} />
@@ -528,6 +567,14 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       <Toggle label="Установить WARP Native"
         checked={form.install_warp}
         onChange={() => set("install_warp", !form.install_warp)} disabled={f} />
+      <Toggle label="Установить Hysteria2"
+        checked={form.install_hysteria2}
+        onChange={() => set("install_hysteria2", !form.install_hysteria2)} disabled={f} />
+      {form.node_variant === "egames" && (
+        <Toggle label="Cookie-gate (скрыть хост от сканеров)"
+          checked={form.cookie_gate}
+          onChange={() => set("cookie_gate", !form.cookie_gate)} disabled={f} />
+      )}
 
       {/* ── Remnawave (сворачиваемая) ── */}
       <Collapsible title="Remnawave" open={sec.remnawave} onToggle={() => toggleSec("remnawave")}>
@@ -813,6 +860,12 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
         <Toggle label="Установить инструменты тестирования"
           checked={form.install_test_tools}
           onChange={() => set("install_test_tools", !form.install_test_tools)} disabled={f} />
+        <Toggle label="Docker registry-mirror (РФ, ускоряет pull)"
+          checked={form.docker_mirror}
+          onChange={() => set("docker_mirror", !form.docker_mirror)} disabled={f} />
+        <Toggle label="Xray Torrent Blocker"
+          checked={form.install_torrent_blocker}
+          onChange={() => set("install_torrent_blocker", !form.install_torrent_blocker)} disabled={f} />
 
         <div className="flex flex-col gap-1">
           <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
