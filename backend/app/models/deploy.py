@@ -42,10 +42,8 @@ class DeployRequest(BaseModel):
     # gates it (default True keeps the previous always-on behaviour) (Plan B 2a).
     install_hysteria2: bool = Field(default=True)
     # eGames-doc borrowings (Plan B): docker registry-mirror (E1, all deploys),
-    # Xray Torrent Blocker (E3, all deploys), nginx cookie-gate to hide the host
-    # from scanners (E4, eGames node install only).
+    # nginx cookie-gate to hide the host from scanners (E4, eGames node install only).
     docker_mirror: bool = Field(default=False)
-    install_torrent_blocker: bool = Field(default=False)
     cookie_gate: bool = Field(default=False)
     update_system: bool = Field(default=False)
     install_vnstat: bool = Field(default=True)

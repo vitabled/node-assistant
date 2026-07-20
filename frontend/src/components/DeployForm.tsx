@@ -31,7 +31,6 @@ export interface FormData {
   node_variant:        string;   // "egames" | "vanilla"
   install_hysteria2:   boolean;  // gates step 14 (2a)
   docker_mirror:       boolean;  // E1 — docker registry-mirror (all deploys)
-  install_torrent_blocker: boolean; // E3 (all deploys)
   cookie_gate:         boolean;  // E4 — nginx cookie-gate (eGames node only)
   install_vnstat:      boolean;
   install_trafficguard: boolean;
@@ -100,7 +99,6 @@ export const FORM_DEFAULT: FormData = {
   node_variant:        "egames",
   install_hysteria2:   true,
   docker_mirror:       false,
-  install_torrent_blocker: false,
   cookie_gate:         false,
   install_vnstat:      true,
   install_trafficguard: true,
@@ -840,9 +838,6 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
         <Toggle label="Docker registry-mirror (РФ, ускоряет pull)"
           checked={form.docker_mirror}
           onChange={() => set("docker_mirror", !form.docker_mirror)} disabled={f} />
-        <Toggle label="Xray Torrent Blocker"
-          checked={form.install_torrent_blocker}
-          onChange={() => set("install_torrent_blocker", !form.install_torrent_blocker)} disabled={f} />
 
         <div className="flex flex-col gap-1">
           <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>

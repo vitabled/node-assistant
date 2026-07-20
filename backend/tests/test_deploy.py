@@ -109,7 +109,7 @@ def test_plan_b_toggle_defaults():
     r = DeployRequest(**_remna())
     assert r.node_variant == "egames"
     assert r.install_hysteria2 is True
-    assert r.docker_mirror is False and r.install_torrent_blocker is False and r.cookie_gate is False
+    assert r.docker_mirror is False and r.cookie_gate is False
 
 
 def test_invalid_ip_rejected():
