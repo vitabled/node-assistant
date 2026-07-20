@@ -39,6 +39,15 @@ def test_every_step_index_is_begun_and_in_range():
     )
 
 
+def test_docker_mirror_script():
+    # E1 (Plan B): idempotent registry-mirror merge into daemon.json.
+    s = pipeline._docker_mirror_script()
+    assert "registry-mirrors" in s
+    assert "mirror.gcr.io" in s and "dockerhub.timeweb.cloud" in s
+    assert "/etc/docker/daemon.json" in s
+    assert "systemctl restart docker" in s
+
+
 def test_step_labels_count_and_key_renames():
     assert len(STEP_LABELS) == 14
     assert STEP_LABELS[4] == "Тест-инструменты"         # step 5 (Ф2 wave1, in «Оптимизация ОС»)

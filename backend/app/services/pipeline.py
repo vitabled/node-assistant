@@ -571,6 +571,37 @@ echo "[firewall] доп. правила применены (whitelist={len(white
 """
 
 
+def _docker_mirror_script() -> str:
+    """Write Docker registry-mirrors into /etc/docker/daemon.json (idempotent
+    merge) so later image pulls go through mirrors — E1 (Plan B), helps RU /
+    rate-limited hosts. Docker reads daemon.json on (re)start, so this is safe
+    even before Docker is installed. No secrets → run_script (logged) is fine."""
+    mirrors = '["https://mirror.gcr.io", "https://dockerhub.timeweb.cloud"]'
+    return f"""\
+set -e
+mkdir -p /etc/docker
+python3 - <<'PYEOF' || true
+import json, os
+p = "/etc/docker/daemon.json"
+d = {{}}
+if os.path.exists(p):
+    try:
+        with open(p) as f: d = json.load(f)
+    except Exception:
+        d = {{}}
+if not isinstance(d, dict): d = {{}}
+ms = d.get("registry-mirrors") or []
+for m in {mirrors}:
+    if m not in ms: ms.append(m)
+d["registry-mirrors"] = ms
+with open(p, "w") as f: json.dump(d, f, indent=2)
+print("[docker-mirror] daemon.json обновлён:", ms)
+PYEOF
+systemctl restart docker 2>/dev/null || true
+echo "[docker-mirror] registry-mirror применён."
+"""
+
+
 async def step_system_optimize(
     ssh: SSHSession, task: Task, backend_ip: str, req: "DeployRequest"
 ) -> None:
@@ -2072,6 +2103,13 @@ apt-get update -y
 echo "[update] Индекс пакетов обновлён."
 """
             await ssh.run_script(refresh_script, task, timeout=120)
+
+        # ── Docker registry-mirror (E1, Plan B) ────
+        # Writes /etc/docker/daemon.json so later `docker compose up` pulls via
+        # mirrors (helps RU / rate-limited hosts). Safe before Docker is installed.
+        if getattr(req, "docker_mirror", False):
+            task.add_log("\x1b[36m[docker-mirror] Прописываю registry-mirror в daemon.json...\x1b[0m")
+            await ssh.run_script(_docker_mirror_script(), task, timeout=120)
 
         # ── Base utility: vnstat (network traffic monitor) ────
         # Starts collecting per-interface stats immediately; the deploy cards
