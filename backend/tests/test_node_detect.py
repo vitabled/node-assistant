@@ -300,3 +300,60 @@ def test_detect_route_rejects_bad_domain():
         "ip": "1.2.3.4", "ssh_password": "pw", "domain": "bad;rm -rf /",
     })
     assert r.status_code == 422
+
+
+# ── (e) settings autodetect (Wave-4 Plan B) ───────────────────
+
+def test_parse_settings_types_and_omits_empty():
+    out = "\n".join([
+        "NIVAL:ssh_port=2222",
+        "NIVAL:open_ports=80,443",
+        "NIVAL:domain=node1.example.com",
+        "NIVAL:remnanode_port=",       # empty → omitted
+        "NIVAL:xhttp_path=/xhttp",
+        "NIVAL:has_token=1",
+    ])
+    s = node_ops._parse_settings(out)
+    assert s["ssh_port"] == 2222 and isinstance(s["ssh_port"], int)
+    assert s["open_ports"] == "80,443"
+    assert s["domain"] == "node1.example.com"
+    assert "remnanode_port" not in s       # empty value omitted
+    assert s["xhttp_path"] == "/xhttp"
+    assert s["has_token"] is True
+    # the raw token is NEVER surfaced — only the has_token bool
+    assert all("token" not in k or k == "has_token" for k in s)
+
+
+def test_parse_settings_has_token_false_and_garbage():
+    assert node_ops._parse_settings("NIVAL:has_token=0")["has_token"] is False
+    assert node_ops._parse_settings("random motd\nno values here") == {}
+
+
+def test_detect_route_includes_settings(monkeypatch):
+    class FakeSSH:
+        def __init__(self, *a, **k):
+            pass
+
+        async def connect(self, *a, **k):
+            pass
+
+        async def get_output(self, command):
+            if "NIVAL" in command:
+                return ("NIVAL:ssh_port=2222\nNIVAL:domain=node1.example.com\n"
+                        "NIVAL:has_token=1")
+            return node_ops._DETECT_ABSENT
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(node_ops, "SSHSession", FakeSSH)
+    r = client.post("/api/node/detect", headers=_auth(), json={
+        "ip": "1.2.3.4", "ssh_password": "pw", "domain": "node1.example.com",
+    })
+    assert r.status_code == 200
+    s = r.json()["settings"]
+    assert s["ssh_port"] == 2222
+    assert s["domain"] == "node1.example.com"
+    assert s["has_token"] is True
+    # components still reported alongside settings
+    assert "results" in r.json()

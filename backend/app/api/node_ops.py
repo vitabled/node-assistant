@@ -147,6 +147,43 @@ def _parse_detect(out: str) -> str:
     return "unknown"
 
 
+# Read-only probes for current SETTING VALUES (Wave-4 Plan B — autodetect). Each
+# echoes `NIVAL:<key>=<value>` (empty value → omitted). The remnanode token is
+# NEVER read — only `has_token` (a bool) so the operator needn't re-enter it.
+_DETECT_SETTINGS_SCRIPT = r"""
+echo "NIVAL:ssh_port=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')"
+echo "NIVAL:open_ports=$(ufw status 2>/dev/null | grep -oE '^[0-9]+' | sort -un | paste -sd, -)"
+echo "NIVAL:domain=$(ls /etc/ssl/certs/*_fullchain.pem 2>/dev/null | head -1 | sed -E 's#.*/([^/]+)_fullchain\.pem#\1#')"
+echo "NIVAL:remnanode_port=$(grep -hosE 'listen[[:space:]]+[0-9]+' /opt/remnanode/nginx.conf 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+echo "NIVAL:xhttp_path=$(grep -hosE 'location[[:space:]]+/[^[:space:]{]+' /opt/remnanode/nginx.conf 2>/dev/null | grep -oE '/[^[:space:]{]+' | head -1)"
+echo "NIVAL:has_token=$(grep -qs SECRET_KEY /opt/remnanode/docker-compose.yml && echo 1 || echo 0)"
+"""
+
+
+def _parse_settings(out: str) -> dict:
+    """Parse `NIVAL:key=value` lines into a typed settings dict. Empty values are
+    omitted (probe found nothing). Never contains the actual token — only
+    `has_token`."""
+    raw: dict[str, str] = {}
+    for ln in (out or "").splitlines():
+        ln = ln.strip()
+        if ln.startswith("NIVAL:") and "=" in ln:
+            k, _, v = ln[len("NIVAL:"):].partition("=")
+            v = v.strip()
+            if v:
+                raw[k.strip()] = v
+    settings: dict = {}
+    for k in ("ssh_port", "remnanode_port"):
+        if raw.get(k, "").isdigit():
+            settings[k] = int(raw[k])
+    for k in ("open_ports", "domain", "xhttp_path"):
+        if raw.get(k):
+            settings[k] = raw[k]
+    if "has_token" in raw:
+        settings["has_token"] = raw["has_token"] == "1"
+    return settings
+
+
 @router.post("/detect")
 async def node_detect(req: NodeDetectRequest):
     """Probe a live server (read-only) and report which components are installed.
@@ -173,7 +210,14 @@ async def node_detect(req: NodeDetectRequest):
                 results[comp] = _parse_detect(out)
             except Exception:
                 results[comp] = "unknown"
-        return {"results": results}
+        # Also read current SETTING VALUES (best-effort) to pre-fill the deploy
+        # form. Never leaks the token (only has_token). Any failure → empty.
+        settings: dict = {}
+        try:
+            settings = _parse_settings(await ssh.get_output(_DETECT_SETTINGS_SCRIPT))
+        except Exception:
+            settings = {}
+        return {"results": results, "settings": settings}
     finally:
         await ssh.close()
 
