@@ -18,6 +18,7 @@ import { Placeholder }                     from "./components/rw/Placeholder";
 import { Profiles }                         from "./components/profiles/Profiles";
 import { RuleBuilder }                      from "./components/automation/RuleBuilder";
 import { Notifications }                    from "./components/automation/Notifications";
+import { AiChat }                           from "./components/settings/AiChat";
 import { Migration }                        from "./components/rw/Migration";
 import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
@@ -59,13 +60,14 @@ const CRUMB: Record<Tab, [string, string]> = {
   "stats-users":     ["Статистика", "Пользователи"],
   "stats-speedtests": ["Статистика", "Тесты скорости"],
   "automation":      ["Автоматизация", "Правила"],
+  "assistant":       ["Автоматизация", "Ассистент"],
   "notifications":   ["Автоматизация", "Уведомления"],
   "rw-install":      ["Remnawave", "Установка"],
   "rw-subpages":     ["Remnawave", "Страницы подписок"],
   "rw-variables":    ["Remnawave", "Переменные"],
   "rw-backup":       ["Remnawave", "Резервное копирование"],
   "rw-migration":    ["Remnawave", "Миграция"],
-  "rw-profiles":     ["Remnawave", "Профили"],
+  "rw-profiles":     ["Node Installer", "Профили"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
   "infra-projects":  ["Инфра-биллинг", "Проекты"],
@@ -200,6 +202,7 @@ export default function App() {
           {tab === "stats-speedtests" && <SpeedTests />}
 
           {tab === "automation" && <RuleBuilder />}
+          {tab === "assistant" && <AiChat />}
           {tab === "notifications" && <Notifications />}
 
           {tab === "rw-install"   && <PanelDashboard />}

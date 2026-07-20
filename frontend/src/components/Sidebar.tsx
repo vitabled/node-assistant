@@ -3,14 +3,14 @@ import {
   PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
-  Workflow, Bell,
+  Workflow, Bell, Bot,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
   | "stats-users" | "stats-speedtests"
-  | "automation" | "notifications"
+  | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
@@ -18,12 +18,14 @@ export type Tab =
 interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon }
 
 const NAV_MAIN: NavItemDef[] = [
-  { tab: "dashboard", label: "Дешборд",      Icon: Activity  },
-  { tab: "deploy",    label: "Деплой ноды",  Icon: Rocket    },
-  { tab: "certs",     label: "Управление SSL", Icon: ShieldCheck },
-  { tab: "templates", label: "Шаблоны",      Icon: FileCode2 },
-  { tab: "hosts",     label: "Хосты",        Icon: Network   },
-  { tab: "traffic",   label: "Трафик",       Icon: Gauge     },
+  { tab: "dashboard",  label: "Дешборд",       Icon: Activity  },
+  { tab: "deploy",     label: "Деплой ноды",   Icon: Rocket    },
+  { tab: "certs",      label: "Управление SSL", Icon: ShieldCheck },
+  { tab: "templates",  label: "Шаблоны",       Icon: FileCode2 },
+  // Профили — сразу после «Шаблонов» (10a); раздел независим от шаблонов.
+  { tab: "rw-profiles", label: "Профили",      Icon: UserCog   },
+  { tab: "hosts",      label: "Хосты",         Icon: Network   },
+  { tab: "traffic",    label: "Трафик",        Icon: Gauge     },
 ];
 
 const STATS_TABS: NavItemDef[] = [
@@ -32,7 +34,9 @@ const STATS_TABS: NavItemDef[] = [
 ];
 
 const AUTOMATION_TABS: NavItemDef[] = [
-  { tab: "automation", label: "Правила", Icon: Workflow },
+  { tab: "automation", label: "Правила",   Icon: Workflow },
+  // ИИ-чат вынесен из Настроек в отдельный раздел сразу после «Правил» (11a).
+  { tab: "assistant",  label: "Ассистент", Icon: Bot      },
 ];
 
 const RW_TABS: NavItemDef[] = [
@@ -41,7 +45,6 @@ const RW_TABS: NavItemDef[] = [
   { tab: "rw-variables", label: "Переменные",           Icon: SlidersHorizontal },
   { tab: "rw-backup",    label: "Резервное копирование", Icon: DatabaseBackup },
   { tab: "rw-migration", label: "Миграция",             Icon: ArrowLeftRight },
-  { tab: "rw-profiles",  label: "Профили",              Icon: UserCog        },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
