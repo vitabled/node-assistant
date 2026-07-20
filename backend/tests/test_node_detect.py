@@ -160,8 +160,8 @@ def _run_pipeline_with_spies(monkeypatch, req):
     for name in (
         "step_node_accelerator", "step_traffic_guard", "step_test_tools",
         "step_system_optimize",
-        "step_ssl", "step_remnanode", "step_sni_masking", "step_warp",
-        "step_certbot_ssl", "step_haproxy_deploy",
+        "step_ssl", "step_remnanode", "step_remnanode_vanilla", "step_sni_masking",
+        "step_warp", "step_certbot_ssl", "step_haproxy_deploy",
     ):
         monkeypatch.setattr(pipeline, name, rec(name))
     monkeypatch.setattr(pipeline, "step_ssh_dualport_verify", dualport)
@@ -198,6 +198,21 @@ def test_run_pipeline_skips_test_tools_component(monkeypatch):
     assert task.status == TaskStatus.SUCCESS
     assert "step_test_tools" not in called
     assert 5 in task.begun  # step 5 still begun (progress bar advances)
+
+
+def test_run_pipeline_vanilla_variant(monkeypatch):
+    # Plan B 2b: vanilla uses the official node install and skips SSL + masking.
+    req = _mk_req(node_variant="vanilla")
+    called, task = _run_pipeline_with_spies(monkeypatch, req)
+    assert task.status == TaskStatus.SUCCESS
+    assert "step_remnanode_vanilla" in called   # official install
+    assert "step_remnanode" not in called       # NOT the eGames stack
+    assert "step_ssl" not in called             # SSL skipped in vanilla
+    assert "step_sni_masking" not in called     # masking skipped in vanilla
+    # SSL (10) and masking (12) are begun-but-skipped directly (step 11's begin is
+    # inside the mocked vanilla install, so it isn't recorded here).
+    for idx in (10, 12):
+        assert idx in task.begun
 
 
 def test_run_pipeline_empty_skip_runs_everything(monkeypatch):

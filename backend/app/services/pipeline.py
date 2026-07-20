@@ -1194,6 +1194,83 @@ def _render_remnanode_files(
     return compose, nginx_conf
 
 
+# Vanilla node compose (Plan B 2b): the OFFICIAL remnawave/node only — no nginx /
+# masking / local SSL. The node receives its Xray config (incl. TLS) from the
+# panel over the SECRET_KEY channel, so no domain/cert is needed on the box.
+_VANILLA_COMPOSE_TPL = """\
+services:
+  remnanode:
+    image: remnawave/node:latest
+    container_name: remnanode
+    hostname: remnanode
+    restart: always
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - NODE_PORT=$nodeport
+      - SECRET_KEY=$token
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: 5
+    volumes:
+      - /dev/shm:/dev/shm:rw
+"""
+
+
+def _render_vanilla_compose(node_port: int, token: str) -> str:
+    compose = _VANILLA_COMPOSE_TPL
+    for key, val in (("$nodeport", str(node_port)), ("$token", token)):
+        compose = compose.replace(key, val)
+    return compose
+
+
+async def step_remnanode_vanilla(
+    ssh: SSHSession, task: Task, remnanode_token: str, *, node_port: int = 2222,
+) -> None:
+    """Official remnawave/node install (Plan B 2b) — no local domain/SSL/masking.
+    Mirrors step_remnanode's flow (ensure Docker → write compose → up), minus the
+    nginx front, masking site and per-FQDN cert bridge."""
+    _begin_step(task, 11)
+    compose = _render_vanilla_compose(node_port, remnanode_token)
+    task.add_log(
+        f"\x1b[90m[remnanode/vanilla] node_port={node_port} — официальный "
+        f"remnawave/node без nginx/маскировки (SSL от панели).\x1b[0m"
+    )
+
+    docker_setup = f"""\
+{_APT_WAIT}
+if ! command -v docker &>/dev/null; then
+    curl -fsSL https://get.docker.com | sh
+    systemctl enable docker
+    systemctl start docker
+fi
+docker --version
+"""
+    await ssh.run_script(docker_setup, task, timeout=180)
+
+    write_script = (
+        _APT_WAIT
+        + "mkdir -p /opt/remnanode\n"
+        + "cat > /opt/remnanode/docker-compose.yml << 'COMPOSE_EOF'\n"
+        + compose
+        + "COMPOSE_EOF\n"
+        + 'echo "[remnanode/vanilla] docker-compose.yml записан в /opt/remnanode"\n'
+    )
+    await ssh.run_script(write_script, task)
+
+    deploy_script = """\
+cd /opt/remnanode
+docker compose down 2>/dev/null || docker-compose down 2>/dev/null || true
+docker compose up -d 2>&1 || docker-compose up -d 2>&1
+echo "[remnanode/vanilla] running containers:"
+docker ps --filter "name=remnanode" --format "table {{.Names}}\\t{{.Status}}"
+"""
+    await ssh.run_script(deploy_script, task, timeout=300)
+
+
 async def step_remnanode(
     ssh: SSHSession,
     task: Task,
@@ -2184,8 +2261,13 @@ echo "[vnstat] Демон vnstat установлен и запущен."
             else:
                 await step_haproxy_deploy(ssh, task, req)
         else:
-            if "ssl" in skip:
+            # Vanilla variant (Plan B 2b): official remnawave/node without a local
+            # domain / SSL / masking — skip steps 10 and 12, use the vanilla install.
+            is_vanilla = getattr(req, "node_variant", "egames") == "vanilla"
+            if "ssl" in skip or is_vanilla:
                 _skip_component(task, 10, "SSL")
+                if is_vanilla and "ssl" not in skip:
+                    task.add_log("\x1b[90m[skip] Vanilla: локальный SSL не ставится (сертификат от панели).\x1b[0m")
             else:
                 await step_ssl(ssh, task, req.domain, req.email, req.cloudflare_api_key,
                                req.ip, req.cert_provider)
@@ -2207,17 +2289,24 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                         "Токен Remnanode не указан и не получен из панели. "
                         "Укажите токен вручную или включите «Зарегистрировать в Remnawave»."
                     )
-                await step_remnanode(
-                    ssh, task, remnanode_token, req.domain,
-                    node_port=req.remnanode_port,
-                    xhttp_path=req.xhttp_path,
-                )
+                if is_vanilla:
+                    await step_remnanode_vanilla(
+                        ssh, task, remnanode_token, node_port=req.remnanode_port,
+                    )
+                else:
+                    await step_remnanode(
+                        ssh, task, remnanode_token, req.domain,
+                        node_port=req.remnanode_port,
+                        xhttp_path=req.xhttp_path,
+                    )
 
             # ── Step 12: uniquize the masking decoy site — runs BEFORE WARP ──
             # (masking mutates /var/www/html and must not be affected by WARP's
             # routing changes; ordering: Remnanode → Masking → WARP → Hysteria2).
-            if "masking" in skip:
+            if "masking" in skip or is_vanilla:
                 _skip_component(task, 12, "masking")
+                if is_vanilla and "masking" not in skip:
+                    task.add_log("\x1b[90m[skip] Vanilla: маскировочный сайт не ставится.\x1b[0m")
             else:
                 await step_sni_masking(ssh, task)
 
