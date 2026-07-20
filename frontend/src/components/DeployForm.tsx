@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Rocket, Loader2, Eye, EyeOff, AlertCircle, ChevronDown, Zap } from "lucide-react";
-import { MultiSelect, type SelectOption } from "./MultiSelect";
+import { type SelectOption } from "./MultiSelect";
 import { CountrySelect } from "./CountrySelect";
 
 export type DeployMode = "remnanode" | "haproxy";
@@ -335,9 +335,7 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
   const [sec, setSec] = useState({ domain: true, network: true, remnawave: false, opt: false });
   const toggleSec = (k: keyof typeof sec) => setSec(s => ({ ...s, [k]: !s[k] }));
 
-  // Remnawave state
-  const [squadsInt,      setSquadsInt]      = useState<SelectOption[]>([]);
-  const [squadsExt,      setSquadsExt]      = useState<SelectOption[]>([]);
+  // Remnawave state (squad selectors removed — squads auto-resolve at deploy, 5a)
   const [plugins,        setPlugins]        = useState<SelectOption[]>([]);
   const [templates,      setTemplates]      = useState<Template[]>([]);
   const [hostTemplates,  setHostTemplates]  = useState<HostTemplate[]>([]);
@@ -401,15 +399,11 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
           const toOpts = (arr: unknown) =>
             (Array.isArray(arr) ? arr : []).map((s: { uuid: string; name: string }) =>
               ({ value: s.uuid, label: s.name }));
-          Promise.all([
-            fetch("/api/remnawave/squads/internal").then(r => r.json()).catch(() => []),
-            fetch("/api/remnawave/squads/external").then(r => r.json()).catch(() => []),
-            fetch("/api/remnawave/node-plugins").then(r => r.json()).catch(() => []),
-          ]).then(([int, ext, plug]) => {
-            setSquadsInt(toOpts(int));
-            setSquadsExt(toOpts(ext));
-            setPlugins(toOpts(plug));
-          }).finally(() => setSquadsLoading(false));
+          // Squads are auto-resolved server-side at deploy (5a) — only plugins
+          // are still loaded for the plugin selector.
+          fetch("/api/remnawave/node-plugins").then(r => r.json()).catch(() => [])
+            .then(plug => setPlugins(toOpts(plug)))
+            .finally(() => setSquadsLoading(false));
         }
       })
       .catch(() => {});
@@ -679,25 +673,8 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
               </div>
             )}
 
-            {/* Internal squads multi-select */}
-            <MultiSelect
-              label="Внутренние сквады"
-              selected={form.internal_squad_ids}
-              onChange={v => set("internal_squad_ids", v)}
-              options={squadsInt}
-              placeholder={squadsLoading ? "Загрузка..." : "— без сквадов —"}
-              disabled={f || !remnavaveReady || squadsLoading}
-            />
-
-            {/* External squads multi-select */}
-            <MultiSelect
-              label="Внешние сквады"
-              selected={form.external_squad_ids}
-              onChange={v => set("external_squad_ids", v)}
-              options={squadsExt}
-              placeholder={squadsLoading ? "Загрузка..." : "— без сквадов —"}
-              disabled={f || !remnavaveReady || squadsLoading}
-            />
+            {/* Squad selectors removed (5a) — the node's inbounds are auto-bound to
+                all internal squads server-side at deploy. */}
 
             {/* Node plugin single-select */}
             <div className="flex flex-col gap-1">

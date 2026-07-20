@@ -1919,6 +1919,24 @@ async def step_remnawave_pre_deploy(
     # squads. Without this the node exists but squad users can't reach it.
     # Form selection takes priority; fall back to settings defaults.
     int_squads = list(req.internal_squad_ids) or list(cfg.default_internal_squad_ids)
+    if not int_squads:
+        # 5a: the internal/external squad selector was removed from the deploy
+        # form — auto-resolve to ALL internal squads so the new node's inbounds
+        # stay reachable (previously an empty selection left the node unlinked).
+        try:
+            all_squads = await client.list_internal_squads()
+            int_squads = [s.get("uuid") for s in all_squads
+                          if isinstance(s, dict) and s.get("uuid")]
+            if int_squads:
+                task.add_log(
+                    f"\x1b[90m[Remnawave] Сквады не заданы — авто-привязка ко всем "
+                    f"внутренним сквадам ({len(int_squads)}).\x1b[0m"
+                )
+        except Exception as exc:
+            task.add_log(
+                f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Не удалось получить список сквадов для "
+                f"авто-привязки: {exc}\x1b[0m"
+            )
     if int_squads and active_inbounds:
         for sq_id in int_squads:
             try:
