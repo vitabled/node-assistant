@@ -125,6 +125,9 @@ export default function App() {
   const [certTaskId, setCertTaskId]         = useState<string | null>(null);
   const [certLogs, setCertLogs]             = useState<string[]>([]);
   const [certStepStatus, setCertStepStatus] = useState<StatusFrame>(INITIAL_CERT_STATUS);
+  // SSL terminal collapsible (3a): default collapsed → the freed area shows Домены;
+  // a new deploy-cert task auto-expands it.
+  const [termOpen, setTermOpen]             = useState(false);
 
   const addCertLog = useCallback((line: string) => setCertLogs(l => [...l, line]), []);
   const onCertStatus = useCallback((frame: StatusFrame) =>
@@ -142,6 +145,7 @@ export default function App() {
   const certIsDone = certStepStatus.status === "success" || certStepStatus.status === "failed";
 
   const deployCert = async (data: CertsFormData) => {
+    setTermOpen(true);  // auto-expand the terminal when a task starts (3a)
     setCertLogs([]); setCertTaskId(null); setCertStepStatus(INITIAL_CERT_STATUS);
     const res = await fetch("/api/certs/deploy", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -226,9 +230,6 @@ export default function App() {
                 <div style={{ padding: 20 }}>
                   <CertsForm onSubmit={deployCert} disabled={certIsRunning} />
                 </div>
-                <div style={{ padding: "0 20px 20px" }}>
-                  <DomainsPanel />
-                </div>
                 {certTaskId && (
                   <div style={{ padding: "16px 20px 20px", borderTop: "1px solid var(--line-soft)" }}>
                     <p className="micro" style={{ marginBottom: 12 }}>Прогресс</p>
@@ -244,35 +245,51 @@ export default function App() {
               <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
                 <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--line-soft)", display: "flex", alignItems: "center", gap: 8 }}>
                   <TermIcon size={13} style={{ color: "var(--t-low)" }} />
-                  <span className="micro">Вывод терминала</span>
-                  {certLogs.length > 0 && <span className="num" style={{ marginLeft: "auto", fontSize: 11, color: "var(--t-faint)" }}>{certLogs.length} строк</span>}
+                  <span className="micro">{termOpen ? "Вывод терминала" : "Домены"}</span>
+                  {termOpen && certLogs.length > 0 && <span className="num" style={{ fontSize: 11, color: "var(--t-faint)" }}>{certLogs.length} строк</span>}
+                  <button type="button" onClick={() => setTermOpen(o => !o)}
+                    style={{
+                      marginLeft: "auto", fontSize: 11, color: "var(--t-low)", background: "transparent",
+                      border: "1px solid var(--line-soft)", borderRadius: "var(--r-sm)", padding: "2px 8px", cursor: "pointer",
+                    }}
+                    title={termOpen ? "Свернуть терминал (показать Домены)" : "Показать вывод терминала"}>
+                    {termOpen ? "Свернуть" : "Показать терминал"}
+                  </button>
                 </div>
-                {certIsDone && (
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", fontSize: 13,
-                    borderBottom: "1px solid var(--line-soft)",
-                    background: certStepStatus.status === "success" ? "var(--ok-dim)" : "var(--err-dim)",
-                    color: certStepStatus.status === "success" ? "var(--ok)" : "var(--err)",
-                  }}>
-                    {certStepStatus.status === "success"
-                      ? <><CheckCircle2 size={15} /> Сертификат задеплоен</>
-                      : <><XCircle size={15} /> Ошибка выполнения</>}
+                {termOpen ? (
+                  <>
+                    {certIsDone && (
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", fontSize: 13,
+                        borderBottom: "1px solid var(--line-soft)",
+                        background: certStepStatus.status === "success" ? "var(--ok-dim)" : "var(--err-dim)",
+                        color: certStepStatus.status === "success" ? "var(--ok)" : "var(--err)",
+                      }}>
+                        {certStepStatus.status === "success"
+                          ? <><CheckCircle2 size={15} /> Сертификат задеплоен</>
+                          : <><XCircle size={15} /> Ошибка выполнения</>}
+                      </div>
+                    )}
+                    <div style={{ flex: 1, padding: 12, minHeight: 0 }}>
+                      {certLogs.length === 0 && !certTaskId ? (
+                        <div style={{
+                          height: "100%", display: "flex", flexDirection: "column", alignItems: "center",
+                          justifyContent: "center", gap: 8, color: "var(--t-faint)", fontSize: 13,
+                          border: "1px solid var(--line-soft)", borderRadius: "var(--r-md)",
+                        }}>
+                          <TermIcon size={28} style={{ opacity: .3 }} />
+                          <span>Заполните форму и нажмите «Задеплоить сертификат»</span>
+                        </div>
+                      ) : (
+                        <TerminalOutput lines={certLogs} />
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ flex: 1, padding: 20, overflowY: "auto", minHeight: 0 }}>
+                    <DomainsPanel />
                   </div>
                 )}
-                <div style={{ flex: 1, padding: 12, minHeight: 0 }}>
-                  {certLogs.length === 0 && !certTaskId ? (
-                    <div style={{
-                      height: "100%", display: "flex", flexDirection: "column", alignItems: "center",
-                      justifyContent: "center", gap: 8, color: "var(--t-faint)", fontSize: 13,
-                      border: "1px solid var(--line-soft)", borderRadius: "var(--r-md)",
-                    }}>
-                      <TermIcon size={28} style={{ opacity: .3 }} />
-                      <span>Заполните форму и нажмите «Задеплоить сертификат»</span>
-                    </div>
-                  ) : (
-                    <TerminalOutput lines={certLogs} />
-                  )}
-                </div>
               </div>
             </div>
           )}
