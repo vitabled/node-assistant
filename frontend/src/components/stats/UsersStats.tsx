@@ -84,20 +84,6 @@ function Bar({ label, value, max, sub, color }:
   );
 }
 
-function Sparkline({ points, color }: { points: number[]; color: string }) {
-  if (points.length < 2) return <span style={{ fontSize: 11, color: "var(--t-faint)" }}>—</span>;
-  const w = 116, h = 26;
-  const max = Math.max(...points, 1), min = Math.min(...points, 0);
-  const rng = max - min || 1;
-  const d = points.map((v, i) =>
-    `${((i / (points.length - 1)) * w).toFixed(1)},${(h - ((v - min) / rng) * h).toFixed(1)}`).join(" ");
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: "block", flex: "none" }}>
-      <polyline points={d} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 function WindowSelect({ value, onChange }: { value: number; onChange: (h: number) => void }) {
   return (
     <label style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -123,6 +109,119 @@ function CheckerSelect({ value, onChange, instances }:
 }
 
 // ── widgets ──────────────────────────────────────────────────
+
+// Fixed data-ink hues for the multi-line node-load chart (per CLAUDE.md, chart
+// palettes stay fixed hues; other UI uses CSS-var tokens).
+const LINE_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f472b6", "#a78bfa", "#f87171"];
+
+function _fmtTs(ts: number): string {
+  return new Date(ts * 1000).toLocaleString("ru-RU",
+    { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+// Large, readable multi-line chart (6a): Y-axis + grid + time labels + legend +
+// hover tooltip. Pure inline SVG (CSP self-contained). Each node = one line.
+function NodeLoadChart({ nodes }: { nodes: NodeLoad[] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const shown = nodes.slice(0, 6).filter(n => n.points.length);
+  const W = 640, H = 240, padL = 34, padR = 12, padT = 12, padB = 28;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  let tMin = Infinity, tMax = -Infinity, vMax = 1;
+  for (const n of shown) for (const p of n.points) {
+    if (p.ts < tMin) tMin = p.ts; if (p.ts > tMax) tMax = p.ts;
+    if (p.usersOnline > vMax) vMax = p.usersOnline;
+  }
+  const span = Math.max(1, tMax - tMin);
+  const x = (ts: number) => padL + ((ts - tMin) / span) * plotW;
+  const y = (v: number) => padT + (1 - v / vMax) * plotH;
+
+  // Merged sorted timeline for the hover guide.
+  const allTs = Array.from(new Set(shown.flatMap(n => n.points.map(p => p.ts)))).sort((a, b) => a - b);
+  const hoverTs = hover != null ? allTs[hover] : null;
+  const valAt = (n: NodeLoad, ts: number) => {
+    let best = n.points[0], bd = Infinity;
+    for (const p of n.points) { const d = Math.abs(p.ts - ts); if (d < bd) { bd = d; best = p; } }
+    return best?.usersOnline ?? 0;
+  };
+
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(vMax * f));
+  const xTicks = [0, 1, 2, 3].map(i => tMin + (span * i) / 3);
+
+  return (
+    <div style={{ position: "relative", width: "100%" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}
+        onMouseLeave={() => setHover(null)}
+        onMouseMove={e => {
+          const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+          const px = ((e.clientX - r.left) / r.width) * W;
+          const ts = tMin + ((px - padL) / plotW) * span;
+          if (!allTs.length) return;
+          let bi = 0, bd = Infinity;
+          allTs.forEach((t, i) => { const d = Math.abs(t - ts); if (d < bd) { bd = d; bi = i; } });
+          setHover(bi);
+        }}>
+        {/* horizontal grid + Y labels */}
+        {yTicks.map((v, i) => (
+          <g key={i}>
+            <line x1={padL} x2={W - padR} y1={y(v)} y2={y(v)} stroke="var(--line-soft)" strokeWidth={1} />
+            <text x={padL - 5} y={y(v) + 3} textAnchor="end" fontSize={9} fill="var(--t-faint)">{v}</text>
+          </g>
+        ))}
+        {/* X time labels */}
+        {xTicks.map((t, i) => (
+          <text key={i} x={x(t)} y={H - 8} textAnchor={i === 0 ? "start" : i === 3 ? "end" : "middle"}
+            fontSize={9} fill="var(--t-faint)">{_fmtTs(t)}</text>
+        ))}
+        {/* node lines */}
+        {shown.map((n, ni) => (
+          <polyline key={n.node_uuid} fill="none" stroke={LINE_COLORS[ni % LINE_COLORS.length]}
+            strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round"
+            points={n.points.map(p => `${x(p.ts)},${y(p.usersOnline)}`).join(" ")} />
+        ))}
+        {/* hover guide */}
+        {hoverTs != null && (
+          <line x1={x(hoverTs)} x2={x(hoverTs)} y1={padT} y2={padT + plotH}
+            stroke="var(--t-faint)" strokeWidth={1} strokeDasharray="3 3" />
+        )}
+        {hoverTs != null && shown.map((n, ni) => (
+          <circle key={n.node_uuid} cx={x(hoverTs)} cy={y(valAt(n, hoverTs))} r={2.5}
+            fill={LINE_COLORS[ni % LINE_COLORS.length]} />
+        ))}
+      </svg>
+
+      {/* hover tooltip */}
+      {hoverTs != null && (
+        <div style={{
+          position: "absolute", top: 4, right: 4, background: "var(--bg1)",
+          border: "1px solid var(--line-soft)", borderRadius: "var(--r-sm)",
+          padding: "6px 8px", fontSize: 10, pointerEvents: "none", boxShadow: "var(--shadow-pop)",
+        }}>
+          <div style={{ color: "var(--t-low)", marginBottom: 3 }}>{_fmtTs(hoverTs)}</div>
+          {shown.map((n, ni) => (
+            <div key={n.node_uuid} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 2, background: LINE_COLORS[ni % LINE_COLORS.length], flex: "none" }} />
+              <span className="trunc" style={{ flex: 1, maxWidth: 110 }}>{n.node_name || n.node_uuid.slice(0, 8)}</span>
+              <span className="num" style={{ color: "var(--t-hi)" }}>{valAt(n, hoverTs)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* legend with current / peak */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", marginTop: 8 }}>
+        {shown.map((n, ni) => (
+          <div key={n.node_uuid} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+            <span style={{ width: 9, height: 3, borderRadius: 2, background: LINE_COLORS[ni % LINE_COLORS.length], flex: "none" }} />
+            <span className="trunc" style={{ maxWidth: 130 }}>{n.node_name || n.node_uuid.slice(0, 8)}</span>
+            <span style={{ color: "var(--t-low)" }}>сейчас {n.current_online} · пик {n.peak_online}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function WNodeLoad() {
   const [hours, setHours] = useState(168);
   const { data, err, loading } = useFetch<{ nodes: NodeLoad[] }>(`/api/stats/users/node-load?hours=${hours}`);
@@ -131,17 +230,7 @@ function WNodeLoad() {
     <Card title="Загрузка нод во времени" Icon={TrendingUp}
       settings={<WidgetSettings><WindowSelect value={hours} onChange={setHours} /></WidgetSettings>}>
       <State loading={loading} err={err} empty={nodes.length === 0}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {nodes.slice(0, 6).map(n => (
-            <div key={n.node_uuid} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="trunc" style={{ fontSize: 12 }}>{n.node_name || n.node_uuid.slice(0, 8)}</div>
-                <div style={{ fontSize: 10, color: "var(--t-low)" }}>сейчас {n.current_online} · пик {n.peak_online}</div>
-              </div>
-              <Sparkline points={n.points.map(p => p.usersOnline)} color="var(--accent)" />
-            </div>
-          ))}
-        </div>
+        <NodeLoadChart nodes={nodes} />
       </State>
     </Card>
   );
