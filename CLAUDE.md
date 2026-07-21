@@ -417,3 +417,81 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - **Встроен КАК ЕСТЬ через iframe, НЕ порт в React.** Форк `123jjck/mihomo-configurator` (vanilla-JS: `index.html` + `app/{state,parsers,ui,generate}.js` + `style.css`, глобальные скрипты с inline-`onclick`, 4-шаговый визард DNS→Серверы→Правила→Скачать; парсит share-ссылки vless/vmess/ss/trojan/hysteria2/tuic/vpn + WireGuard/AmneziaWG `.conf` + подписки, генерит mihomo YAML через `jsyaml`). Ре-имплементацию в React (как планировал План E) заменили на **встраивание** — 3.5k строк DOM-кода, полностью самодостаточно, ноль сетевых вызовов (всё client-side, backend не трогается). ⚠️ **Лицензии у апстрима НЕТ** (all rights reserved) — учитывать при публичном распространении; ссылку на автора в шапке сохранили (атрибуция).
 - **Размещение:** `frontend/public/mihomo/` (`index.html`+`app/`) → Vite копирует в `dist/mihomo/`, nginx отдаёт по `/mihomo/`. `frontend/src/components/MihomoEditor.tsx` = same-origin `<iframe src="/mihomo/index.html">` (без sandbox → работают localStorage `ui-lang`, clipboard, download, file-import). Nav: `Tab "mihomo"` (`Sidebar.tsx`, пункт «Mihomo» с `Waypoints` после «Профили»), `App.tsx` CRUMB `["Node Installer","Mihomo"]` + маршрут.
 - **CSP-self-contained:** апстрим грузил `js-yaml` с CDN — заменено на локальный `vendor/js-yaml.min.js`, копируется из `node_modules` **на этапе билда** скриптом `frontend/scripts/vendor-mihomo.mjs` (добавлен dep `js-yaml`, шаг вписан в `build`/`dev` в package.json; сам блоб в `.gitignore` — `public/mihomo/vendor/`). **Форвард (План D):** привязка к mihomo-шаблонам (загрузка/сохранение конфига в наш template-стор) — через postMessage поверх iframe, пока standalone-инструмент.
+
+## 10. Wave 5 План M — опциональный распил на сервисы (strangler, ОТГРУЖЕНО)
+> План `docs/superpowers/plans/2026-07-21-wave5-m-microservices.md`. Ф1–Ф3 + Ф5 реализованы; Ф4 (library/billing/ai
+> как сервисы) осознанно НЕ делали — план сам помечает его «по потребности».
+
+### 10a. Ключевое решение: общий том, БЕЗ service-to-service HTTP
+- Разведка показала, что **все** сторы — SQLite/JSON на общем томе `node-data`. Поэтому HTTP-прокси между gateway и
+  вынесенными сервисами (как предполагал Ф2) и контракт service-аутентификации (Ф1c) **не реализованы намеренно** —
+  это был бы спекулятивный код (CLAUDE.md §2). Вынесенные процессы **не поднимают HTTP вообще**: они только
+  выполняют фоновую работу, а все чтения gateway делает сам с того же тома. Меньше кода, нет проброса auth, нет
+  новой поверхности атаки. Решение подтверждено пользователем.
+- Следствие: **nginx/фронтенд не трогали** — SPA по-прежнему ходит только в `backend`. Ф1c заменён на `worker_lease`.
+
+### 10b. `worker_lease` — почему распил опционален и обратим
+- **`services/worker_lease.py`** — таблица `leases` в `DATA_DIR/tasks.db`. Каждая фоновая обязанность (`monitoring`,
+  `deploy-worker`) обёрнута в аренду: кто держит — тот работает, остальные простаивают. Монолит → gateway держит всё,
+  поведение прежнее. `--profile split` → выделенные контейнеры перехватывают. Контейнер умер → аренда протухает
+  (TTL 180с) и **gateway сам возобновляет обязанность** — это и есть критерий отката Ф5.
+- **Захват через `SERVICE_ROLE`:** процесс, запущенный ПОД обязанность (`SERVICE_ROLE=monitoring`), берёт аренду
+  **безусловно** (перехватывает у gateway, который загрузился раньше). Все остальные берут только свободную/протухшую.
+  Так распил сходится без таймингов и порядка загрузки. Ровно один контейнер на обязанность (несколько — не поддержано).
+- **Fail-open:** любая ошибка БД аренд → `acquire` возвращает True. Сломанная таблица не должна затыкать мониторинг.
+- 5 лупов (`poller_loop`/`collector_loop`/`rules_loop`/`monitor_loop` + one-shot `autostart_checker`) гейтятся на
+  `MONITORING`. `autostart_checker` — через `held_elsewhere`, чтобы два процесса не гонялись создавать один контейнер.
+
+### 10c. Task store: два бэкенда за одним синглтоном
+- **`services/task_types.py`** (NEW, лист-модуль) — `TaskStatus` + `STEP_LABELS`. **⚠️ Вынесены сюда из `task_store`
+  ради разрыва цикла:** `task_store` на импорте выбирает реализацию и потому импортирует `shared_task_store`, а тот
+  раньше импортировал имена обратно из `task_store` → `ImportError` при импорте `worker_lease` ПЕРВЫМ (порядок воркера;
+  порядок gateway случайно работал). `task_store` их ре-экспортирует — ~250 старых импортов не тронуты.
+  Регрессия ловится **в подпроцессе** (`test_shared_task_store.py`), иначе уже импортированный модуль всё скрывает.
+- **`services/shared_task_store.py`** (NEW) — duck-type близнец `Task`/`TaskStore` на SQLite `DATA_DIR/tasks.db`
+  (WAL + `busy_timeout`, одно соединение под `threading.Lock`). Мутаторы остались **синхронными** (их зовёт
+  `SSHSession._drain` и ~250 мест пайплайна). `subscribe()` отдаёт ту же `asyncio.Queue` с теми же 3 формами кортежей;
+  для shared она преднагружается снимком и дальше **тейлится** фоновой задачей (poll 0.4с) — `api/ws.py` не менялся.
+  Ретенция 24ч (у in-memory `cleanup()` было 0 вызовов — задачи текли вечно).
+- Выбор: env **`TASK_STORE=memory|shared`**, дефолт `memory` → монолит байт-в-байт как был.
+
+### 10d. Очередь задач и `deploy-worker`
+- **`services/job_runner.py`** — реестр `kind → handler`. Gateway кладёт задание в ту же таблицу `tasks`
+  (`payload_enc` — **Fernet**, ключ = SHA-256 `encryption_key`; SSH-креды не лежат в открытую и **затираются в
+  `finish()`**). Воркер клеймит атомарно (`UPDATE ... WHERE claimed_at IS NULL`, rowcount=1) и стримит логи туда же.
+- **Фолбэк — дефолт:** `offload()` отдаёт работу ТОЛЬКО если (а) `TASK_STORE=shared` И (б) живая аренда
+  `deploy-worker` у другого процесса. Иначе `False` → вызывающий выполняет всё у себя, как раньше. Ни один
+  вынесенный сервис не является жёсткой зависимостью.
+- **Отменa между процессами:** `POST /api/deploy/stop` сначала пробует локальный asyncio-хэндл (`_running_tasks`),
+  иначе ставит флаг `cancel_requested`; воркер опрашивает его раз в секунду и отменяет свою задачу.
+- **⚠️ ContextVar НЕ переживает очередь — задание несёт `account_id`.** `pipeline.py` читает
+  `_storage.load_settings()/load_hosts()/load_templates()/load_traffic_rules()` БЕЗ account_id, т.е. через
+  `current_account`, который в gateway ставит `require_account`. В воркере запроса нет → был бы
+  `RuntimeError("No active account in context")` на шаге 11 у любого деплоя с `create_in_remnawave`. Поэтому
+  `tasks.account_id` пишется при `create()`, а `job_runner.execute` **переустанавливает `current_account` ДО
+  `asyncio.create_task`** (задача копирует контекст в момент создания) и сбрасывает в `finally`. Любой новый
+  handler получает это бесплатно; тест — `test_account_context_survives_the_queue_hop`.
+- Зарегистрированы **`deploy`** (14-шаговый пайплайн — критерий готовности плана) и **`node-op`**. Остальные
+  task-виды (certs/panel/backup/testserver/replace-domain/certwarden/netbird/panel-sync/migrate) **осознанно
+  оставлены в gateway** — короткие операции; добавление любого = 3 строки `job_runner.register(...)`.
+- **14-шаговый пайплайн НЕ менялся** — распил меняет ГДЕ он выполняется, а не ЧТО делает.
+
+### 10e. Запуск
+- `python -m app.worker monitoring|deploy` (`app/worker.py`) — HTTP не поднимает. Compose-сервисы `monitoring` и
+  `deploy-worker` под `profiles: ["split"]`, тот же образ backend, монтируют `node-data` + docker.sock.
+  `docker compose up` = монолит; `docker compose --profile split up -d` = распил. `deploy-worker` жёстко требует
+  `TASK_STORE=shared` (иначе `SystemExit` с внятным сообщением).
+- **`GET /api/health`** (ungated, он же compose-healthcheck) теперь отдаёт `{ok, role, taskStore{mode,active,queued},
+  duties[{name,holder,fresh,self}]}` — единственная точка наблюдаемости распила.
+
+### 10f. Побочно исправлено (найдено разведкой/реальным прогоном)
+- **Фоновый поллер НИКОГДА не сэмплил общий xray-checker.** `xray_checker._base_url()` резолвил `_cfg()` ДО проверки
+  `_network()`, а `_cfg()` требует account-контекст, которого у лупа нет → `RuntimeError` глушился `except Exception:
+  return 0`. Теперь DooD-ветка возвращает URL по имени контейнера, не трогая cfg; `fetch_proxies(cfg=...)` и
+  `_sample_once(cfg)` принимают конфиг явно, а поллер передаёт cfg включившего аккаунта. Сбой сэмпла **логируется**.
+- **`metrics_store._bars` читал ТОЛЬКО in-process ring** → в split-режиме бары на статус-странице замерли бы навсегда
+  (ring пополняет лишь `record_samples`, т.е. процесс-поллер). Теперь запрос к SQLite (window-функция, как в
+  `_warm_ring`), ring остался фолбэком для sqlite < 3.25.
+- `infra_billing_store` — все 23 публичные функции приняли `account_id: Optional[str] = None` (ContextVar остался
+  дефолтом, вызовы роутов не тронуты). В `**f`-функциях `account_id` стоит ВТОРЫМ позиционным, чтобы его не съел
+  kwargs-мешок.

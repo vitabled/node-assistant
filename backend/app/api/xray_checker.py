@@ -16,6 +16,7 @@ seconds and appends to the SQLite metrics store so /history has data to plot.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -27,7 +28,10 @@ from app.services import checker_registry
 from app.services import net_guard
 from app.services import storage
 from app.services import accounts
+from app.services import worker_lease
 from app.models.settings import AppSettings
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/checker")
 
@@ -415,11 +419,18 @@ async def _sample_remote(instance_id: str, base_url: str) -> int:
     await metrics_store.record_samples(proxies, checker_id=instance_id)
     return len(proxies)
 
-async def _sample_once() -> int:
-    """Scrape the checker's proxies and append a sample row. Returns proxy count."""
+async def _sample_once(cfg=None) -> int:
+    """Scrape the checker's proxies and append a sample row. Returns proxy count.
+
+    `cfg` lets a caller WITHOUT an account context (the poller) supply the config
+    instead of having it resolved from `current_account`."""
     try:
-        proxies = await xc.fetch_proxies()
-    except Exception:
+        proxies = await xc.fetch_proxies(cfg=cfg)
+    except Exception as exc:
+        # Logged, not silent: a bare `except` here once hid a permanent poller
+        # failure (`_base_url` needed an account context the loop never has), so
+        # the shared checker went unsampled for a long time with no signal.
+        log.warning("checker.sample_failed: %s", str(exc)[:200])
         return 0
     await metrics_store.record_samples(proxies)
     return len(proxies)
@@ -430,7 +441,12 @@ async def autostart_checker() -> None:
     Docker is available. Non-fatal: quietly degrades to 'not configured' when
     Docker is absent or no account has a usable subscription. The container is
     SHARED (one per host) — the first startable account's config wins (in DooD +
-    aggregator mode the SUBSCRIPTION_URL is the combined aggregator feed anyway)."""
+    aggregator mode the SUBSCRIPTION_URL is the combined aggregator feed anyway).
+
+    Skipped when another process holds the `monitoring` lease, so a gateway and a
+    split `monitoring` container don't race to create the same container."""
+    if worker_lease.held_elsewhere(worker_lease.MONITORING):
+        return
     try:
         state = await xc.container_state()
     except Exception:
@@ -458,12 +474,19 @@ async def poller_loop() -> None:
     interval. The xray-checker container + metrics store are global; each
     account's xray config is per-account, so we scan all accounts and sample
     whenever ANY account has the checker enabled and the container is running.
-    Interval = the smallest enabled poll_interval (min 15s)."""
+    Interval = the smallest enabled poll_interval (min 15s).
+
+    Gated on the `monitoring` lease: in `--profile split` the dedicated worker
+    holds it and the gateway's copy idles; in the monolith this process holds it
+    and nothing changes. See services/worker_lease.py."""
     while True:
         interval = 60
         try:
+            if not worker_lease.acquire(worker_lease.MONITORING):
+                await asyncio.sleep(interval)
+                continue
             enabled_intervals = []
-            local_enabled = False
+            local_cfg = None
             remote_targets: list[tuple[str, str]] = []  # (instance_id, base_url)
             for acc in accounts.list_accounts():
                 aid = acc["id"]
@@ -473,7 +496,8 @@ async def poller_loop() -> None:
                     cfg = None
                 if cfg and cfg.enabled:
                     enabled_intervals.append(max(15, cfg.poll_interval))
-                    local_enabled = True
+                    if local_cfg is None:
+                        local_cfg = cfg
                 # Remote instances registered by this account (explicit account_id —
                 # the poller has no request context / current_account).
                 for inst in checker_registry.list_instances(aid):
@@ -483,8 +507,10 @@ async def poller_loop() -> None:
             if enabled_intervals:
                 interval = min(enabled_intervals)
             # Shared local container: sample once per tick if any account uses it.
-            if local_enabled and await xc.container_state() == "running":
-                await _sample_once()
+            # The enabled account's cfg is threaded in explicitly — there is no
+            # `current_account` here to resolve it from.
+            if local_cfg is not None and await xc.container_state() == "running":
+                await _sample_once(local_cfg)
             # Remote instances: sampled once per shared tick (sequentially; a dead
             # one is skipped, not retried). Small instance counts expected.
             for iid, base_url in remote_targets:

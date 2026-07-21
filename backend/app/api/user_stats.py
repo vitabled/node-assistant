@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field, field_validator
 
 from app.services import accounts, storage
+from app.services import worker_lease
 from app.services import user_stats_store as store
 from app.services.remnawave_client import RemnavaveClient
 from app.models.settings import AppSettings
@@ -127,9 +128,14 @@ async def _collect_account(account_id: str) -> None:
 async def collector_loop() -> None:
     """Runs for the app's lifetime; snapshots each account's Remnawave node load
     into the per-account user_stats store. One account's failure never kills the
-    loop (mirrors xray_checker.poller_loop). No request context → explicit account_id."""
+    loop (mirrors xray_checker.poller_loop). No request context → explicit account_id.
+
+    Gated on the `monitoring` lease (see services/worker_lease.py)."""
     while True:
         try:
+            if not worker_lease.acquire(worker_lease.MONITORING):
+                await asyncio.sleep(_COLLECT_INTERVAL)
+                continue
             for acc in accounts.list_accounts():
                 try:
                     await _collect_account(acc["id"])

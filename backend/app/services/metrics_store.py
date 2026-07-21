@@ -169,16 +169,48 @@ def _cid_clause(checker_id: Optional[str]) -> tuple[str, tuple]:
     return " AND checker_id = ?", (checker_id,)
 
 
-def _bars(n: int, checker_id: Optional[str] = None) -> dict[str, list[dict[str, Any]]]:
-    """Last `n` ticks per node from the ring: [{ts, status: up|slow|down}].
-    Filtered to `checker_id` when given; keyed by stable_id in the result."""
-    n = max(1, min(n, _RING_MAX))
+def _bars_from_ring(n: int, checker_id: Optional[str]) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {}
     for (cid, sid), dq in _RING.items():
         if checker_id is not None and cid != checker_id:
             continue
         out[sid] = list(dq)[-n:]
     return out
+
+
+def _bars(n: int, checker_id: Optional[str] = None) -> dict[str, list[dict[str, Any]]]:
+    """Last `n` ticks per node: [{ts, status: up|slow|down}], keyed by stable_id.
+    Filtered to `checker_id` when given.
+
+    Reads SQLite, NOT the in-process ring. The ring is only ever appended to by
+    `record_samples`, i.e. by whichever process runs the poller — so under
+    `--profile split` (sampler in the `monitoring` container) a ring-backed read
+    in the gateway would be frozen at whatever `_warm_ring` loaded at boot, and
+    the status page would show stale bars forever. The ring survives as a
+    fallback for sqlite < 3.25, which has no window functions — the same
+    graceful degradation `_warm_ring` already takes.
+    """
+    n = max(1, min(n, _RING_MAX))
+    since = int(time.time()) - _RETENTION_SECONDS
+    cc, cp = _cid_clause(checker_id)
+    try:
+        with _connect() as conn:
+            cur = conn.execute(
+                "SELECT stable_id, ts, online, latency_ms FROM ("
+                "  SELECT stable_id, ts, online, latency_ms, ROW_NUMBER() OVER ("
+                "    PARTITION BY stable_id ORDER BY ts DESC) AS rn"
+                "  FROM proxy_samples WHERE ts >= ?" + cc +
+                ") WHERE rn <= ? ORDER BY stable_id, ts ASC",
+                (since, *cp, n),
+            )
+            out: dict[str, list[dict[str, Any]]] = {}
+            for r in cur.fetchall():
+                out.setdefault(r["stable_id"], []).append(
+                    {"ts": r["ts"], "status": _tick_status(r["online"], r["latency_ms"])}
+                )
+            return out
+    except Exception:
+        return _bars_from_ring(n, checker_id)
 
 
 def _uptime_30d(checker_id: Optional[str] = None) -> dict[str, Any]:

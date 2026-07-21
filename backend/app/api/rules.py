@@ -41,6 +41,7 @@ from app.services import (
     rule_engine,
     rules_store,
     telegram,
+    worker_lease,
 )
 from app.api.xray_checker import _filter_by_account
 
@@ -452,10 +453,17 @@ async def rules_loop() -> None:
     """Lifespan task: every ~60s, run xray_down/cron rules for each account.
     Per-account try/except + a top-level guard so one bad account/tick never kills
     the loop (mirrors xray_checker.poller_loop). No request context → explicit
-    account_id everywhere."""
+    account_id everywhere.
+
+    Gated on the `monitoring` lease (see services/worker_lease.py) — rule actions
+    are side-effectful (telegram/Remnawave mutations), so exactly one process must
+    evaluate them."""
     while True:
         now = int(time.time())
         try:
+            if not worker_lease.acquire(worker_lease.MONITORING):
+                await asyncio.sleep(_TICK)
+                continue
             for acc in accounts.list_accounts():
                 try:
                     await _run_account_scheduled(acc["id"], now)

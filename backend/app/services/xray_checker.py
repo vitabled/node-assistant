@@ -47,12 +47,16 @@ def _cfg() -> XrayCheckerConfig:
 
 
 def _base_url(cfg: Optional[XrayCheckerConfig] = None) -> str:
-    cfg = cfg or _cfg()
     if _network():
         # DooD: the backend is a container on the shared network — reach the
         # checker by its container name on the checker's internal port (2112).
+        # Resolved BEFORE touching cfg on purpose: `_cfg()` needs an account
+        # context, and the background poller has none. Doing it the other way
+        # round made every poller tick raise (and get swallowed), so the shared
+        # checker was never sampled outside a request.
         return f"http://{CONTAINER_NAME}:2112"
     # Bare-metal/host mode: scrape via the published host port.
+    cfg = cfg or _cfg()
     return f"http://127.0.0.1:{cfg.metrics_port}"
 
 
@@ -224,9 +228,11 @@ async def fetch_status(base_url: Optional[str] = None) -> dict[str, Any]:
     return await _get_json("/api/v1/status", base_url=base_url)
 
 
-async def fetch_proxies(base_url: Optional[str] = None) -> list[dict[str, Any]]:
-    """GET /api/v1/proxies -> list of proxy dicts. Pass base_url for a remote instance."""
-    data = await _get_json("/api/v1/proxies", base_url=base_url)
+async def fetch_proxies(base_url: Optional[str] = None,
+                        cfg: Optional[XrayCheckerConfig] = None) -> list[dict[str, Any]]:
+    """GET /api/v1/proxies -> list of proxy dicts. Pass base_url for a remote
+    instance, or cfg when there is no account context (background poller)."""
+    data = await _get_json("/api/v1/proxies", cfg=cfg, base_url=base_url)
     return data if isinstance(data, list) else data.get("proxies", []) if isinstance(data, dict) else []
 
 

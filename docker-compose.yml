@@ -18,6 +18,11 @@ services:
       # Shared secret guarding /internal/agg-subs + the aggregator's /refresh.
       # Set a strong value in .env for prod (empty = guard disabled, dev only).
       - AGG_TOKEN=${AGG_TOKEN:-}
+      # Task/log store. `memory` (default) = single-container monolith.
+      # `shared` = SQLite under node-data, required to hand deploys to the
+      # `deploy-worker` container. Safe to leave on `shared` even without the
+      # split profile. See docker-compose.split.md / CLAUDE.md §10.
+      - TASK_STORE=${TASK_STORE:-memory}
     volumes:
       - node-data:/app/data
       # Docker-out-of-Docker: manage the sibling xray-checker container via the
@@ -65,6 +70,64 @@ services:
       dockerfile: Dockerfile
     image: node-installer-mcp:latest
     profiles: ["mcp-build"]
+    networks:
+      - app-net
+
+  # ── Optional service split (Plan M) ────────────────────────────
+  # Both workers run the SAME image as the backend and serve NO HTTP; they take
+  # over background duties via the lease table on the shared node-data volume
+  # (services/worker_lease.py). Enable with:
+  #     docker compose --profile split up -d
+  # Disable by simply dropping the profile — the gateway resumes every duty by
+  # itself within the lease TTL. Neither worker is a hard dependency.
+
+  # Owns the 5 background loops (xray poller, user-stats collector, rules,
+  # checker autostart, server monitor). Needs docker.sock because the poller and
+  # autostart manage the shared xray-checker container.
+  monitoring:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: node-installer-monitoring
+    profiles: ["split"]
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker", "monitoring"]
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_ROLE=monitoring
+      - XRAY_CHECKER_NETWORK=node-assistant-net
+      - SUBS_AGGREGATOR_URL=http://subs-aggregator:8080/sub
+      - SUBS_AGGREGATOR_REFRESH_URL=http://subs-aggregator:8080/refresh
+      - SUBS_AGGREGATOR_STATUS_URL=http://subs-aggregator:8080/status
+      - AGG_TOKEN=${AGG_TOKEN:-}
+      - TASK_STORE=${TASK_STORE:-memory}
+    volumes:
+      - node-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - app-net
+
+  # Runs the 14-step SSH deploy pipeline and node operations claimed from the
+  # shared task queue. REQUIRES TASK_STORE=shared (that is the queue + log bridge);
+  # without it the gateway simply never offloads and keeps running deploys itself.
+  deploy-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: node-installer-deploy-worker
+    profiles: ["split"]
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker", "deploy"]
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_ROLE=deploy-worker
+      - XRAY_CHECKER_NETWORK=node-assistant-net
+      - TASK_STORE=shared
+    volumes:
+      - node-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - app-net
 

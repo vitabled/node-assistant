@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from app.models.deploy import DeployRequest
 from app.services.task_store import task_store, STEP_LABELS, TaskStatus
 from app.services.pipeline import run_pipeline
+from app.services import job_runner
 from app.config import settings
 
 router = APIRouter(prefix="/api")
@@ -21,13 +22,21 @@ class StopRequest(BaseModel):
 
 @router.post("/deploy")
 async def deploy(req: DeployRequest):
-    if _deploy_sem._value == 0:
+    # With a live split worker the pipeline runs there, so our local SSH-session
+    # cap does not apply; only guard the in-process path.
+    offloading = job_runner.offload_available("deploy")
+    if not offloading and _deploy_sem._value == 0:
         raise HTTPException(
             status_code=503,
             detail=f"Server busy — max {settings.max_ssh_sessions} concurrent deploys reached",
         )
     task    = task_store.create(total_steps=len(STEP_LABELS))
     task_id = task.task_id
+
+    # Hand off to the deploy-worker container when one is live; otherwise run it
+    # right here, exactly as the monolith always has.
+    if job_runner.offload(task, "deploy", req.model_dump(mode="json")):
+        return {"task_id": task_id, "task_type": "deploy"}
 
     # create_task gives us a cancellable handle; BackgroundTasks does not
     loop_task = asyncio.create_task(_run_pipeline_safe(req, task_id))
@@ -40,10 +49,14 @@ async def deploy(req: DeployRequest):
 @router.post("/deploy/stop")
 async def stop_deploy(req: StopRequest):
     loop_task = _running_tasks.get(req.task_id)
-    if loop_task is None or loop_task.done():
-        raise HTTPException(status_code=404, detail="Task not found or already completed")
-    loop_task.cancel()
-    return {"ok": True}
+    if loop_task is not None and not loop_task.done():
+        loop_task.cancel()
+        return {"ok": True}
+    # Not ours — it may belong to the deploy-worker process. Flag it in the
+    # shared store; the worker polls that flag and cancels its own asyncio task.
+    if task_store.request_cancel(req.task_id):
+        return {"ok": True}
+    raise HTTPException(status_code=404, detail="Task not found or already completed")
 
 
 @router.get("/task/{task_id}")
@@ -82,3 +95,12 @@ async def _run_pipeline_safe(req: DeployRequest, task_id: str) -> None:
         raise  # CancelledError must always be re-raised
     except Exception:
         pass  # status already set to FAILED inside run_pipeline
+
+
+async def _job_deploy(payload: dict, task) -> None:
+    """deploy-worker entry for a queued deploy. The 14-step pipeline is imported
+    and run unchanged — the split moves WHERE it runs, never WHAT it does."""
+    await run_pipeline(DeployRequest(**payload), task)
+
+
+job_runner.register("deploy", _job_deploy)

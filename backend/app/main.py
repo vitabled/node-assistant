@@ -43,6 +43,8 @@ from app.api import (
     library,
 )
 from app.api.auth import require_account
+from app.services import worker_lease
+from app.services.task_store import task_store
 
 
 @contextlib.asynccontextmanager
@@ -57,6 +59,12 @@ async def lifespan(app: FastAPI):
     #    receiver, not here.
     #  - autostart: on boot, start the shared xray-checker if any account has it
     #    enabled (monitoring is on by default now) and Docker is available.
+    #
+    # All five are gated on the `monitoring` worker lease. In the default
+    # single-container deployment this process holds it and they behave exactly as
+    # before; under `docker compose --profile split` the dedicated `monitoring`
+    # container takes the lease and these copies idle — and take over again by
+    # themselves if that container dies. See services/worker_lease.py.
     poller = asyncio.create_task(xray_checker.poller_loop())
     collector = asyncio.create_task(user_stats.collector_loop())
     rules_task = asyncio.create_task(rules.rules_loop())
@@ -151,4 +159,18 @@ app.include_router(rules.webhook_router)
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True}
+    """Liveness + which process currently owns each background duty.
+
+    `duties` is the split's observability surface: `self: true` means this
+    gateway is doing the work (monolith, or a split worker that died), a foreign
+    `holder` means a dedicated container has it. Ungated on purpose — it is the
+    compose healthcheck and exposes no account data."""
+    return {
+        "ok": True,
+        "role": worker_lease.role(),
+        "taskStore": task_store.stats(),
+        "duties": [
+            worker_lease.status(worker_lease.MONITORING),
+            worker_lease.status(worker_lease.DEPLOY_WORKER),
+        ],
+    }
