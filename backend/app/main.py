@@ -22,6 +22,7 @@ from app.api import (
     user_stats,
     testservers,
     panel_deploy,
+    panel_metrics,
     backup,
     subpages,
     speedtest,
@@ -30,6 +31,11 @@ from app.api import (
     ai,
     panel_sync,
     migrate,
+    server_monitor,
+    hostings,
+    replace_domain,
+    certwarden,
+    netbird,
 )
 from app.api.auth import require_account
 
@@ -44,10 +50,16 @@ async def lifespan(app: FastAPI):
     #  - rules: evaluates xray_down/cron rules per-account and runs their actions
     #    (telegram / hide-hosts / disable node|user); webhook rules run in the
     #    receiver, not here.
+    #  - autostart: on boot, start the shared xray-checker if any account has it
+    #    enabled (monitoring is on by default now) and Docker is available.
     poller = asyncio.create_task(xray_checker.poller_loop())
     collector = asyncio.create_task(user_stats.collector_loop())
     rules_task = asyncio.create_task(rules.rules_loop())
-    tasks = (poller, collector, rules_task)
+    autostart = asyncio.create_task(xray_checker.autostart_checker())
+    #  - server monitor: probes each account's tracked servers by IP (TCP/ICMP)
+    #    for the «Server uptime» dashboard tab.
+    srv_monitor = asyncio.create_task(server_monitor.monitor_loop())
+    tasks = (poller, collector, rules_task, autostart, srv_monitor)
     try:
         yield
     finally:
@@ -98,6 +110,7 @@ app.include_router(hosts.router, dependencies=_auth)
 app.include_router(user_stats.router, dependencies=_auth)
 app.include_router(testservers.router, dependencies=_auth)
 app.include_router(panel_deploy.router, dependencies=_auth)
+app.include_router(panel_metrics.router, dependencies=_auth)
 app.include_router(backup.router, dependencies=_auth)
 app.include_router(subpages.router, dependencies=_auth)
 app.include_router(speedtest.router, dependencies=_auth)
@@ -106,6 +119,11 @@ app.include_router(mcp.router, dependencies=_auth)
 app.include_router(ai.router, dependencies=_auth)
 app.include_router(panel_sync.router, dependencies=_auth)
 app.include_router(migrate.router, dependencies=_auth)
+app.include_router(server_monitor.router, dependencies=_auth)
+app.include_router(hostings.router, dependencies=_auth)
+app.include_router(replace_domain.router, dependencies=_auth)
+app.include_router(certwarden.router, dependencies=_auth)
+app.include_router(netbird.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.

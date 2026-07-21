@@ -160,8 +160,8 @@ def _run_pipeline_with_spies(monkeypatch, req):
     for name in (
         "step_node_accelerator", "step_traffic_guard", "step_test_tools",
         "step_system_optimize",
-        "step_ssl", "step_remnanode", "step_sni_masking", "step_warp",
-        "step_certbot_ssl", "step_haproxy_deploy",
+        "step_ssl", "step_remnanode", "step_remnanode_vanilla", "step_sni_masking",
+        "step_warp", "step_certbot_ssl", "step_haproxy_deploy",
     ):
         monkeypatch.setattr(pipeline, name, rec(name))
     monkeypatch.setattr(pipeline, "step_ssh_dualport_verify", dualport)
@@ -198,6 +198,21 @@ def test_run_pipeline_skips_test_tools_component(monkeypatch):
     assert task.status == TaskStatus.SUCCESS
     assert "step_test_tools" not in called
     assert 5 in task.begun  # step 5 still begun (progress bar advances)
+
+
+def test_run_pipeline_vanilla_variant(monkeypatch):
+    # Plan B 2b: vanilla uses the official node install and skips SSL + masking.
+    req = _mk_req(node_variant="vanilla")
+    called, task = _run_pipeline_with_spies(monkeypatch, req)
+    assert task.status == TaskStatus.SUCCESS
+    assert "step_remnanode_vanilla" in called   # official install
+    assert "step_remnanode" not in called       # NOT the eGames stack
+    assert "step_ssl" not in called             # SSL skipped in vanilla
+    assert "step_sni_masking" not in called     # masking skipped in vanilla
+    # SSL (10) and masking (12) are begun-but-skipped directly (step 11's begin is
+    # inside the mocked vanilla install, so it isn't recorded here).
+    for idx in (10, 12):
+        assert idx in task.begun
 
 
 def test_run_pipeline_empty_skip_runs_everything(monkeypatch):
@@ -300,3 +315,60 @@ def test_detect_route_rejects_bad_domain():
         "ip": "1.2.3.4", "ssh_password": "pw", "domain": "bad;rm -rf /",
     })
     assert r.status_code == 422
+
+
+# ── (e) settings autodetect (Wave-4 Plan B) ───────────────────
+
+def test_parse_settings_types_and_omits_empty():
+    out = "\n".join([
+        "NIVAL:ssh_port=2222",
+        "NIVAL:open_ports=80,443",
+        "NIVAL:domain=node1.example.com",
+        "NIVAL:remnanode_port=",       # empty → omitted
+        "NIVAL:xhttp_path=/xhttp",
+        "NIVAL:has_token=1",
+    ])
+    s = node_ops._parse_settings(out)
+    assert s["ssh_port"] == 2222 and isinstance(s["ssh_port"], int)
+    assert s["open_ports"] == "80,443"
+    assert s["domain"] == "node1.example.com"
+    assert "remnanode_port" not in s       # empty value omitted
+    assert s["xhttp_path"] == "/xhttp"
+    assert s["has_token"] is True
+    # the raw token is NEVER surfaced — only the has_token bool
+    assert all("token" not in k or k == "has_token" for k in s)
+
+
+def test_parse_settings_has_token_false_and_garbage():
+    assert node_ops._parse_settings("NIVAL:has_token=0")["has_token"] is False
+    assert node_ops._parse_settings("random motd\nno values here") == {}
+
+
+def test_detect_route_includes_settings(monkeypatch):
+    class FakeSSH:
+        def __init__(self, *a, **k):
+            pass
+
+        async def connect(self, *a, **k):
+            pass
+
+        async def get_output(self, command):
+            if "NIVAL" in command:
+                return ("NIVAL:ssh_port=2222\nNIVAL:domain=node1.example.com\n"
+                        "NIVAL:has_token=1")
+            return node_ops._DETECT_ABSENT
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(node_ops, "SSHSession", FakeSSH)
+    r = client.post("/api/node/detect", headers=_auth(), json={
+        "ip": "1.2.3.4", "ssh_password": "pw", "domain": "node1.example.com",
+    })
+    assert r.status_code == 200
+    s = r.json()["settings"]
+    assert s["ssh_port"] == 2222
+    assert s["domain"] == "node1.example.com"
+    assert s["has_token"] is True
+    # components still reported alongside settings
+    assert "results" in r.json()

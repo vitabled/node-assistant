@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Activity, Zap, RefreshCw, Loader2, ChevronDown, CheckCircle2,
-  AlertTriangle, XCircle, Server, Clock,
-  Check, Plus, Trash2,
+  AlertTriangle, XCircle, Clock,
+  Check, Plus, Trash2, Pencil, X, Save, Server, Radio,
 } from "lucide-react";
 import { COUNTRIES } from "./CountrySelect";
 import { getFlagEmoji } from "../utils/format";
@@ -13,13 +13,20 @@ interface Bar { ts: number; status: TickStatus }
 interface Node {
   stableId: string; name: string; groupName: string; protocol: string;
   online: boolean; latencyMs: number; uptime30d: number | null; bars: Bar[];
+  subId?: string;
+  // server-uptime extras (present only on the Server uptime tab)
+  source?: string; ip?: string; port?: number; country?: string; note?: string;
 }
 type GState = "ok" | "partial" | "down" | "unknown";
 interface Global {
   state: GState; uptime30d: number | null; protocols: string[];
   total: number; online: number; offline: number;
 }
-interface StatusResp { container: string; reachable: boolean; nodes: Node[]; global: Global }
+interface SubMeta { id: string; label: string }
+interface StatusResp {
+  container?: string; reachable: boolean; nodes: Node[]; global: Global;
+  subscriptions?: SubMeta[];
+}
 interface Incident {
   stableId: string; name: string; group: string; start: number; end: number;
   durationSec: number; reason: string; ongoing: boolean;
@@ -89,7 +96,107 @@ const BANNER: Record<GState, { style: React.CSSProperties; icon: React.ReactNode
              icon: <Activity size={22} />, text: "Нет данных мониторинга" },
 };
 
+// ── Top-level: tab switcher (Xray uptime / Server uptime) ──────
+type DashTab = "xray" | "server";
+
 export function Dashboard() {
+  const [tab, setTab] = useState<DashTab>("xray");
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="ni-pagebody max-w-5xl mx-auto px-6 py-6">
+        {/* Horizontal tabs */}
+        <div className="flex rounded-lg border border-[var(--line-soft)] overflow-hidden mb-5 w-fit">
+          {([["xray", "Xray uptime", <Radio size={13} key="i" />],
+             ["server", "Server uptime", <Server size={13} key="i" />]] as const).map(([id, label, icon]) => (
+            <button key={id} onClick={() => setTab(id as DashTab)}
+              className={`flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-colors ${
+                tab === id ? "bg-[var(--bg3)] text-[var(--t-hi)]" : "text-[var(--t-low)] hover:text-[var(--t-mid)]"}`}>
+              {icon}{label}
+            </button>
+          ))}
+        </div>
+        {tab === "xray" ? <XrayUptime /> : <ServerUptime />}
+      </div>
+    </div>
+  );
+}
+
+// ── Shared: health banner + incident log ──────────────────────
+function HealthBanner({ state, primary, secondary, stats }: {
+  state: GState; primary?: string; secondary: string; stats?: React.ReactNode;
+}) {
+  const banner = BANNER[state];
+  return (
+    <div className="ni-health rounded-xl border p-5 mb-6 flex items-center gap-4" style={banner.style}>
+      {banner.icon}
+      <div className="flex-1">
+        <p className="text-lg font-semibold">{primary ?? banner.text}</p>
+        <p className="text-xs opacity-70 mt-0.5">{secondary}</p>
+      </div>
+      {stats && <div className="ni-health-stats flex items-center gap-6 text-right">{stats}</div>}
+    </div>
+  );
+}
+
+function IncidentLog({ incidents }: { incidents: Incident[] }) {
+  return (
+    <div className="mt-6 rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-4">
+      <p className="micro mb-3 flex items-center gap-2">
+        <Clock size={12} /> История доступности за последние 7 дней
+      </p>
+      {incidents.length === 0 ? (
+        <p className="text-xs text-[var(--t-faint)] py-3 text-center">Инцидентов не зафиксировано — все ноды были стабильны. ✓</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {incidents.slice(0, 50).map((it, i) => (
+            <li key={i} className="flex items-start gap-2.5 text-xs">
+              <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${it.ongoing ? "bg-[var(--err)] animate-pulse" : "bg-[var(--t-faint)]"}`} />
+              <span className="text-[var(--t-low)] tabular-nums shrink-0">{fmtWhen(it.start)}</span>
+              <span className="text-[var(--t-mid)]">
+                Нода <span className="text-[var(--t-hi)] font-medium">{it.name}</span>
+                {it.group && <span className="text-[var(--t-low)]"> ({it.group})</span>}
+                {it.ongoing
+                  ? <span className="text-[var(--err)]"> недоступна сейчас</span>
+                  : <> была недоступна в течение <span className="text-[var(--warn)]">{fmtDuration(it.durationSec)}</span></>}.
+                <span className="text-[var(--t-faint)]"> Причина: {it.reason}.</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// A collapsible country subgroup of node rows.
+function CountryGroup({ country, nodes, ticks, defaultOpen = true }: {
+  country: string; nodes: Node[]; ticks: number; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const flag = flagFor(country);
+  const anyDown = nodes.some(n => !n.online);
+  const label = country || "Прочее";
+  return (
+    <div className="rounded-xl border border-[var(--line-soft)] overflow-hidden">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-2.5 px-4 py-2.5 bg-[var(--bg2)] hover:bg-[var(--bg3)] transition-colors">
+        <span className="text-lg leading-none">{flag}</span>
+        <span className="text-sm font-medium text-[var(--t-hi)]">{label}</span>
+        <span className="text-[11px] text-[var(--t-faint)]">Нод: {nodes.length}</span>
+        {anyDown && <span className="w-1.5 h-1.5 rounded-full bg-[var(--err)]" />}
+        <ChevronDown size={14} className={`ml-auto text-[var(--t-faint)] transition-transform ${open ? "" : "-rotate-90"}`} />
+      </button>
+      {open && (
+        <div className="divide-y divide-[var(--line-soft)]">
+          {nodes.map(n => <NodeRow key={n.stableId} node={n} flag={flag} ticks={ticks} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Xray uptime tab (the original status page) ────────────────
+function XrayUptime() {
   const [data, setData]         = useState<StatusResp | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [ticks, setTicks]       = useState(30);
@@ -100,7 +207,6 @@ export function Dashboard() {
   const [checkerId, setCheckerId] = useState("local");
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Global checker-instance selector (Ф2): pick which instance the status page shows.
   useEffect(() => {
     fetch("/api/checker/instances").then(r => r.json())
       .then(d => setInstances(Array.isArray(d.instances) ? d.instances : []))
@@ -134,153 +240,343 @@ export function Dashboard() {
 
   const g = data?.global;
   const running = data?.container === "running";
-  // The checker can be `running` yet unreachable → backend returns `global: {}`
-  // (an incomplete object, not the declared full `Global`). Gate on `g.state`
-  // being present so an empty global degrades to "unknown" instead of indexing
-  // BANNER with undefined and crashing the whole tree.
   const state: GState = running && g?.state ? g.state : "unknown";
-  const banner = BANNER[state];
 
-  // Group nodes by country (groupName).
+  // Two-level grouping: subscription → country. subId maps to a subscription
+  // label; within a subscription, nodes are grouped by country (from the name).
+  const subGroups = useMemo(() => {
+    const subLabels = new Map((data?.subscriptions ?? []).map(s => [s.id, s.label]));
+    const bySub = new Map<string, Node[]>();
+    (data?.nodes ?? []).forEach(n => {
+      const key = n.subId || "";
+      (bySub.get(key) ?? bySub.set(key, []).get(key)!).push(n);
+    });
+    return Array.from(bySub.entries())
+      .map(([subId, nodes]) => {
+        const byCountry = new Map<string, Node[]>();
+        nodes.forEach(n => {
+          const c = n.groupName || "Прочее";
+          (byCountry.get(c) ?? byCountry.set(c, []).get(c)!).push(n);
+        });
+        return {
+          subId,
+          label: subLabels.get(subId) || (subId ? subId : "Без привязки к подписке"),
+          countries: Array.from(byCountry.entries()).sort((a, b) => a[0].localeCompare(b[0])),
+          count: nodes.length,
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [data]);
+
+  return (
+    <>
+      {/* Header row */}
+      <div className="ni-pagehead flex items-center justify-between mb-4">
+        <h1 className="text-base font-semibold text-[var(--t-hi)] flex items-center gap-2">
+          <Activity size={16} className="text-[var(--accent-hi)]" /> Статус нод сети
+        </h1>
+        <div className="ni-pagehead-actions flex items-center gap-2">
+          {instances.length > 1 && (
+            <select className="selectbox" value={checkerId}
+              onChange={e => { setLoading(true); setCheckerId(e.target.value); }}
+              title="Инстанс мониторинга">
+              {instances.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+          )}
+          <div className="flex rounded-md border border-[var(--line-soft)] overflow-hidden">
+            {[30, 60, 90].map(n => (
+              <button key={n} onClick={() => setTicks(n)}
+                className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  ticks === n ? "bg-[var(--bg3)] text-[var(--t-hi)]" : "text-[var(--t-low)] hover:text-[var(--t-mid)]"}`}>
+                {n}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => load(ticks)} className="iconbtn" title="Обновить">
+            <RefreshCw size={13} />
+          </button>
+          <button onClick={deepCheck} disabled={checking || !running} className="btn btn-primary">
+            {checking ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
+            Перепроверить все ноды
+          </button>
+        </div>
+      </div>
+
+      <SubscriptionSelector />
+
+      <HealthBanner
+        state={state}
+        secondary={running && g?.state
+          ? `${g.online} из ${g.total} узлов онлайн`
+          : loading ? "Загрузка…" : "Мониторинг не запущен — включите его в настройках мониторинга выше"}
+        stats={<>
+          <Stat label="Аптайм 30 дней" value={g?.uptime30d != null ? `${g.uptime30d}%` : "—"} />
+          <Stat label="Активных протоколов" value={g?.protocols ? String(g.protocols.length) : "—"}
+            sub={g?.protocols?.join(", ")} />
+        </>}
+      />
+
+      {/* Subscription → country groups */}
+      {subGroups.length === 0 ? (
+        <div className="rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-8 text-center text-[var(--t-faint)] text-sm">
+          {running ? "Нет нод в подписке." : "Мониторинг неактивен."}
+        </div>
+      ) : subGroups.map(sg => {
+        const isCollapsed = collapsed[sg.subId];
+        return (
+          <div key={sg.subId || "_none"} className="mb-5">
+            <button
+              onClick={() => setCollapsed(c => ({ ...c, [sg.subId]: !c[sg.subId] }))}
+              className="w-full flex items-center gap-2.5 mb-2 text-left">
+              <Radio size={14} className="text-[var(--accent-hi)]" />
+              <span className="text-sm font-semibold text-[var(--t-hi)] truncate">{sg.label}</span>
+              <span className="text-[11px] text-[var(--t-faint)]">Нод: {sg.count}</span>
+              <ChevronDown size={14} className={`ml-auto text-[var(--t-faint)] transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
+            </button>
+            {!isCollapsed && (
+              <div className="flex flex-col gap-3 pl-1">
+                {sg.countries.map(([country, nodes]) => (
+                  <CountryGroup key={country} country={country} nodes={nodes} ticks={ticks} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <IncidentLog incidents={incidents} />
+    </>
+  );
+}
+
+// ── Server uptime tab (by-IP availability monitor) ────────────
+interface SrvForm { name: string; country: string; ip: string; port: string; note: string }
+const SRV_EMPTY: SrvForm = { name: "", country: "", ip: "", port: "443", note: "" };
+
+function ServerUptime() {
+  const [data, setData]         = useState<StatusResp | null>(null);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [ticks, setTicks]       = useState(30);
+  const [loading, setLoading]   = useState(true);
+  const [modal, setModal]       = useState<{ editing?: Node } | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = useCallback(async (n: number) => {
+    try {
+      const [s, inc] = await Promise.all([
+        fetch(`/api/server-monitor/statuspage?ticks=${n}`).then(r => r.json()),
+        fetch(`/api/server-monitor/incidents?days=7`).then(r => r.json()).catch(() => ({ incidents: [] })),
+      ]);
+      setData(s);
+      setIncidents(Array.isArray(inc.incidents) ? inc.incidents : []);
+    } catch { /* keep last */ }
+    setLoading(false);
+  }, []);
+
+  // Auto-sync deployed nodes from the browser's deploy_jobs on mount.
+  useEffect(() => {
+    try {
+      const accId = (localStorage.getItem("ni_active_account") || "").replace(/^"|"$/g, "");
+      const raw = localStorage.getItem(`deploy_jobs_${accId}`);
+      const jobs = raw ? JSON.parse(raw) : [];
+      const deployed = (Array.isArray(jobs) ? jobs : [])
+        .filter((j: any) => j?.savedForm?.mode === "remnanode" && j?.savedForm?.ip)
+        .map((j: any) => ({
+          name: j.savedForm.domain || j.savedForm.ip,
+          country: (j.savedForm.country_code || "").toUpperCase(),
+          ip: j.savedForm.ip,
+          port: 443,
+        }));
+      if (deployed.length)
+        fetch("/api/server-monitor/servers/sync-deployed", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(deployed),
+        }).catch(() => {});
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    load(ticks);
+    timer.current = setInterval(() => load(ticks), 10_000);
+    return () => { if (timer.current) clearInterval(timer.current); };
+  }, [load, ticks]);
+
+  const g = data?.global;
+  const state: GState = g?.state ?? "unknown";
+
+  const removeServer = async (id: string) => {
+    await fetch(`/api/server-monitor/servers/${id}`, { method: "DELETE" }).catch(() => {});
+    load(ticks);
+  };
+
+  // Group by country.
   const groups = useMemo(() => {
     const map = new Map<string, Node[]>();
     (data?.nodes ?? []).forEach(n => {
-      const key = n.groupName || "Прочее";
+      const key = n.country || n.groupName || "Прочее";
       (map.get(key) ?? map.set(key, []).get(key)!).push(n);
     });
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [data]);
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="ni-pagebody max-w-5xl mx-auto px-6 py-6">
-
-        {/* Header row */}
-        <div className="ni-pagehead flex items-center justify-between mb-4">
-          <h1 className="text-base font-semibold text-[var(--t-hi)] flex items-center gap-2">
-            <Activity size={16} className="text-[var(--accent-hi)]" /> Статус нод сети
-          </h1>
-          <div className="ni-pagehead-actions flex items-center gap-2">
-            {instances.length > 1 && (
-              <select className="selectbox" value={checkerId}
-                onChange={e => { setLoading(true); setCheckerId(e.target.value); }}
-                title="Инстанс мониторинга">
-                {instances.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-              </select>
-            )}
-            <div className="flex rounded-md border border-[var(--line-soft)] overflow-hidden">
-              {[30, 60, 90].map(n => (
-                <button key={n} onClick={() => setTicks(n)}
-                  className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    ticks === n ? "bg-[var(--bg3)] text-[var(--t-hi)]" : "text-[var(--t-low)] hover:text-[var(--t-mid)]"}`}>
-                  {n}
-                </button>
-              ))}
-            </div>
-            <button onClick={() => load(ticks)} className="iconbtn" title="Обновить">
-              <RefreshCw size={13} />
-            </button>
-            <button onClick={deepCheck} disabled={checking || !running} className="btn btn-primary">
-              {checking ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
-              Перепроверить все ноды
-            </button>
-          </div>
-        </div>
-
-        {/* Tracked subscriptions (multi-subscription aggregation, Ф9) */}
-        <SubscriptionSelector />
-
-        {/* Global health banner */}
-        <div className="ni-health rounded-xl border p-5 mb-6 flex items-center gap-4" style={banner.style}>
-          {banner.icon}
-          <div className="flex-1">
-            <p className="text-lg font-semibold">{banner.text}</p>
-            <p className="text-xs opacity-70 mt-0.5">
-              {running && g?.state
-                ? `${g.online} из ${g.total} узлов онлайн`
-                : loading ? "Загрузка…" : "Мониторинг не запущен — включите его в настройках мониторинга выше"}
-            </p>
-          </div>
-          <div className="ni-health-stats flex items-center gap-6 text-right">
-            <Stat label="Аптайм 30 дней" value={g?.uptime30d != null ? `${g.uptime30d}%` : "—"} />
-            <Stat label="Активных протоколов" value={g?.protocols ? String(g.protocols.length) : "—"}
-              sub={g?.protocols?.join(", ")} />
-          </div>
-        </div>
-
-        {/* Node groups */}
-        {groups.length === 0 ? (
-          <div className="rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-8 text-center text-[var(--t-faint)] text-sm">
-            {running ? "Нет нод в подписке." : "Мониторинг неактивен."}
-          </div>
-        ) : groups.map(([country, nodes]) => {
-          const isCollapsed = collapsed[country];
-          const flag = flagFor(country);
-          const anyDown = nodes.some(n => !n.online);
-          return (
-            <div key={country} className="mb-4 rounded-xl border border-[var(--line-soft)] overflow-hidden">
-              <button
-                onClick={() => setCollapsed(c => ({ ...c, [country]: !c[country] }))}
-                className="w-full flex items-center gap-2.5 px-4 py-2.5 bg-[var(--bg2)] hover:bg-[var(--bg3)] transition-colors">
-                <span className="text-lg leading-none">{flag}</span>
-                <span className="text-sm font-medium text-[var(--t-hi)]">{country}</span>
-                <span className="text-[11px] text-[var(--t-faint)]">Нод: {nodes.length}</span>
-                {anyDown && <span className="w-1.5 h-1.5 rounded-full bg-[var(--err)]" />}
-                <ChevronDown size={14} className={`ml-auto text-[var(--t-faint)] transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
+    <>
+      <div className="ni-pagehead flex items-center justify-between mb-4">
+        <h1 className="text-base font-semibold text-[var(--t-hi)] flex items-center gap-2">
+          <Server size={16} className="text-[var(--accent-hi)]" /> Доступность серверов
+        </h1>
+        <div className="ni-pagehead-actions flex items-center gap-2">
+          <div className="flex rounded-md border border-[var(--line-soft)] overflow-hidden">
+            {[30, 60, 90].map(n => (
+              <button key={n} onClick={() => setTicks(n)}
+                className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  ticks === n ? "bg-[var(--bg3)] text-[var(--t-hi)]" : "text-[var(--t-low)] hover:text-[var(--t-mid)]"}`}>
+                {n}
               </button>
-              {!isCollapsed && (
-                <div className="divide-y divide-[var(--line-soft)]">
-                  {nodes.map(n => <NodeRow key={n.stableId} node={n} flag={flag} ticks={ticks} />)}
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {/* Incident history */}
-        <div className="mt-6 rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-4">
-          <p className="micro mb-3 flex items-center gap-2">
-            <Clock size={12} /> История доступности за последние 7 дней
-          </p>
-          {incidents.length === 0 ? (
-            <p className="text-xs text-[var(--t-faint)] py-3 text-center">Инцидентов не зафиксировано — все ноды были стабильны. ✓</p>
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {incidents.slice(0, 50).map((it, i) => (
-                <li key={i} className="flex items-start gap-2.5 text-xs">
-                  <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${it.ongoing ? "bg-[var(--err)] animate-pulse" : "bg-[var(--t-faint)]"}`} />
-                  <span className="text-[var(--t-low)] tabular-nums shrink-0">{fmtWhen(it.start)}</span>
-                  <span className="text-[var(--t-mid)]">
-                    Нода <span className="text-[var(--t-hi)] font-medium">{it.name}</span>
-                    {it.group && <span className="text-[var(--t-low)]"> ({it.group})</span>}
-                    {it.ongoing
-                      ? <span className="text-[var(--err)]"> недоступна сейчас</span>
-                      : <> была недоступна в течение <span className="text-[var(--warn)]">{fmtDuration(it.durationSec)}</span></>}.
-                    <span className="text-[var(--t-faint)]"> Причина: {it.reason}.</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+            ))}
+          </div>
+          <button onClick={() => load(ticks)} className="iconbtn" title="Обновить">
+            <RefreshCw size={13} />
+          </button>
+          <button onClick={() => setModal({})} className="btn btn-primary">
+            <Plus size={13} /> Добавить сервер
+          </button>
         </div>
+      </div>
 
+      <HealthBanner
+        state={state}
+        secondary={g?.state
+          ? `${g.online} из ${g.total} серверов онлайн`
+          : loading ? "Загрузка…" : "Серверы не добавлены — добавьте вручную или задеплойте ноду"}
+        stats={<Stat label="Аптайм 30 дней" value={g?.uptime30d != null ? `${g.uptime30d}%` : "—"} />}
+      />
+
+      {groups.length === 0 ? (
+        <div className="rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-8 text-center text-[var(--t-faint)] text-sm">
+          Нет отслеживаемых серверов. Нажмите «Добавить сервер» или задеплойте ноду.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {groups.map(([country, nodes]) => {
+            const flag = flagFor(country);
+            return (
+              <div key={country} className="rounded-xl border border-[var(--line-soft)] overflow-hidden">
+                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-[var(--bg2)]">
+                  <span className="text-lg leading-none">{flag}</span>
+                  <span className="text-sm font-medium text-[var(--t-hi)]">{country || "Прочее"}</span>
+                  <span className="text-[11px] text-[var(--t-faint)]">Серверов: {nodes.length}</span>
+                </div>
+                <div className="divide-y divide-[var(--line-soft)]">
+                  {nodes.map(n => (
+                    <NodeRow key={n.stableId} node={n} flag={flag} ticks={ticks}
+                      trailing={n.source === "manual" ? (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button className="iconbtn" title="Редактировать"
+                            onClick={() => setModal({ editing: n })}><Pencil size={13} /></button>
+                          <button className="iconbtn danger" title="Удалить"
+                            onClick={() => { if (confirm("Удалить сервер?")) removeServer(n.stableId); }}>
+                            <Trash2 size={13} /></button>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-[var(--t-faint)] shrink-0" title="Из деплоя">авто</span>
+                      )} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <IncidentLog incidents={incidents} />
+
+      {modal !== null && (
+        <ServerModal
+          initial={modal.editing}
+          onClose={() => setModal(null)}
+          onSaved={() => { setModal(null); load(ticks); }}
+        />
+      )}
+    </>
+  );
+}
+
+function ServerModal({ initial, onClose, onSaved }: {
+  initial?: Node; onClose: () => void; onSaved: () => void;
+}) {
+  const [form, setForm] = useState<SrvForm>(initial ? {
+    name: initial.name || "", country: initial.country || "", ip: initial.ip || "",
+    port: String(initial.port ?? 443), note: initial.note || "",
+  } : SRV_EMPTY);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const set = (k: keyof SrvForm, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  const save = async () => {
+    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(form.ip.trim())) { setErr("Некорректный IPv4-адрес"); return; }
+    setSaving(true); setErr(null);
+    const body = {
+      name: form.name, country: form.country, ip: form.ip.trim(),
+      port: Number(form.port) || 443, note: form.note,
+    };
+    try {
+      const res = initial
+        ? await fetch(`/api/server-monitor/servers/${initial.stableId}`, {
+            method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+        : await fetch("/api/server-monitor/servers", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) { setErr("Ошибка сохранения"); setSaving(false); return; }
+      onSaved();
+    } catch { setErr("Ошибка сети"); setSaving(false); }
+  };
+
+  return (
+    <div className="overlay" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal max-w-md">
+        <div className="shrink-0 flex items-center justify-between px-5 py-3.5" style={{ borderBottom: "1px solid var(--line-soft)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--t-hi)" }}>
+            {initial ? "Редактировать сервер" : "Новый сервер"}
+          </h2>
+          <button onClick={onClose} className="iconbtn"><X size={15} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
+          <Fld label="Название"><input className="input" value={form.name}
+            onChange={e => set("name", e.target.value)} placeholder="Мой сервер" /></Fld>
+          <Fld label="Страна (ISO, напр. DE)"><input className="input" value={form.country}
+            onChange={e => set("country", e.target.value.toUpperCase().slice(0, 2))} placeholder="DE" /></Fld>
+          <Fld label="IP-адрес"><input className="input font-mono" value={form.ip}
+            onChange={e => set("ip", e.target.value)} placeholder="1.2.3.4" /></Fld>
+          <Fld label="Порт (для TCP-проверки)"><input className="input" value={form.port}
+            onChange={e => set("port", e.target.value.replace(/\D/g, ""))} placeholder="443" /></Fld>
+          <Fld label="Примечание"><input className="input" value={form.note}
+            onChange={e => set("note", e.target.value)} placeholder="—" /></Fld>
+          {err && <p className="errmsg">{err}</p>}
+        </div>
+        <div className="shrink-0 flex justify-end gap-2 px-5 py-3.5" style={{ borderTop: "1px solid var(--line-soft)" }}>
+          <button onClick={onClose} className="btn btn-ghost">Отмена</button>
+          <button onClick={save} disabled={saving || !form.ip.trim()} className="btn btn-primary">
+            {saving ? <><Loader2 size={13} className="animate-spin" /> Сохранение…</> : <><Save size={13} /> Сохранить</>}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-// CheckerControls moved to components/monitoring/CheckerControls.tsx (Ф2).
+function Fld({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="label">{label}</label>
+      {children}
+    </div>
+  );
+}
 
 // ── Tracked subscriptions (multi-subscription selector, Ф9) ───────────────
-// Manages the account's subscription set fed into the shared subs-aggregator.
-
 interface SubStatus {
-  id: string;
-  url: string;
-  background: boolean;
-  enabled: boolean;
-  last_error: string | null;
-  config_count: number | null;
+  id: string; url: string; background: boolean; enabled: boolean;
+  last_error: string | null; config_count: number | null;
 }
 
 function SubscriptionSelector() {
@@ -408,7 +704,9 @@ function SubscriptionSelector() {
 }
 
 // ── Node row (compact status strip) ───────────────────────────
-function NodeRow({ node, flag, ticks }: { node: Node; flag: string; ticks: number }) {
+function NodeRow({ node, flag, ticks, trailing }: {
+  node: Node; flag: string; ticks: number; trailing?: React.ReactNode;
+}) {
   // Right-align bars: pad the left with "no-data" slots.
   const pad = Math.max(0, ticks - node.bars.length);
   return (
@@ -446,6 +744,8 @@ function NodeRow({ node, flag, ticks }: { node: Node; flag: string; ticks: numbe
         title="Аптайм за 30 дней">
         {node.uptime30d != null ? `${node.uptime30d}%` : "—"}
       </div>
+
+      {trailing}
     </div>
   );
 }

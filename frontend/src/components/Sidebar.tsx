@@ -3,27 +3,30 @@ import {
   PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
-  Workflow, Bell,
+  Workflow, Bell, Bot, Map as MapIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
   | "stats-users" | "stats-speedtests"
-  | "automation" | "notifications"
+  | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
+  | "hostings-map" | "hostings-list"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
 interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon }
 
 const NAV_MAIN: NavItemDef[] = [
-  { tab: "dashboard", label: "Дешборд",      Icon: Activity  },
-  { tab: "deploy",    label: "Деплой ноды",  Icon: Rocket    },
-  { tab: "certs",     label: "Управление SSL", Icon: ShieldCheck },
-  { tab: "templates", label: "Шаблоны",      Icon: FileCode2 },
-  { tab: "hosts",     label: "Хосты",        Icon: Network   },
-  { tab: "traffic",   label: "Трафик",       Icon: Gauge     },
+  { tab: "dashboard",  label: "Дешборд",       Icon: Activity  },
+  { tab: "deploy",     label: "Деплой ноды",   Icon: Rocket    },
+  { tab: "certs",      label: "Управление SSL", Icon: ShieldCheck },
+  { tab: "templates",  label: "Шаблоны",       Icon: FileCode2 },
+  // Профили — сразу после «Шаблонов» (10a); раздел независим от шаблонов.
+  { tab: "rw-profiles", label: "Профили",      Icon: UserCog   },
+  { tab: "hosts",      label: "Хосты",         Icon: Network   },
+  { tab: "traffic",    label: "Трафик",        Icon: Gauge     },
 ];
 
 const STATS_TABS: NavItemDef[] = [
@@ -32,7 +35,9 @@ const STATS_TABS: NavItemDef[] = [
 ];
 
 const AUTOMATION_TABS: NavItemDef[] = [
-  { tab: "automation", label: "Правила", Icon: Workflow },
+  { tab: "automation", label: "Правила",   Icon: Workflow },
+  // ИИ-чат вынесен из Настроек в отдельный раздел сразу после «Правил» (11a).
+  { tab: "assistant",  label: "Ассистент", Icon: Bot      },
 ];
 
 const RW_TABS: NavItemDef[] = [
@@ -41,7 +46,11 @@ const RW_TABS: NavItemDef[] = [
   { tab: "rw-variables", label: "Переменные",           Icon: SlidersHorizontal },
   { tab: "rw-backup",    label: "Резервное копирование", Icon: DatabaseBackup },
   { tab: "rw-migration", label: "Миграция",             Icon: ArrowLeftRight },
-  { tab: "rw-profiles",  label: "Профили",              Icon: UserCog        },
+];
+
+const HOSTINGS_TABS: NavItemDef[] = [
+  { tab: "hostings-map",  label: "Карта",    Icon: MapIcon },
+  { tab: "hostings-list", label: "Хостинги", Icon: Server  },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
@@ -118,6 +127,10 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Remnawave</p>
         {RW_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
+
+        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Хостинги</p>
+        {HOSTINGS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Инфра-биллинг</p>

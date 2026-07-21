@@ -1,5 +1,7 @@
 import uuid as _uuid
+from typing import Optional
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from app.services import storage
 from app.models.settings import (
     AppSettings,
@@ -70,13 +72,27 @@ async def save_xray_checker(body: XrayCheckerConfig):
     return {"ok": True}
 
 
+class RemnawaveCheckBody(BaseModel):
+    # Values typed into the form (unsaved). When present they're tested directly,
+    # so «Проверить соединение» validates what the operator entered — not the
+    # last-saved settings. Empty → fall back to the stored config.
+    panel_url: Optional[str] = None
+    api_token: Optional[str] = None
+
+
 @router.post("/settings/remnawave/check")
-async def check_remnawave():
-    raw = storage.load_settings()
-    cfg = AppSettings(**raw).remnawave
-    if not cfg.panel_url or not cfg.api_token:
+async def check_remnawave(body: Optional[RemnawaveCheckBody] = None):
+    panel_url = (body.panel_url if body else None) or ""
+    api_token = (body.api_token if body else None) or ""
+    if not panel_url.strip() or not api_token.strip():
+        cfg = AppSettings(**storage.load_settings()).remnawave
+        panel_url = panel_url.strip() or cfg.panel_url
+        api_token = api_token.strip() or cfg.api_token
+    else:
+        panel_url, api_token = panel_url.strip(), api_token.strip()
+    if not panel_url or not api_token:
         raise HTTPException(400, "Remnawave не настроен (нет URL или токена)")
-    client = RemnavaveClient(cfg.panel_url, cfg.api_token)
+    client = RemnavaveClient(panel_url, api_token)
     try:
         info = await client.check_connection()
         return {"ok": True, "detail": info}

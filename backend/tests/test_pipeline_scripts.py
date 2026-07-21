@@ -39,6 +39,26 @@ def test_every_step_index_is_begun_and_in_range():
     )
 
 
+def test_docker_mirror_script():
+    # E1 (Plan B): idempotent registry-mirror merge into daemon.json.
+    s = pipeline._docker_mirror_script()
+    assert "registry-mirrors" in s
+    assert "mirror.gcr.io" in s and "dockerhub.timeweb.cloud" in s
+    assert "/etc/docker/daemon.json" in s
+    assert "systemctl restart docker" in s
+
+
+def test_vanilla_compose():
+    # Plan B 2b: official remnawave/node only — no nginx/masking/cert volume.
+    c = pipeline._render_vanilla_compose(2222, "SECRET.tok")
+    assert "remnawave/node:latest" in c
+    assert "NODE_PORT=2222" in c
+    assert "SECRET_KEY=SECRET.tok" in c
+    assert "network_mode: host" in c
+    assert "remnawave-nginx" not in c        # no masking front
+    assert "/etc/letsencrypt" not in c        # no local cert bridge
+
+
 def test_step_labels_count_and_key_renames():
     assert len(STEP_LABELS) == 14
     assert STEP_LABELS[4] == "Тест-инструменты"         # step 5 (Ф2 wave1, in «Оптимизация ОС»)

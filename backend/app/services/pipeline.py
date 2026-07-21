@@ -571,6 +571,37 @@ echo "[firewall] доп. правила применены (whitelist={len(white
 """
 
 
+def _docker_mirror_script() -> str:
+    """Write Docker registry-mirrors into /etc/docker/daemon.json (idempotent
+    merge) so later image pulls go through mirrors — E1 (Plan B), helps RU /
+    rate-limited hosts. Docker reads daemon.json on (re)start, so this is safe
+    even before Docker is installed. No secrets → run_script (logged) is fine."""
+    mirrors = '["https://mirror.gcr.io", "https://dockerhub.timeweb.cloud"]'
+    return f"""\
+set -e
+mkdir -p /etc/docker
+python3 - <<'PYEOF' || true
+import json, os
+p = "/etc/docker/daemon.json"
+d = {{}}
+if os.path.exists(p):
+    try:
+        with open(p) as f: d = json.load(f)
+    except Exception:
+        d = {{}}
+if not isinstance(d, dict): d = {{}}
+ms = d.get("registry-mirrors") or []
+for m in {mirrors}:
+    if m not in ms: ms.append(m)
+d["registry-mirrors"] = ms
+with open(p, "w") as f: json.dump(d, f, indent=2)
+print("[docker-mirror] daemon.json обновлён:", ms)
+PYEOF
+systemctl restart docker 2>/dev/null || true
+echo "[docker-mirror] registry-mirror применён."
+"""
+
+
 async def step_system_optimize(
     ssh: SSHSession, task: Task, backend_ip: str, req: "DeployRequest"
 ) -> None:
@@ -1163,6 +1194,83 @@ def _render_remnanode_files(
     return compose, nginx_conf
 
 
+# Vanilla node compose (Plan B 2b): the OFFICIAL remnawave/node only — no nginx /
+# masking / local SSL. The node receives its Xray config (incl. TLS) from the
+# panel over the SECRET_KEY channel, so no domain/cert is needed on the box.
+_VANILLA_COMPOSE_TPL = """\
+services:
+  remnanode:
+    image: remnawave/node:latest
+    container_name: remnanode
+    hostname: remnanode
+    restart: always
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - NODE_PORT=$nodeport
+      - SECRET_KEY=$token
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: 5
+    volumes:
+      - /dev/shm:/dev/shm:rw
+"""
+
+
+def _render_vanilla_compose(node_port: int, token: str) -> str:
+    compose = _VANILLA_COMPOSE_TPL
+    for key, val in (("$nodeport", str(node_port)), ("$token", token)):
+        compose = compose.replace(key, val)
+    return compose
+
+
+async def step_remnanode_vanilla(
+    ssh: SSHSession, task: Task, remnanode_token: str, *, node_port: int = 2222,
+) -> None:
+    """Official remnawave/node install (Plan B 2b) — no local domain/SSL/masking.
+    Mirrors step_remnanode's flow (ensure Docker → write compose → up), minus the
+    nginx front, masking site and per-FQDN cert bridge."""
+    _begin_step(task, 11)
+    compose = _render_vanilla_compose(node_port, remnanode_token)
+    task.add_log(
+        f"\x1b[90m[remnanode/vanilla] node_port={node_port} — официальный "
+        f"remnawave/node без nginx/маскировки (SSL от панели).\x1b[0m"
+    )
+
+    docker_setup = f"""\
+{_APT_WAIT}
+if ! command -v docker &>/dev/null; then
+    curl -fsSL https://get.docker.com | sh
+    systemctl enable docker
+    systemctl start docker
+fi
+docker --version
+"""
+    await ssh.run_script(docker_setup, task, timeout=180)
+
+    write_script = (
+        _APT_WAIT
+        + "mkdir -p /opt/remnanode\n"
+        + "cat > /opt/remnanode/docker-compose.yml << 'COMPOSE_EOF'\n"
+        + compose
+        + "COMPOSE_EOF\n"
+        + 'echo "[remnanode/vanilla] docker-compose.yml записан в /opt/remnanode"\n'
+    )
+    await ssh.run_script(write_script, task)
+
+    deploy_script = """\
+cd /opt/remnanode
+docker compose down 2>/dev/null || docker-compose down 2>/dev/null || true
+docker compose up -d 2>&1 || docker-compose up -d 2>&1
+echo "[remnanode/vanilla] running containers:"
+docker ps --filter "name=remnanode" --format "table {{.Names}}\\t{{.Status}}"
+"""
+    await ssh.run_script(deploy_script, task, timeout=300)
+
+
 async def step_remnanode(
     ssh: SSHSession,
     task: Task,
@@ -1612,6 +1720,26 @@ fi
 # Ф6 — Auto-create Remnawave hosts from local host-templates
 # ──────────────────────────────────────────────────────────────
 
+def _subst_host_vars(text, req: "DeployRequest"):
+    """Substitute deploy variables into a host-template STRING field (Plan C 5a).
+    Supported: $domain (node FQDN), $xhttp_path (from the deploy form), $name (the
+    node's subdomain label). These go into a JSON API body (POST /api/hosts), NOT
+    bash — so no shell-escaping. Non-strings pass through unchanged."""
+    if not isinstance(text, str):
+        return text
+    name = (req.domain or "").split(".")[0]
+    return (
+        text
+        .replace("$xhttp_path", (req.xhttp_path or "").strip())
+        .replace("$domain", req.domain or "")
+        .replace("$name", name)
+    )
+
+
+# Host-template string fields into which deploy variables are substituted.
+_HOST_VAR_FIELDS = ("sni", "host", "path", "remark", "server_description")
+
+
 def _map_host_optional(tpl: dict) -> dict:
     """Map a local HostTemplateBody dict (accounts/<id>/hosts.json) → the OPTIONAL
     CreateHostRequestDto fields (Remnawave camelCase). Only non-empty / enabled
@@ -1731,6 +1859,12 @@ async def step_create_hosts(
                 f"пропуск (POST /api/hosts требует inbound).\x1b[0m"
             )
             continue
+        # Substitute deploy variables ($domain/$xhttp_path/$name) into the host
+        # template's string fields (Plan C 5a) before mapping to the API body.
+        tpl = {
+            k: (_subst_host_vars(v, req) if k in _HOST_VAR_FIELDS else v)
+            for k, v in tpl.items()
+        }
         # Remnawave's host `remark` maxLength is 40 (local allows 200) — truncate
         # or the whole create 400s (silently, since failures are caught below).
         remark = f"{tpl.get('remark') or 'host'} · {suffix}"[:40]
@@ -1809,6 +1943,7 @@ async def step_remnawave_pre_deploy(
 
     config_str = (
         tpl["config"]
+        .replace("$xhttp_path", (req.xhttp_path or "").strip())
         .replace("$domain",  domain)
         .replace("$name",    name)
         .replace("$privkey", privkey)
@@ -1861,6 +1996,24 @@ async def step_remnawave_pre_deploy(
     # squads. Without this the node exists but squad users can't reach it.
     # Form selection takes priority; fall back to settings defaults.
     int_squads = list(req.internal_squad_ids) or list(cfg.default_internal_squad_ids)
+    if not int_squads:
+        # 5a: the internal/external squad selector was removed from the deploy
+        # form — auto-resolve to ALL internal squads so the new node's inbounds
+        # stay reachable (previously an empty selection left the node unlinked).
+        try:
+            all_squads = await client.list_internal_squads()
+            int_squads = [s.get("uuid") for s in all_squads
+                          if isinstance(s, dict) and s.get("uuid")]
+            if int_squads:
+                task.add_log(
+                    f"\x1b[90m[Remnawave] Сквады не заданы — авто-привязка ко всем "
+                    f"внутренним сквадам ({len(int_squads)}).\x1b[0m"
+                )
+        except Exception as exc:
+            task.add_log(
+                f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Не удалось получить список сквадов для "
+                f"авто-привязки: {exc}\x1b[0m"
+            )
     if int_squads and active_inbounds:
         for sq_id in int_squads:
             try:
@@ -2046,6 +2199,13 @@ echo "[update] Индекс пакетов обновлён."
 """
             await ssh.run_script(refresh_script, task, timeout=120)
 
+        # ── Docker registry-mirror (E1, Plan B) ────
+        # Writes /etc/docker/daemon.json so later `docker compose up` pulls via
+        # mirrors (helps RU / rate-limited hosts). Safe before Docker is installed.
+        if getattr(req, "docker_mirror", False):
+            task.add_log("\x1b[36m[docker-mirror] Прописываю registry-mirror в daemon.json...\x1b[0m")
+            await ssh.run_script(_docker_mirror_script(), task, timeout=120)
+
         # ── Base utility: vnstat (network traffic monitor) ────
         # Starts collecting per-interface stats immediately; the deploy cards
         # read `vnstat --json` for the traffic block. Gated on install_vnstat —
@@ -2101,8 +2261,13 @@ echo "[vnstat] Демон vnstat установлен и запущен."
             else:
                 await step_haproxy_deploy(ssh, task, req)
         else:
-            if "ssl" in skip:
+            # Vanilla variant (Plan B 2b): official remnawave/node without a local
+            # domain / SSL / masking — skip steps 10 and 12, use the vanilla install.
+            is_vanilla = getattr(req, "node_variant", "egames") == "vanilla"
+            if "ssl" in skip or is_vanilla:
                 _skip_component(task, 10, "SSL")
+                if is_vanilla and "ssl" not in skip:
+                    task.add_log("\x1b[90m[skip] Vanilla: локальный SSL не ставится (сертификат от панели).\x1b[0m")
             else:
                 await step_ssl(ssh, task, req.domain, req.email, req.cloudflare_api_key,
                                req.ip, req.cert_provider)
@@ -2124,17 +2289,24 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                         "Токен Remnanode не указан и не получен из панели. "
                         "Укажите токен вручную или включите «Зарегистрировать в Remnawave»."
                     )
-                await step_remnanode(
-                    ssh, task, remnanode_token, req.domain,
-                    node_port=req.remnanode_port,
-                    xhttp_path=req.xhttp_path,
-                )
+                if is_vanilla:
+                    await step_remnanode_vanilla(
+                        ssh, task, remnanode_token, node_port=req.remnanode_port,
+                    )
+                else:
+                    await step_remnanode(
+                        ssh, task, remnanode_token, req.domain,
+                        node_port=req.remnanode_port,
+                        xhttp_path=req.xhttp_path,
+                    )
 
             # ── Step 12: uniquize the masking decoy site — runs BEFORE WARP ──
             # (masking mutates /var/www/html and must not be affected by WARP's
             # routing changes; ordering: Remnanode → Masking → WARP → Hysteria2).
-            if "masking" in skip:
+            if "masking" in skip or is_vanilla:
                 _skip_component(task, 12, "masking")
+                if is_vanilla and "masking" not in skip:
+                    task.add_log("\x1b[90m[skip] Vanilla: маскировочный сайт не ставится.\x1b[0m")
             else:
                 await step_sni_masking(ssh, task)
 
@@ -2154,8 +2326,11 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                 task.add_log("\x1b[90m[skip] WARP не выбран.\x1b[0m")
 
             # ── Step 14: Hysteria2 (Certbot standalone SSL — label only renamed) ──
-            if "hysteria2" in skip:
+            # Gated on install_hysteria2 (Plan B 2a); skip_components still wins.
+            if "hysteria2" in skip or not req.install_hysteria2:
                 _skip_component(task, 14, "hysteria2")
+                if not req.install_hysteria2 and "hysteria2" not in skip:
+                    task.add_log("\x1b[90m[skip] Hysteria2 не выбран.\x1b[0m")
             else:
                 await step_certbot_ssl(ssh, task, req.domain, req.email)
 

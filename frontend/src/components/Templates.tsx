@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Plus, Pencil, Trash2, CheckCircle2, Star, X, Save, Loader2 } from "lucide-react";
 import { MultiSelect, type SelectOption } from "./MultiSelect";
+import { JsonEditor } from "./profiles/JsonEditor";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -101,17 +102,15 @@ function TemplateModal({
               </label>
               <span className="text-[11px]" style={{ color: "var(--t-faint)" }}>
                 переменные: <code>$domain</code>,{" "}
-                <code>$name</code>
+                <code>$xhttp_path</code>, <code>$name</code>
               </span>
             </div>
-            <textarea
-              value={config}
-              onChange={e => handleConfig(e.target.value)}
-              rows={16}
-              spellCheck={false}
-              placeholder='{"inbounds": [...]}'
-              className={`input font-mono text-xs resize-y ${jsonError ? "err" : ""}`}
-            />
+            {/* CodeMirror editor with syntax highlighting + error underlining (4a),
+                reused from the profile editor. Fixed-height container (JsonEditor
+                fills 100%). handleConfig keeps the JSON.parse save-gating. */}
+            <div style={{ height: 340 }}>
+              <JsonEditor value={config} onChange={handleConfig} />
+            </div>
             {jsonError && (
               <p className="errmsg">{jsonError}</p>
             )}
@@ -300,7 +299,7 @@ export function Templates() {
           <div>
             <h1 className="text-base font-semibold" style={{ color: "var(--t-hi)" }}>Шаблоны конфигурации</h1>
             <p className="text-xs mt-0.5" style={{ color: "var(--t-low)" }}>
-              Xray JSON с переменными <code>$domain</code> и{" "}
+              Xray JSON с переменными <code>$domain</code>, <code>$xhttp_path</code>,{" "}
               <code>$name</code>
             </p>
           </div>

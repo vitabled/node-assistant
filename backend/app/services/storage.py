@@ -104,3 +104,21 @@ def load_testservers(account_id: Optional[str] = None) -> list:
 
 def save_testservers(servers: list, account_id: Optional[str] = None) -> None:
     _write(_dir(account_id) / "testservers.json", {"testservers": servers})
+
+
+def load_certwarden(account_id: Optional[str] = None) -> dict:
+    """Single Certwarden-server registry object per account (or {} if none)."""
+    return _read(_dir(account_id) / "certwarden.json")
+
+
+def save_certwarden(data: dict, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "certwarden.json", data)
+
+
+def load_netbird(account_id: Optional[str] = None) -> dict:
+    """Single Netbird control-plane registry object per account (or {} if none)."""
+    return _read(_dir(account_id) / "netbird.json")
+
+
+def save_netbird(data: dict, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "netbird.json", data)

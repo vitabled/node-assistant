@@ -34,6 +34,17 @@ class DeployRequest(BaseModel):
     country_code: str = Field(default="XX", max_length=2)
     behind_cdn: bool = Field(default=False)
     install_warp: bool = Field(default=False)
+    # Node install variant (remnanode mode): "egames" = the full node-assistant
+    # stack (default, current behaviour); "vanilla" = official remnawave/node
+    # install WITHOUT a local domain / SSL / masking site (Plan B 2b).
+    node_variant: Literal["egames", "vanilla"] = Field(default="egames")
+    # Hysteria2 is the label of the Certbot-standalone SSL step (14); this toggle
+    # gates it (default True keeps the previous always-on behaviour) (Plan B 2a).
+    install_hysteria2: bool = Field(default=True)
+    # eGames-doc borrowings (Plan B): docker registry-mirror (E1, all deploys),
+    # nginx cookie-gate to hide the host from scanners (E4, eGames node install only).
+    docker_mirror: bool = Field(default=False)
+    cookie_gate: bool = Field(default=False)
     update_system: bool = Field(default=False)
     install_vnstat: bool = Field(default=True)
     install_trafficguard: bool = Field(default=True)
@@ -78,15 +89,22 @@ class DeployRequest(BaseModel):
     @model_validator(mode="after")
     def validate_by_mode(self) -> "DeployRequest":
         if self.mode == "remnanode":
-            # Domain/email/Cloudflare are needed for DNS + SSL in remnanode mode.
-            if not self.domain:
-                raise ValueError("domain is required in remnanode mode")
-            # Cloudflare token is only needed for the cloudflare (DNS-01) issuer;
-            # letsencrypt/zerossl use HTTP-01 / email-EAB and don't take a token.
-            if self.cert_provider == "cloudflare" and not self.cloudflare_api_key:
-                raise ValueError("cloudflare_api_key is required for the cloudflare cert provider")
-            if not self.email:
-                raise ValueError("email is required in remnanode mode")
+            is_vanilla = self.node_variant == "vanilla"
+            if not is_vanilla:
+                # eGames variant: domain/email/Cloudflare needed for DNS + SSL.
+                if not self.domain:
+                    raise ValueError("domain is required in remnanode mode")
+                # Cloudflare token is only needed for the cloudflare (DNS-01) issuer;
+                # letsencrypt/zerossl use HTTP-01 / email-EAB and don't take a token.
+                if self.cert_provider == "cloudflare" and not self.cloudflare_api_key:
+                    raise ValueError("cloudflare_api_key is required for the cloudflare cert provider")
+                if not self.email:
+                    raise ValueError("email is required in remnanode mode")
+            else:
+                # Vanilla: no local domain/SSL/masking. But Hysteria2 (Certbot
+                # standalone, step 14) needs a domain if it's enabled.
+                if self.install_hysteria2 and not self.domain:
+                    raise ValueError("domain is required for Hysteria2 in vanilla mode")
             if not self.create_in_remnawave and not self.remnanode_token:
                 raise ValueError(
                     "remnanode_token is required when create_in_remnawave is False"

@@ -47,7 +47,7 @@ class XrayCheckerConfig(BaseModel):
     supervises. `subscription_url` is the Remnawave subscription the checker
     probes; the rest map 1:1 to the checker's env vars."""
 
-    enabled: bool = False
+    enabled: bool = True
     subscription_url: str = ""
     check_interval: int = 300  # PROXY_CHECK_INTERVAL (seconds)
     check_method: str = "ip"  # PROXY_CHECK_METHOD: ip|status|download

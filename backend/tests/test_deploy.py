@@ -86,6 +86,32 @@ def test_haproxy_mode_ignores_remnanode_requirements():
     DeployRequest(**_haproxy(domain="", email="", cloudflare_api_key="", country_code="XX"))
 
 
+def test_vanilla_variant_optional_domain_email():
+    # Plan B 2b: vanilla node install has no local SSL/masking → domain/email/cf
+    # optional (Hysteria2 off so it doesn't demand a domain).
+    r = DeployRequest(**_remna(node_variant="vanilla", domain="", email="",
+                               cloudflare_api_key="", install_hysteria2=False))
+    assert r.node_variant == "vanilla"
+
+
+def test_vanilla_hysteria2_requires_domain():
+    # Hysteria2 (Certbot standalone) still needs a domain even in vanilla mode.
+    with pytest.raises(ValidationError):
+        DeployRequest(**_remna(node_variant="vanilla", domain="", install_hysteria2=True))
+
+
+def test_egames_variant_still_requires_domain():
+    with pytest.raises(ValidationError):
+        DeployRequest(**_remna(node_variant="egames", domain=""))
+
+
+def test_plan_b_toggle_defaults():
+    r = DeployRequest(**_remna())
+    assert r.node_variant == "egames"
+    assert r.install_hysteria2 is True
+    assert r.docker_mirror is False and r.cookie_gate is False
+
+
 def test_invalid_ip_rejected():
     with pytest.raises(ValidationError):
         DeployRequest(**_remna(ip="999.1.1.1"))

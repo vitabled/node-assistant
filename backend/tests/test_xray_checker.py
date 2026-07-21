@@ -61,11 +61,14 @@ def test_checker_status_reports_container_state(monkeypatch):
 # ── per-account tag filtering (Ф9) ────────────────────────────
 
 def test_parse_tag_and_filter_helpers():
-    assert xcapi._parse_tag("acc1:sub1|MyNode") == ("acc1", "MyNode")
-    assert xcapi._parse_tag("acc1:sub1") == ("", "acc1:sub1")  # no pipe → untagged
-    assert xcapi._parse_tag("Plain") == ("", "Plain")
+    assert xcapi._parse_tag("acc1:sub1|MyNode") == ("acc1", "sub1", "MyNode")
+    assert xcapi._parse_tag("acc1:sub1") == ("", "", "acc1:sub1")  # no pipe → untagged
+    assert xcapi._parse_tag("Plain") == ("", "", "Plain")
     px = [{"name": "acc1:s1|A"}, {"name": "acc2:s1|B"}, {"name": "acc1:s2|C"}]
-    assert [p["name"] for p in xcapi._filter_by_account(px, "acc1")] == ["A", "C"]
+    kept = xcapi._filter_by_account(px, "acc1")
+    assert [p["name"] for p in kept] == ["A", "C"]
+    # subId stashed for per-subscription grouping on the dashboard
+    assert [p["subId"] for p in kept] == ["s1", "s2"]
     # fallback: nothing tagged → passthrough unchanged (single-subscription mode)
     plain = [{"name": "X"}, {"name": "Y"}]
     assert xcapi._filter_by_account(plain, "acc1") == plain

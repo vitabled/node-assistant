@@ -12,7 +12,7 @@ import { CheckerControls } from "./monitoring/CheckerControls";
 import { CheckerRegistry } from "./monitoring/CheckerRegistry";
 import { TestServers } from "./settings/TestServers";
 import { McpTab } from "./settings/McpTab";
-import { AiChat } from "./settings/AiChat";
+import { InfraTab } from "./settings/InfraTab";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -166,7 +166,13 @@ function RemnavaveTab() {
     setChecking(true);
     setCheckResult(null);
     try {
-      const res = await fetch("/api/settings/remnawave/check", { method: "POST" });
+      // Send the values currently typed into the form so «Проверить соединение»
+      // tests what the operator entered (not the last-saved settings).
+      const res = await fetch("/api/settings/remnawave/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ panel_url: cfg.panel_url, api_token: cfg.api_token }),
+      });
       if (res.ok) {
         setCheckResult({ ok: true, msg: "Соединение установлено" });
         await loadSquads();
@@ -705,7 +711,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "infra" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -717,6 +723,7 @@ export function Settings() {
     { id: "monitoring",  label: "Мониторинг" },
     { id: "testservers", label: "Сервера для тестирования" },
     { id: "mcp",         label: "MCP" },
+    { id: "infra",       label: "Инфраструктура" },
     { id: "theme",       label: "Тема" },
   ];
 
@@ -742,7 +749,8 @@ export function Settings() {
         {sub === "optimization" && <OptimizationTab />}
         {sub === "monitoring"   && <MonitoringTab />}
         {sub === "testservers"  && <TestServersTab />}
-        {sub === "mcp"          && <div className="flex flex-col gap-4 max-w-2xl"><McpTab /><AiChat /></div>}
+        {sub === "mcp"          && <div className="flex flex-col gap-4 max-w-2xl"><McpTab /></div>}
+        {sub === "infra"        && <InfraTab />}
         {sub === "theme"        && <ThemeTab />}
       </div>
     </div>

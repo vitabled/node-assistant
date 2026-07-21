@@ -44,11 +44,12 @@ class _FakeClient:
         return {"uuid": "host-uuid-xyz"}
 
 
-def _req(disabled=None):
+def _req(disabled=None, xhttp_path=""):
     return SimpleNamespace(
         domain="node1.example.com",
         remnanode_port=2222,
         disabled_host_template_ids=disabled or [],
+        xhttp_path=xhttp_path,
     )
 
 
@@ -115,6 +116,23 @@ def test_no_host_templates_is_noop(monkeypatch):
     task = _run(monkeypatch, client, [], _req())
     assert client.calls == []
     assert task.logs == []                             # nothing logged
+
+
+def test_host_var_substitution(monkeypatch):
+    # Plan C 5a: $domain/$xhttp_path/$name in host string fields are substituted
+    # from the deploy request before the host is created.
+    import app.services.storage as storage
+    tpl = [{"id": "hv", "remark": "R-$name", "inbound": "ib-v", "port": 443,
+            "sni": "$domain", "host": "cdn.example.com", "path": "$xhttp_path"}]
+    monkeypatch.setattr(storage, "load_hosts", lambda *a, **k: tpl)
+    client = _FakeClient()
+    task = _FakeTask()
+    asyncio.run(step_create_hosts(
+        task, client, _req(xhttp_path="/xhpath"), NODE_UUID, PROFILE_UUID, ["hv"]))
+    call = client.calls[0]
+    assert call["sni"] == "node1.example.com"        # $domain
+    assert call["path"] == "/xhpath"                  # $xhttp_path
+    assert call["remark"].startswith("R-node1")       # $name = subdomain label
 
 
 def test_map_host_optional_camelcase():
