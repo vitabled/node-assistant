@@ -292,9 +292,12 @@ function ExistingServerModal({ onClose, onProceed }: {
   const [error,       setError]       = useState<string | null>(null);
   const [results,     setResults]     = useState<Record<string, DetectStatus> | null>(null);
   const [skip,        setSkip]        = useState<Record<string, boolean>>({});
+  // Detected current settings (ssh_port/remnanode_port/xhttp_path/domain/open_ports/
+  // has_token) — mapped into the deploy form as a preset (Wave-4 Plan B Ф2).
+  const [settings,    setSettings]    = useState<Record<string, string | number | boolean> | null>(null);
 
   const detect = async () => {
-    setDetecting(true); setError(null); setResults(null);
+    setDetecting(true); setError(null); setResults(null); setSettings(null);
     try {
       const res = await fetch("/api/node/detect", {
         method:  "POST",
@@ -315,6 +318,10 @@ function ExistingServerModal({ onClose, onProceed }: {
       const pre: Record<string, boolean> = {};
       Object.entries(r).forEach(([k, v]) => { pre[k] = v === "present"; });
       setSkip(pre);
+      // Detected settings → prefill (secrets never returned; only has_token).
+      const s = (data.settings ?? {}) as Record<string, string | number | boolean>;
+      setSettings(s);
+      if (s.domain && !domain.trim()) setDomain(String(s.domain));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка определения");
     } finally {
@@ -324,13 +331,41 @@ function ExistingServerModal({ onClose, onProceed }: {
 
   const proceed = () => {
     const skip_components = Object.entries(skip).filter(([, v]) => v).map(([k]) => k);
-    onProceed({
+    const s = settings ?? {};
+    const preset: Partial<FormData> = {
       ip, ssh_user: sshUser, ssh_password: sshPassword,
       current_ssh_port: sshPort, new_ssh_port: sshPort,
       change_ssh_port: false,   // server is already configured — don't re-do the SSH-port dance
-      domain, skip_components,
-    });
+      domain: domain || (s.domain ? String(s.domain) : ""),
+      skip_components,
+    };
+    // Prefill detected values (form's preset wins over settings-defaults).
+    if (s.remnanode_port) preset.remnanode_port = String(s.remnanode_port);
+    if (s.xhttp_path)     preset.xhttp_path     = String(s.xhttp_path);
+    if (s.open_ports)     preset.open_ports     = String(s.open_ports);
+    // Mirror detected components in the install toggles (they're also pre-checked
+    // as "skip", so this only keeps the form honest — nothing re-installs).
+    const r = results ?? {};
+    if (r.warp)             preset.install_warp         = r.warp === "present";
+    if (r.node_accelerator) preset.optimize             = r.node_accelerator === "present";
+    if (r.trafficguard)     preset.install_trafficguard = r.trafficguard === "present";
+    if (r.hysteria2)        preset.install_hysteria2    = r.hysteria2 === "present";
+    onProceed(preset);
   };
+
+  // Rows for the "detected settings" summary shown before proceeding.
+  const detectedRows: [string, string][] = [];
+  if (settings) {
+    const push = (k: string, v: unknown) => {
+      if (v !== undefined && v !== null && v !== "") detectedRows.push([k, String(v)]);
+    };
+    push("SSH-порт", settings.ssh_port);
+    push("Порт remnanode", settings.remnanode_port);
+    push("Путь XHTTP", settings.xhttp_path);
+    push("Домен", settings.domain);
+    push("Порты UFW", settings.open_ports);
+    if (settings.has_token) detectedRows.push(["Токен ноды", "уже на сервере"]);
+  }
 
   const canDetect = !!ip.trim() && !!sshPassword && !detecting;
 
@@ -400,6 +435,21 @@ function ExistingServerModal({ onClose, onProceed }: {
               <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>
                 «неизвестно» — определить не удалось, решение за вами. Непропущенные компоненты будут установлены заново.
               </p>
+            </div>
+          )}
+
+          {detectedRows.length > 0 && (
+            <div className="rounded-lg border p-3 flex flex-col gap-1.5"
+                 style={{ borderColor: "var(--accent-dim)", background: "var(--bg2)" }}>
+              <p className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--accent-hi)" }}>
+                Обнаружено на сервере — подставится в форму
+              </p>
+              {detectedRows.map(([k, v]) => (
+                <div key={k} className="flex items-center justify-between text-xs">
+                  <span style={{ color: "var(--t-low)" }}>{k}</span>
+                  <span className="tabular-nums" style={{ color: "var(--t-hi)" }}>{v}</span>
+                </div>
+              ))}
             </div>
           )}
 
