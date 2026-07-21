@@ -138,3 +138,12 @@ def load_prompt_presets(account_id: Optional[str] = None) -> list:
 
 def save_prompt_presets(presets: list, account_id: Optional[str] = None) -> None:
     _write(_dir(account_id) / "prompt_presets.json", {"presets": presets})
+
+
+def load_stat_widgets(account_id: Optional[str] = None) -> dict:
+    """Stats-page widget layout ({} if none → frontend seeds the default 6)."""
+    return _read(_dir(account_id) / "stat_widgets.json")
+
+
+def save_stat_widgets(data: dict, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "stat_widgets.json", data)
