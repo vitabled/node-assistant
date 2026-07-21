@@ -23,6 +23,7 @@ from app.services import accounts, ai_agent, storage
 router = APIRouter(prefix="/api/ai")
 
 _PROVIDERS = ("openai", "anthropic")
+_GATEWAYS = ("none", "cliproxy")
 
 
 class AiConfigBody(BaseModel):
@@ -34,12 +35,20 @@ class AiConfigBody(BaseModel):
     max_steps: int = Field(6, ge=1, le=20)
     readonly: bool = True
     active_preset_id: str = Field("", max_length=64)  # Plan I; "" = default preset
+    gateway: str = "none"  # Plan J; none | cliproxy
 
     @field_validator("provider")
     @classmethod
     def _provider(cls, v: str) -> str:
         if v not in _PROVIDERS:
             raise ValueError(f"provider должен быть одним из {_PROVIDERS}")
+        return v
+
+    @field_validator("gateway")
+    @classmethod
+    def _gateway(cls, v: str) -> str:
+        if v not in _GATEWAYS:
+            raise ValueError(f"gateway должен быть одним из {_GATEWAYS}")
         return v
 
 
@@ -57,6 +66,7 @@ def _public(account_id: str | None = None) -> dict:
         "max_steps": cfg.max_steps,
         "readonly": cfg.readonly,
         "active_preset_id": cfg.active_preset_id,
+        "gateway": cfg.gateway,
         "has_key": bool(cfg.api_key_enc),  # never the key itself
     }
 
@@ -79,6 +89,7 @@ async def save_config(body: AiConfigBody) -> dict:
         "max_steps": body.max_steps,
         "readonly": body.readonly,
         "active_preset_id": body.active_preset_id.strip(),
+        "gateway": body.gateway,
     }
     # Only overwrite the key when a fresh non-blank one is supplied.
     if body.api_key and body.api_key.strip():
@@ -86,6 +97,17 @@ async def save_config(body: AiConfigBody) -> dict:
     data["ai"] = ai_cfg
     storage.save_settings(data)
     return {"ok": True, **_public()}
+
+
+@router.get("/models")
+async def list_models() -> dict:
+    """Model ids from the configured CLIProxyAPI gateway (Plan J). Only meaningful
+    when gateway=cliproxy; otherwise []. Never errors (graceful empty)."""
+    cfg = ai_agent._cfg()
+    if cfg.gateway != "cliproxy":
+        return {"models": []}
+    key = ai_agent.decrypt_key(cfg.api_key_enc)
+    return {"models": await ai_agent.list_models(cfg, key or "")}
 
 
 @router.post("/chat")

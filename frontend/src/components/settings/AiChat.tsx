@@ -11,6 +11,7 @@ interface AiConfig {
   max_steps: number;
   readonly: boolean;
   has_key: boolean;
+  gateway: "none" | "cliproxy";
 }
 
 type Msg =
@@ -27,6 +28,7 @@ export function AiChat() {
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const [models, setModels] = useState<string[]>([]);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,6 +45,12 @@ export function AiChat() {
     return () => abortRef.current?.abort();
   }, []);
   useEffect(() => { scrollRef.current?.scrollTo?.(0, scrollRef.current.scrollHeight); }, [msgs]);
+  // Fetch the model list from the CLIProxyAPI gateway (Plan J); empty → manual input.
+  useEffect(() => {
+    if (cfg?.gateway === "cliproxy") {
+      fetch("/api/ai/models").then(r => r.json()).then(d => setModels(d.models || [])).catch(() => setModels([]));
+    } else setModels([]);
+  }, [cfg?.gateway]);
 
   const patchCfg = (p: Partial<AiConfig>) => setCfg(c => (c ? { ...c, ...p } : c));
 
@@ -128,20 +136,37 @@ export function AiChat() {
       {/* provider config */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="flex flex-col gap-1">
-          <span className="micro">Провайдер</span>
+          <span className="micro">Шлюз</span>
+          <select className="selectbox" value={cfg.gateway} disabled={saving}
+            onChange={e => patchCfg({ gateway: e.target.value as AiConfig["gateway"] })}>
+            <option value="none">Прямой провайдер</option>
+            <option value="cliproxy">CLIProxyAPI (шлюз)</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="micro">Формат протокола</span>
           <select className="selectbox" value={cfg.provider} disabled={saving}
             onChange={e => {
               const p = e.target.value as AiConfig["provider"];
-              patchCfg({ provider: p, ...DEFAULTS[p] });
+              // Keep base_url when routing via a gateway (points at CLIProxyAPI, not the provider).
+              patchCfg(cfg.gateway === "cliproxy" ? { provider: p } : { provider: p, ...DEFAULTS[p] });
             }}>
             <option value="openai">OpenAI-совместимый</option>
             <option value="anthropic">Anthropic</option>
           </select>
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="micro">Модель</span>
-          <input className="input" value={cfg.model} disabled={saving}
-            onChange={e => patchCfg({ model: e.target.value })} />
+        <label className="flex flex-col gap-1 sm:col-span-2">
+          <span className="micro">Модель{cfg.gateway === "cliproxy" && models.length === 0 && " (список пуст — введите вручную)"}</span>
+          {cfg.gateway === "cliproxy" && models.length > 0 ? (
+            <select className="selectbox" value={cfg.model} disabled={saving}
+              onChange={e => patchCfg({ model: e.target.value })}>
+              {!models.includes(cfg.model) && <option value={cfg.model}>{cfg.model}</option>}
+              {models.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          ) : (
+            <input className="input" value={cfg.model} disabled={saving}
+              onChange={e => patchCfg({ model: e.target.value })} />
+          )}
         </label>
         <label className="flex flex-col gap-1 sm:col-span-2">
           <span className="micro">Base URL</span>

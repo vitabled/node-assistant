@@ -82,6 +82,8 @@ class AiConfig(BaseModel):
     max_steps: int = 6  # tool-calling loop cap (anti-runaway)
     readonly: bool = True  # only read-only tools exposed to the agent
     active_preset_id: str = ""  # active system-prompt preset (Plan I; "" = default)
+    gateway: str = "none"  # Plan J: none | cliproxy (route via CLIProxyAPI gateway)
+    gateway_internal: bool = False  # gateway runs on our node-assistant-net → SSRF-exempt
 
 
 class AppearanceConfig(BaseModel):

@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import re
+from urllib.parse import urlparse
 from typing import Any, AsyncIterator, Optional
 
 import httpx
@@ -195,17 +196,53 @@ class AgentError(Exception):
     pass
 
 
-async def _provider_turn(
-    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True, system: str = ""
-) -> dict:
-    """One assistant turn. Returns {"text", "tool_calls", "raw"}. Raises AgentError
-    (redacted) on provider failure. SSRF guard: base_url is account-supplied and
-    fetched by the SERVER carrying the key — re-check it every turn (handles DNS
-    rebinding), same posture as net_guard elsewhere."""
+# CLIProxyAPI gateway (Plan J) container names reachable only on our network.
+_INTERNAL_GATEWAY_HOSTS = {"node-installer-cliproxy", "cli-proxy"}
+
+
+def _check_base_url(config: AiConfig) -> None:
+    """SSRF guard on the account-supplied base_url, re-run every turn (DNS
+    rebinding). Exemption: an INTERNAL CLIProxyAPI gateway on our
+    node-assistant-net is reached by container-name and is unroutable externally
+    — trusted, same posture as xray_checker._get_json for the local checker."""
+    if getattr(config, "gateway", "none") == "cliproxy" and getattr(config, "gateway_internal", False):
+        host = (urlparse(config.base_url).hostname or "").lower()
+        if host in _INTERNAL_GATEWAY_HOSTS:
+            return
     if not net_guard.is_safe_url(config.base_url):
         raise AgentError(
             "base_url не разрешён: нужен http(s) с публичным хостом (защита от SSRF)."
         )
+
+
+async def list_models(config: AiConfig, key: str) -> list[str]:
+    """Fetch available model ids from an OpenAI-format {base_url}/models endpoint
+    (CLIProxyAPI). Never raises — returns [] on any failure."""
+    try:
+        _check_base_url(config)
+    except AgentError:
+        return []
+    url = f"{config.base_url.rstrip('/')}/models"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.get(url, headers={"Authorization": f"Bearer {key}"})
+        if r.status_code >= 400:
+            return []
+        data = r.json()
+        items = data.get("data") if isinstance(data, dict) else None
+        return [m["id"] for m in (items or []) if isinstance(m, dict) and m.get("id")]
+    except Exception:
+        return []
+
+
+async def _provider_turn(
+    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True, system: str = ""
+) -> dict:
+    """One assistant turn. Returns {"text", "tool_calls", "raw"}. Raises AgentError
+    (redacted) on provider failure. SSRF guard runs every turn via
+    _check_base_url (base_url is account-supplied and fetched by the SERVER
+    carrying the key)."""
+    _check_base_url(config)
     if config.provider == "anthropic":
         return await _anthropic_turn(config, key, messages, with_tools, system)
     return await _openai_turn(config, key, messages, with_tools)
