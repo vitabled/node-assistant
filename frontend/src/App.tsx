@@ -17,6 +17,7 @@ import { SpeedTests }                      from "./components/stats/SpeedTests";
 import { Placeholder }                     from "./components/rw/Placeholder";
 import { Profiles }                         from "./components/profiles/Profiles";
 import { MihomoEditor }                     from "./components/MihomoEditor";
+import { ConfigTemplates }                  from "./components/configs/ConfigTemplates";
 import { RuleBuilder }                      from "./components/automation/RuleBuilder";
 import { Notifications }                    from "./components/automation/Notifications";
 import { AiChat }                           from "./components/settings/AiChat";
@@ -91,6 +92,7 @@ const CRUMB: Record<Tab, [string, string]> = {
   "rw-migration":    ["Remnawave", "Миграция"],
   "rw-profiles":     ["Node Installer", "Профили"],
   "mihomo":          ["Node Installer", "Mihomo"],
+  "configs":         ["Node Installer", "Пользовательские конфиги"],
   "hostings-map":    ["Справка", "Карта хостингов"],
   "hostings-list":   ["Справка", "Хостинги"],
   "library":         ["Справка", "Библиотека"],
@@ -244,6 +246,7 @@ export default function App() {
           {tab === "rw-migration" && <Migration />}
           {tab === "rw-profiles"  && <Profiles />}
           {tab === "mihomo"       && <MihomoEditor />}
+          {tab === "configs"      && <ConfigTemplates />}
 
           {tab === "hostings-map"  && <HostingsMap />}
           {tab === "hostings-list" && <HostingsCatalog />}
