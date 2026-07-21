@@ -3,10 +3,11 @@ import {
   X, Square, Server, CheckCircle2, XCircle, Loader2,
   Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck,
   Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
-  ShieldAlert, RefreshCw, Trash2, Wrench, Gauge, Play,
+  ShieldAlert, RefreshCw, Trash2, Wrench, Gauge, Play, ArrowLeftRight,
 } from "lucide-react";
 import { StepProgress, DEPLOY_STEPS } from "./StepProgress";
 import { TerminalOutput } from "./TerminalOutput";
+import { ReplaceDomainModal } from "./rw/ReplaceDomainModal";
 import { useTaskStream, type StatusFrame, type TaskStatus } from "../hooks/useTaskStream";
 import { toast } from "./infra/Toast";
 import type { DeployJobSummary } from "./DeployDashboard";
@@ -91,6 +92,7 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
   );
   const [showDetail, setShowDetail] = useState(false);
   const [retrying,   setRetrying]   = useState(false);
+  const [showReplace, setShowReplace] = useState(false);  // «Сменить домен» wizard (Plan E)
 
   const addLog   = useCallback((line: string) => setLogs(l => [...l, line]), []);
   const onStatus = useCallback((frame: StatusFrame) =>
@@ -285,6 +287,13 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
             <SecurityBlock stats={security} />
             {job.savedForm.install_vnstat !== false && <TrafficBlock stats={traffic} />}
             {job.savedForm.mode !== "haproxy" && <CertBlock cert={cert} />}
+            {job.savedForm.mode !== "haproxy" && (
+              <button type="button" onClick={() => setShowReplace(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors
+                           bg-[var(--bg2)] hover:bg-[var(--bg3)] text-[var(--t-mid)] border-[var(--line)]">
+                <ArrowLeftRight size={12} /> Сменить домен
+              </button>
+            )}
             <SpeedtestBlock form={job.savedForm} />
             <ManageBlock form={job.savedForm} onOp={runOp} busy={opBusy} />
           </>
@@ -372,6 +381,19 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
           logs={opLogs}
           status={opStatus}
           onClose={() => { setOpTitle(""); setOpTaskId(null); }}
+        />
+      )}
+
+      {showReplace && (
+        <ReplaceDomainModal
+          mode="node"
+          creds={{
+            ip: job.savedForm.ip, ssh_user: job.savedForm.ssh_user,
+            ssh_password: job.savedForm.ssh_password,
+            ssh_port: parseInt(job.savedForm.change_ssh_port ? job.savedForm.new_ssh_port : job.savedForm.current_ssh_port, 10) || 22,
+          }}
+          currentDomain={job.savedForm.domain}
+          onClose={() => setShowReplace(false)}
         />
       )}
     </>

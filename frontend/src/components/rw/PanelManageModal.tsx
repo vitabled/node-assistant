@@ -3,9 +3,10 @@ import {
   X, RefreshCw, Trash2, ShieldAlert, Wrench, Server, Loader2,
   CheckCircle2, XCircle, Save, AlertTriangle, BarChart3, Boxes,
   ShieldCheck, Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
-  Users, Gauge,
+  Users, Gauge, ArrowLeftRight,
 } from "lucide-react";
 import { TerminalOutput } from "../TerminalOutput";
+import { ReplaceDomainModal } from "./ReplaceDomainModal";
 import { useTaskStream, type StatusFrame, type TaskStatus } from "../../hooks/useTaskStream";
 import { toast } from "../infra/Toast";
 import type { PanelJobSummary } from "./PanelDashboard";
@@ -107,6 +108,7 @@ function ComponentsTab({ job, onEditJob }: { job: PanelJobSummary; onEditJob: Pr
   const p = job.savedForm;
   const comps = panelManageableComponents(p);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [showReplace, setShowReplace] = useState(false);  // «Сменить домен» (Plan E)
 
   // ── Op stream (reinstall / uninstall) — one op at a time ──
   const [opTaskId,     setOpTaskId]     = useState<string | null>(null);
@@ -186,6 +188,23 @@ function ComponentsTab({ job, onEditJob }: { job: PanelJobSummary; onEditJob: Pr
 
       {/* Server-data editor (localStorage only) */}
       <ServerDataBlock job={job} onEditJob={onEditJob} />
+
+      {/* Replace-domain wizard (Plan E) */}
+      <button type="button" onClick={() => setShowReplace(true)} disabled={opBusy}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors
+                   bg-[var(--bg2)] hover:bg-[var(--bg3)] text-[var(--t-mid)] border-[var(--line)] disabled:opacity-40 self-start">
+        <ArrowLeftRight size={12} /> Сменить домен панели
+      </button>
+      {showReplace && (
+        <ReplaceDomainModal
+          mode="panel"
+          creds={{ ip: p.ip, ssh_user: p.ssh_user, ssh_password: p.ssh_password, ssh_port: p.ssh_port }}
+          currentPanelDomain={p.panel_domain || ""}
+          currentSubDomain={p.sub_domain || ""}
+          reverseProxy={(p.reverse_proxy === "nginx" ? "nginx" : "caddy")}
+          onClose={() => setShowReplace(false)}
+        />
+      )}
 
       {/* Op-stream overlay */}
       {opTitle && (opSubmitting || opTaskId || opStatus === "failed") && (
