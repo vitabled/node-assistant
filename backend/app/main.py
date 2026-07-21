@@ -38,6 +38,7 @@ from app.api import (
     netbird,
     api_tokens,
     config_templates,
+    ai_prompts,
 )
 from app.api.auth import require_account
 
@@ -128,6 +129,7 @@ app.include_router(certwarden.router, dependencies=_auth)
 app.include_router(netbird.router, dependencies=_auth)
 app.include_router(api_tokens.router, dependencies=_auth)
 app.include_router(config_templates.router, dependencies=_auth)
+app.include_router(ai_prompts.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.

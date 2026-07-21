@@ -33,6 +33,7 @@ class AiConfigBody(BaseModel):
     api_key: str | None = None  # write-only; blank/None keeps the existing key
     max_steps: int = Field(6, ge=1, le=20)
     readonly: bool = True
+    active_preset_id: str = Field("", max_length=64)  # Plan I; "" = default preset
 
     @field_validator("provider")
     @classmethod
@@ -55,6 +56,7 @@ def _public(account_id: str | None = None) -> dict:
         "model": cfg.model,
         "max_steps": cfg.max_steps,
         "readonly": cfg.readonly,
+        "active_preset_id": cfg.active_preset_id,
         "has_key": bool(cfg.api_key_enc),  # never the key itself
     }
 
@@ -76,6 +78,7 @@ async def save_config(body: AiConfigBody) -> dict:
         "model": body.model.strip(),
         "max_steps": body.max_steps,
         "readonly": body.readonly,
+        "active_preset_id": body.active_preset_id.strip(),
     }
     # Only overwrite the key when a fresh non-blank one is supplied.
     if body.api_key and body.api_key.strip():

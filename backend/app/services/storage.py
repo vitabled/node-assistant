@@ -130,3 +130,11 @@ def load_api_tokens(account_id: Optional[str] = None) -> list:
 
 def save_api_tokens(tokens: list, account_id: Optional[str] = None) -> None:
     _write(_dir(account_id) / "api_tokens.json", {"tokens": tokens})
+
+
+def load_prompt_presets(account_id: Optional[str] = None) -> list:
+    return _read(_dir(account_id) / "prompt_presets.json").get("presets", [])
+
+
+def save_prompt_presets(presets: list, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "prompt_presets.json", {"presets": presets})

@@ -1,0 +1,25 @@
+{
+  "presets": [
+    {
+      "id": "default",
+      "name": "По умолчанию",
+      "file": "default.md",
+      "builtin": true
+    },
+    {
+      "id": "precise",
+      "name": "Точные команды",
+      "file": "precise.md",
+      "builtin": true
+    },
+    {
+      "id": "cloudflare-agent-setup",
+      "name": "Cloudflare platform setup (внешний ассет)",
+      "file": "cloudflare-agent-setup.md",
+      "builtin": true,
+      "source_url": "https://developers.cloudflare.com/agent-setup/prompt.md",
+      "license": "CC-BY-4.0",
+      "unavailable": true
+    }
+  ]
+}

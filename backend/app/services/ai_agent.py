@@ -33,7 +33,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import settings
 from app.models.settings import AiConfig, AppSettings
-from app.services import metrics_store, net_guard, rules_store, storage
+from app.services import metrics_store, net_guard, prompt_presets_store, rules_store, storage
 from app.services.remnawave_client import RemnavaveClient
 
 # Cap on a single tool result serialized back into the message history (prevents
@@ -196,7 +196,7 @@ class AgentError(Exception):
 
 
 async def _provider_turn(
-    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True
+    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True, system: str = ""
 ) -> dict:
     """One assistant turn. Returns {"text", "tool_calls", "raw"}. Raises AgentError
     (redacted) on provider failure. SSRF guard: base_url is account-supplied and
@@ -207,7 +207,7 @@ async def _provider_turn(
             "base_url не разрешён: нужен http(s) с публичным хостом (защита от SSRF)."
         )
     if config.provider == "anthropic":
-        return await _anthropic_turn(config, key, messages, with_tools)
+        return await _anthropic_turn(config, key, messages, with_tools, system)
     return await _openai_turn(config, key, messages, with_tools)
 
 
@@ -251,13 +251,13 @@ async def _openai_turn(
 
 
 async def _anthropic_turn(
-    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True
+    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True, system: str = ""
 ) -> dict:
     url = f"{config.base_url.rstrip('/')}/messages"
     body: dict = {
         "model": config.model,
         "max_tokens": 1024,
-        "system": _SYSTEM,  # Anthropic takes system at top level, NOT in messages
+        "system": system or _SYSTEM,  # Anthropic takes system at top level, NOT in messages
         "messages": messages,
     }
     if with_tools:
@@ -362,6 +362,23 @@ _SYSTEM = (
     "Используй инструменты только для чтения данных панели. Не выдумывай данные."
 )
 
+# Non-editable suffix appended to EVERY active preset so a foreign preset (e.g.
+# the Cloudflare one) can't strip awareness of our read-only tools (Plan I).
+_TOOLING_SUFFIX = (
+    "У тебя есть read-only инструменты панели node-installer/Remnawave "
+    "(list_rules, list_subscriptions, node_health, list_nodes) — используй их для "
+    "чтения данных, не выдумывай."
+)
+
+
+def build_system(account_id: str, config: AiConfig) -> str:
+    """The effective system prompt: the account's active preset (fallback: the
+    `default` builtin) + our always-on tooling suffix."""
+    text = prompt_presets_store.resolve_active_text(
+        getattr(config, "active_preset_id", "") or "", account_id
+    )
+    return f"{text or _SYSTEM}\n\n{_TOOLING_SUFFIX}"
+
 
 async def run_agent(
     prompt: str, config: AiConfig, account_id: str, key: Optional[str] = None
@@ -373,11 +390,12 @@ async def run_agent(
         yield {"type": "error", "message": "API-ключ провайдера не задан."}
         return
 
+    system = build_system(account_id, config)
     if config.provider == "anthropic":
         messages: list[dict] = [{"role": "user", "content": prompt}]
     else:
         messages = [
-            {"role": "system", "content": _SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ]
 
@@ -387,7 +405,7 @@ async def run_agent(
         # final answer from what it fetched, instead of dead-ending on the budget.
         is_last = step == steps - 1
         try:
-            turn = await _provider_turn(config, key, messages, with_tools=not is_last)
+            turn = await _provider_turn(config, key, messages, with_tools=not is_last, system=system)
         except AgentError as exc:
             yield {"type": "error", "message": str(exc)}
             return

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Send, Bot, Wrench, AlertCircle } from "lucide-react";
 import { toast } from "../infra/Toast";
+import { PromptPresets } from "./PromptPresets";
 
 interface AiConfig {
   enabled: boolean;
@@ -180,6 +181,8 @@ export function AiChat() {
           <AlertCircle size={14} /> Агент выключен — включите и сохраните, чтобы начать чат.
         </div>
       )}
+
+      <PromptPresets />
 
       {/* chat */}
       <div ref={scrollRef} className="flex flex-col gap-3 max-h-80 overflow-y-auto rounded-lg border border-[var(--line-soft)] bg-[var(--bg2)] p-3" data-testid="ai-chat-log">

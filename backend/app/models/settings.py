@@ -81,6 +81,7 @@ class AiConfig(BaseModel):
     api_key_enc: str = ""  # Fernet ciphertext (base64); never plaintext
     max_steps: int = 6  # tool-calling loop cap (anti-runaway)
     readonly: bool = True  # only read-only tools exposed to the agent
+    active_preset_id: str = ""  # active system-prompt preset (Plan I; "" = default)
 
 
 class AppearanceConfig(BaseModel):
