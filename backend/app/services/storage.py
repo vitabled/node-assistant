@@ -122,3 +122,11 @@ def load_netbird(account_id: Optional[str] = None) -> dict:
 
 def save_netbird(data: dict, account_id: Optional[str] = None) -> None:
     _write(_dir(account_id) / "netbird.json", data)
+
+
+def load_api_tokens(account_id: Optional[str] = None) -> list:
+    return _read(_dir(account_id) / "api_tokens.json").get("tokens", [])
+
+
+def save_api_tokens(tokens: list, account_id: Optional[str] = None) -> None:
+    _write(_dir(account_id) / "api_tokens.json", {"tokens": tokens})

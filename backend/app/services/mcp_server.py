@@ -34,7 +34,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import settings
 from app.models.settings import AppSettings, McpConfig
-from app.services import accounts, storage
+from app.services import accounts, api_tokens, storage
 
 log = logging.getLogger("mcp")
 
@@ -198,7 +198,13 @@ async def start(account_id: Optional[str] = None) -> None:
     _require_docker(rc0, out0)
 
     token = ensure_auth_token(aid)
-    na_jwt = accounts.issue_token(aid or "")
+    # The container authenticates to our backend with a managed, revocable
+    # readonly API token (rotated on every start) instead of a raw session JWT.
+    # Fall back to a session JWT if token issuance fails for any reason.
+    try:
+        na_jwt = api_tokens.mint_managed("mcp-container", readonly=True, account_id=aid)
+    except Exception:
+        na_jwt = accounts.issue_token(aid or "")
 
     await _docker("rm", "-f", CONTAINER_NAME, timeout=30)
 
