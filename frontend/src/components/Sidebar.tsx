@@ -3,12 +3,12 @@ import {
   PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
-  Workflow, Bell, Bot, Map as MapIcon,
+  Workflow, Bell, Bot, Map as MapIcon, Waypoints,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
-  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
+  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings" | "mihomo"
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
@@ -25,6 +25,8 @@ const NAV_MAIN: NavItemDef[] = [
   { tab: "templates",  label: "Шаблоны",       Icon: FileCode2 },
   // Профили — сразу после «Шаблонов» (10a); раздел независим от шаблонов.
   { tab: "rw-profiles", label: "Профили",      Icon: UserCog   },
+  // Mihomo-конфигуратор (встроенный, iframe) — рядом с редакторами конфигов.
+  { tab: "mihomo",      label: "Mihomo",       Icon: Waypoints },
   { tab: "hosts",      label: "Хосты",         Icon: Network   },
   { tab: "traffic",    label: "Трафик",        Icon: Gauge     },
 ];

@@ -1,3 +1,7 @@
 
 # Playwright screenshot artifacts
 tests/e2e/shots/
+
+# Vendored js-yaml for the embedded Mihomo configurator (copied from node_modules
+# at build by scripts/vendor-mihomo.mjs — do not commit the generated blob).
+public/mihomo/vendor/
