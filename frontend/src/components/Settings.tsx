@@ -115,6 +115,38 @@ function SettingField({
 
 // ── Remnawave sub-tab ─────────────────────────────────────────
 
+// Panel registry manager (Wave-5 Plan K). Lists panels, activates/deletes/adds;
+// the form below edits the ACTIVE panel. Hidden when no panels exist yet.
+function PanelSelector({ onChange }: { onChange: () => void }) {
+  const [panels, setPanels] = useState<any[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const load = () => fetch("/api/settings/remnawave/panels").then(r => r.json())
+    .then(d => { setPanels(d.panels || []); setActiveId(d.active_panel_id || ""); }).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const activate = async (id: string) => { await fetch(`/api/settings/remnawave/panels/${id}/activate`, { method: "POST" }); await load(); onChange(); };
+  const del = async (id: string) => { await fetch(`/api/settings/remnawave/panels/${id}`, { method: "DELETE" }); await load(); onChange(); };
+  const add = async () => { await fetch("/api/settings/remnawave/panels", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Новая панель" }) }); await load(); };
+  if (panels.length === 0) return null;
+  return (
+    <div className="card card-p" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center" }}>
+        <span className="micro">Панели Remnawave</span>
+        <button type="button" className="btn btn-sm" style={{ marginLeft: "auto" }} onClick={add}>+ Панель</button>
+      </div>
+      {panels.map(p => (
+        <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ flex: 1, fontSize: 13, color: "var(--t-hi)" }}>{p.name || p.panel_url || "—"}</span>
+          {p.id === activeId
+            ? <span className="chip ok" style={{ fontSize: 10 }}>главная</span>
+            : <button type="button" className="btn btn-sm" onClick={() => activate(p.id)}>Сделать главной</button>}
+          <button type="button" className="btn btn-sm" onClick={() => del(p.id)} disabled={panels.length === 1}>Удалить</button>
+        </div>
+      ))}
+      <p className="hint">Форма ниже редактирует активную панель. Ручной ввод url/токена сохраняется.</p>
+    </div>
+  );
+}
+
 function RemnavaveTab() {
   const [cfg,      setCfg]      = useState<RemnavaveConfig>(REMNAWAVE_INIT);
   const [squads,   setSquads]   = useState<SelectOption[]>([]);
@@ -127,7 +159,7 @@ function RemnavaveTab() {
     { ok: boolean; msg: string } | null
   >(null);
 
-  useEffect(() => {
+  const loadCfg = () => {
     fetch("/api/settings")
       .then(r => r.json())
       .then(d => {
@@ -144,7 +176,8 @@ function RemnavaveTab() {
         }
       })
       .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  };
+  useEffect(() => { loadCfg(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadSquads = async () => {
     setSqLoading(true);
@@ -204,6 +237,7 @@ function RemnavaveTab() {
 
   return (
     <div className="flex flex-col gap-5 max-w-lg">
+      <PanelSelector onChange={loadCfg} />
       <SettingField
         label="URL панели Remnawave"
         value={cfg.panel_url}

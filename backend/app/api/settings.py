@@ -6,6 +6,7 @@ from app.services import storage
 from app.models.settings import (
     AppSettings,
     RemnavaveConfig,
+    PanelEntry,
     DeployDefaults,
     OptimizationSettings,
     XrayCheckerConfig,
@@ -28,11 +29,92 @@ async def get_settings():
 
 @router.post("/settings/remnawave")
 async def save_remnawave_settings(body: RemnavaveConfig):
+    """Backward-compat: edits the ACTIVE panel (Wave-5 Plan K). The registry is the
+    source of truth; `remnawave` is a computed view (AppSettings validator)."""
     raw = storage.load_settings()
     settings = AppSettings(**raw)
-    settings.remnawave = body
+    reg = settings.remnawave_registry
+    if not reg.panels:
+        entry = PanelEntry(name="Основная", kind="custom", panel_url=body.panel_url, api_token=body.api_token,
+                           default_internal_squad_ids=body.default_internal_squad_ids,
+                           default_external_squad_ids=body.default_external_squad_ids)
+        reg.panels = [entry]
+        reg.active_panel_id = entry.id
+    else:
+        active = next((p for p in reg.panels if p.id == reg.active_panel_id), reg.panels[0])
+        active.panel_url = body.panel_url
+        active.api_token = body.api_token
+        active.default_internal_squad_ids = body.default_internal_squad_ids
+        active.default_external_squad_ids = body.default_external_squad_ids
     storage.save_settings(settings.model_dump())
     return {"ok": True}
+
+
+# ── Panel registry (Wave-5 Plan K) ────────────────────────────────────────────
+
+class PanelEntryBody(BaseModel):
+    name: str = "Основная"
+    kind: str = "custom"
+    panel_url: str = ""
+    api_token: str = ""
+    default_internal_squad_ids: list[str] = []
+    default_external_squad_ids: list[str] = []
+
+
+@router.get("/settings/remnawave/panels")
+async def list_panels():
+    reg = AppSettings(**storage.load_settings()).remnawave_registry
+    return {"panels": [p.model_dump() for p in reg.panels], "active_panel_id": reg.active_panel_id}
+
+
+@router.post("/settings/remnawave/panels", status_code=201)
+async def create_panel(body: PanelEntryBody):
+    settings = AppSettings(**storage.load_settings())
+    reg = settings.remnawave_registry
+    entry = PanelEntry(**body.model_dump())
+    reg.panels.append(entry)
+    if not reg.active_panel_id:
+        reg.active_panel_id = entry.id
+    storage.save_settings(settings.model_dump())
+    return entry.model_dump()
+
+
+@router.put("/settings/remnawave/panels/{panel_id}")
+async def update_panel(panel_id: str, body: PanelEntryBody):
+    settings = AppSettings(**storage.load_settings())
+    reg = settings.remnawave_registry
+    entry = next((p for p in reg.panels if p.id == panel_id), None)
+    if entry is None:
+        raise HTTPException(404, "Панель не найдена")
+    for k, v in body.model_dump().items():
+        setattr(entry, k, v)
+    storage.save_settings(settings.model_dump())
+    return entry.model_dump()
+
+
+@router.delete("/settings/remnawave/panels/{panel_id}")
+async def delete_panel(panel_id: str):
+    settings = AppSettings(**storage.load_settings())
+    reg = settings.remnawave_registry
+    before = len(reg.panels)
+    reg.panels = [p for p in reg.panels if p.id != panel_id]
+    if len(reg.panels) == before:
+        raise HTTPException(404, "Панель не найдена")
+    if reg.active_panel_id == panel_id:
+        reg.active_panel_id = reg.panels[0].id if reg.panels else ""
+    storage.save_settings(settings.model_dump())
+    return {"ok": True, "active_panel_id": reg.active_panel_id}
+
+
+@router.post("/settings/remnawave/panels/{panel_id}/activate")
+async def activate_panel(panel_id: str):
+    settings = AppSettings(**storage.load_settings())
+    reg = settings.remnawave_registry
+    if not any(p.id == panel_id for p in reg.panels):
+        raise HTTPException(404, "Панель не найдена")
+    reg.active_panel_id = panel_id
+    storage.save_settings(settings.model_dump())
+    return {"ok": True, "active_panel_id": panel_id}
 
 
 @router.post("/settings/optimization")
