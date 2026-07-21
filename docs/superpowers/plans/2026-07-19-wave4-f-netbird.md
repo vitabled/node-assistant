@@ -4,7 +4,9 @@
 > getting-started.sh, PAT в Fernet-волте, setup-key через management API, agent join с `--disable-*-routes`;
 > `test_netbird.py` 7 зелёных). Frontend Settings→«Инфраструктура» (`settings/InfraTab.tsx`).
 > Отклонение: тумблер `join_netbird` в деплой-пайплайн НЕ вшивался (14-шаговый инвариант) — нода подключается
-> отдельной операцией `/agent/join`. pytest+tsc зелёные; живой деплой CP — build-ahead (нет Netbird-сервера).
+> отдельной операцией `/agent/join`. pytest+tsc зелёные. **Живой деплой попробован (2026-07-21):** скрипт корректно
+> отработал (скачал getting-started.sh, выставил env, запустил) — но стек упал SIGSEGV/OOM: **VPS 961 МБ < 2 ГБ**,
+> которые требует Netbird. Код верен, нужен бокс ≥2 ГБ. Let's Encrypt тут не помогает — это ограничение по RAM.
 
 > eGames-вики (`/configuration/netbird/`). Приватная WireGuard-mesh между панелью и нодами для control-трафика
 > вместо публичного IP/SSH. **Self-hosted control plane** (свой Netbird, без облака).

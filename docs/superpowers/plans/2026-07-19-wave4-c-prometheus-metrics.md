@@ -2,8 +2,9 @@
 
 > **Статус (2026-07-21):** ✅ Ф1 (backend `services/panel_metrics.py` парсер+summarize+scrape, `POST /api/panel/metrics`,
 > `test_panel_metrics.py` 7 тестов) + ✅ Ф2 (frontend `PanelManageModal` «Статистика» → блок «Метрики панели»).
-> R1/R2 закрыты по докам (нет живой панели). Проверено: unit-тесты + endpoint вживую на VPS-ноде без панели → 404.
-> **Полная проверка плиток с живыми данными — при развёрнутой панели (pending).**
+> R1/R2 закрыты по докам. **LIVE-verified (2026-07-21):** поднял мок Prometheus `:3001` (реальный `.env`+basic-auth)
+> на VPS → `/api/panel/metrics` вернул точную сводку (online 42, by-status, ноды 2/3). Весь путь SSH-скрейп→парс→summary
+> проверен на реальном SSH; плитки рендерят ту же форму. Плитки с ДАННЫМИ реальной Remnawave-панели — при живой панели.
 
 > eGames-вики. Лёгкий скрейп метрик панели (порт 3001, basic-auth) и вывод нескольких показателей нагрузки —
 > без Grafana/VictoriaMetrics-стека.

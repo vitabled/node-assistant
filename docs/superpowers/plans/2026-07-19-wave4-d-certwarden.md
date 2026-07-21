@@ -3,7 +3,9 @@
 > **Статус (2026-07-21):** ✅ Ф1-Ф3. Backend `services/certwarden.py`+`api/certwarden.py` (server deploy + наш
 > pull-and-restart клиент; `test_certwarden.py` 7 зелёных). Frontend Settings→«Инфраструктура» (`settings/InfraTab.tsx`).
 > Отклонение: тумблер `use_certwarden` в деплой-пайплайн НЕ вшивался (14-шаговый инвариант) — клиент ставится
-> отдельной операцией `/client/install`. pytest+tsc зелёные; живой деплой сервера — build-ahead (нет Certwarden-сервера).
+> отдельной операцией `/client/install`. pytest+tsc зелёные. **LIVE-verified (2026-07-21):** реально развернул
+> Certwarden-сервер на VPS через `/server/deploy` → контейнер `Up (healthy)`, порты 4050/4055/4060, реестр записан.
+> (client/install требует cert/key-имён+API-ключей из UI сервера — интерактивно, не автоматизировал.)
 
 > eGames-вики. Один Certwarden-сервер управляет сертификатами всех нод; клиенты на нодах тянут серты и
 > авто-рестартят Docker-контейнеры при обновлении. Placement — **выбор оператора** (бокс панели ИЛИ выделенный).
