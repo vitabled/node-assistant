@@ -359,3 +359,30 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - **`services/marzban_reality.py`** — `build_reality_patch` (PURE, deepcopy): переносит `realitySettings` по tag в существующий config-profile inbound (**security=reality форсится**; не добавляет/не удаляет inbounds; unmatched отчёт). `legacy_secret_cmd` — `SELECT secret_key FROM jwt` (silent через `get_output`).
 - **`api/migrate.py`** (`/api/migrate/*`): `preview` (счётчики+отчёт потерь, без записи), `reality` (PATCH профиля, `net_guard` на remnawave_url), `run` (confirm+стрим), `legacy-secret` (SSH). `remnawave_client`: `list/get/update_config_profile`. Frontend `rw/Migration.tsx` (замена заглушки rw-migration): 5-секционный визард, пароли/токены/секрет type=password, confirm перед migrate, любая операция блокирует все кнопки. Тесты: `test_migrate.py` (18), `Migration.test.tsx` (5).
 
+
+## 9. Wave 3 + Wave 4 — shipped deltas (планы `docs/superpowers/plans/2026-07-19-wave{3,4}-*`)
+> Кратко: изменения модели/пайплайна/дешборда, доехавшие в код. Планы — источник детализации.
+
+### 9a. Deploy: варианты ноды + тумблеры (Wave3 План B)
+- `DeployRequest` (models/deploy.py): `node_variant: "egames"|"vanilla"="egames"`, `install_hysteria2:bool=True`, `docker_mirror:bool=False`, `cookie_gate:bool=False`. E3 «torrent blocker» был добавлен и **откачен** (revert a7e60bd) — поля `install_torrent_blocker` НЕТ.
+- **Vanilla** (`pipeline.step_remnanode_vanilla` + `_render_vanilla_compose`/`_VANILLA_COMPOSE_TPL`): официальный `remnawave/node`, `network_mode: host`, только NODE_PORT/SECRET_KEY, БЕЗ nginx. В `run_pipeline`: `is_vanilla` → шаг 10 (SSL) и 12 (маскировка) ПРОПУСКАЮТСЯ, шаг 11 = vanilla-инсталл. `validate_by_mode`: vanilla → domain/email/cf опциональны, НО hysteria2 требует domain.
+- Шаг 14 (Hysteria2) гейтится: `if "hysteria2" in skip or not req.install_hysteria2`. `docker_mirror` → `_docker_mirror_script()` пишет `/etc/docker/daemon.json` registry-mirrors в шаге 2.
+- Frontend `DeployForm.tsx`: суб-табы eGames/Vanilla, тумблеры Hysteria2/Cookie-gate/Docker-mirror. **Селекторы сквадов УБРАНЫ** (5a) — авто-привязка на бэкенде (`step_create_node`: если `int_squads` пуст → берёт все внутренние сквады).
+
+### 9b. Dashboard: 2 вкладки Xray/Server uptime (Wave3 План A)
+- `Dashboard.tsx` — переключатель Xray uptime (2-уровневая группировка подписка→страна) / **Server uptime** (ручные серверы + подтяжка из `deploy_jobs`).
+- **`server_monitor` (backend, NEW):** `services/server_monitor_store.py` (per-account SQLite `server_monitor.db`, servers+samples, sync_deployed, аналитика как `metrics_store`) + `api/server_monitor.py` (`/api/server-monitor` CRUD + `/statuspage` + `/incidents`; `_probe` = TCP порт→22 fallback + ICMP; `monitor_loop` 60с). Роутер под `_auth` в main.py; `monitor_loop` в lifespan.
+- `XrayCheckerConfig.enabled` дефолт **True** (мониторинг вкл. по умолчанию); `xray_checker.autostart_checker()` стартует общий контейнер на буте; `subscriptions._schedule_checker_reload()` (debounce 8с) перезапускает чекер при CRUD подписок.
+- Users-статы (`stats/UsersStats.tsx`): большой мульти-лайн график загрузки нод (6a), селектор чекера включает «Server uptime».
+
+### 9c. Прочее Wave 3
+- **Автодетект существующего сервера (План B backend, 502b837):** `node_ops._DETECT_SETTINGS_SCRIPT` echo `NIVAL:key=value` (ssh_port/open_ports/domain/remnanode_port/xhttp_path/**has_token** — сам токен НЕ читается) + `_parse_settings`; `/api/node/detect` → `{results, settings}`. `DeployRequest.skip_components` пропускает уже установленные компоненты.
+- **Templates CodeMirror (План C 4a):** `Templates.tsx` `<textarea>`→`<JsonEditor>` (переиспользован из profiles); `$xhttp_path` добавлен в подстановку config-profile И в `_subst_host_vars` (step_create_hosts).
+- **SSL терминал сворачиваемый (План E 3a):** `App.tsx` certs-таб — `termOpen` (дефолт свёрнут → показаны Домены), деплой серта авто-раскрывает.
+- **Профили/ИИ-чат вынесены (План C 10a/E 11a):** `rw-profiles` в NAV_MAIN после Шаблонов; `assistant` таб (AiChat) в группе Автоматизация. **Отменено:** синхронизация профили↔шаблоны (10b, 9bf2f20).
+- `check_remnawave` принимает опц. тело `{panel_url, api_token}` (тест значений формы до сохранения) — 11b.
+
+### 9d. Хостинги (Wave 4 План A) — полный стек
+- Backend (594dfbb): `models/hostings.py` (`HostingBody`/`Tariff`/`Location` lat∈[-90,90]/lng∈[-180,180]), `services/hostings_store.py` (per-account `hostings.json`, атомарно+lock, MAX 500), `api/hostings.py` (`/api/hostings` CRUD под `_auth`). `test_hostings.py`. **geo-resolve эндпоинта НЕТ** (план предполагал — не реализован; резолв клиентский).
+- Frontend (926c94f): `components/hostings/{api,geo,HostingsCatalog,HostingsMap}.tsx`. Сайдбар-группа «Хостинги» (`hostings-map`/`hostings-list`).
+- **Карта — квирки:** `react-simple-maps` + `world-atlas` (топоjson `countries-110m.json` бандлится через `import`, нужен `src/vendor.d.ts` ambient-декларация `any`); `<Geographies geography>` получает **массив features** (`feature(topo, objects.countries).features`), НЕ FeatureCollection-объект (иначе не мапится); анимации `motion` (`motion/react`). Тоглы континентов фильтруют маркеры + «приблизить» (dimming стран нет). Новые npm-deps ставятся `npm install` внутри Docker-билда фронта — хосту npm не нужен.

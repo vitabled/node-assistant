@@ -1,5 +1,11 @@
 # Волна 4 · План A — Группа «Хостинги»: Карта + каталог хостингов
 
+> **Статус (2026-07-21):** ✅ Ф1 (backend: `hostings_store`/`api/hostings`/`models/hostings` + `test_hostings`, коммит 594dfbb).
+> ✅ Ф2-Ф4 (frontend: `components/hostings/{api,geo,HostingsCatalog,HostingsMap}.tsx` + сайдбар-группа + роуты + deps, коммит 926c94f).
+> **Отклонения от плана:** geo-resolve эндпоинта на бэкенде НЕТ — резолв города→координаты клиентский (`geo.ts` газеттир).
+> Карта на react-simple-maps + world-atlas (топоjson бандлится). Тоглы континентов фильтруют МАРКЕРЫ + «приблизить»
+> (без dimming стран — во избежание неточного numeric-ISO→континент join). Требуется `docker compose build frontend`.
+
 > Новая фича. Группа сайдбара «Хостинги» с двумя разделами: «Карта» (интерактивная оффлайн-вектор карта мира) и
 > «Хостинги» (карточки хостингов; их локации авто-отмечаются на карте с точностью до города).
 > Затрагивает: `frontend/src/components/Sidebar.tsx`, `App.tsx`, новый `components/hostings/*`, новый backend
