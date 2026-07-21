@@ -87,6 +87,13 @@ def _init() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_samples_cid_ts ON proxy_samples(checker_id, ts)"
         )
+        # Covering index for `_bars`' node discovery: it turns "which nodes does
+        # this checker have?" into an ordered covering scan instead of a temp
+        # B-tree DISTINCT (measured 388ms -> 98ms on 504k rows). Built once on
+        # first start for existing DBs (~0.6 s at that size).
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_cid_sid ON proxy_samples(checker_id, stable_id)"
+        )
 
 
 # Initialise the schema on import (idempotent — this is the "migration").
@@ -195,19 +202,33 @@ def _bars(n: int, checker_id: Optional[str] = None) -> dict[str, list[dict[str, 
     cc, cp = _cid_clause(checker_id)
     try:
         with _connect() as conn:
-            cur = conn.execute(
-                "SELECT stable_id, ts, online, latency_ms FROM ("
-                "  SELECT stable_id, ts, online, latency_ms, ROW_NUMBER() OVER ("
-                "    PARTITION BY stable_id ORDER BY ts DESC) AS rn"
-                "  FROM proxy_samples WHERE ts >= ?" + cc +
-                ") WHERE rn <= ? ORDER BY stable_id, ts ASC",
-                (since, *cp, n),
-            )
+            # One indexed tail per node, NOT a single ROW_NUMBER() query: the
+            # window function has to rank every row inside the 35-day retention
+            # window before the outer `rn <= n` filter, which measured at ~1.5-2 s
+            # on a half-million-row DB — on an endpoint the dashboard polls every
+            # 10 s. Per-node `WHERE stable_id=? ORDER BY ts DESC LIMIT n` rides
+            # idx_samples_sid_ts and touches only the n rows it returns.
+            # No ts filter on the discovery query: that is what lets it ride
+            # idx_samples_cid_sid as a covering scan. Retention already bounds the
+            # table to 35 days, and nodes with nothing inside the window are
+            # dropped below.
+            where = " WHERE checker_id = ?" if checker_id is not None else ""
+            ids = [r["stable_id"] for r in conn.execute(
+                "SELECT DISTINCT stable_id FROM proxy_samples" + where, cp,
+            ).fetchall()]
             out: dict[str, list[dict[str, Any]]] = {}
-            for r in cur.fetchall():
-                out.setdefault(r["stable_id"], []).append(
+            for sid in ids:
+                rows = conn.execute(
+                    "SELECT ts, online, latency_ms FROM proxy_samples "
+                    "WHERE stable_id=? AND ts >= ?" + cc + " ORDER BY ts DESC LIMIT ?",
+                    (sid, since, *cp, n),
+                ).fetchall()
+                if not rows:
+                    continue
+                out[sid] = [
                     {"ts": r["ts"], "status": _tick_status(r["online"], r["latency_ms"])}
-                )
+                    for r in reversed(rows)
+                ]
             return out
     except Exception:
         return _bars_from_ring(n, checker_id)

@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import signal
 import sys
 
 ROLES = ("monitoring", "deploy")
@@ -29,25 +30,68 @@ def _usage() -> None:
     print(f"usage: python -m app.worker [{'|'.join(ROLES)}]", file=sys.stderr)
 
 
+def _shutdown_event() -> asyncio.Event:
+    """Event set on SIGTERM/SIGINT.
+
+    `docker compose down/stop` sends SIGTERM to PID 1. Without a handler the
+    default disposition for PID 1 is to IGNORE it, so docker waits out the grace
+    period and SIGKILLs — leaving the lease held (the gateway then can't take
+    over for a full TTL) and any in-flight job claimed and RUNNING forever."""
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, AttributeError, ValueError):
+            # Windows dev boxes have no add_signal_handler for SIGTERM.
+            with contextlib.suppress(Exception):
+                signal.signal(sig, lambda *_: stop.set())
+    return stop
+
+
+async def _until_shutdown(work: list[asyncio.Task]) -> None:
+    """Run `work` until a shutdown signal arrives (or one of the tasks exits),
+    then cancel it and let each task's own `finally` clean up.
+
+    Pass ONLY never-returning tasks: this returns as soon as any of them does,
+    so a one-shot in the list would tear the whole process down the moment it
+    finished."""
+    stop = _shutdown_event()
+    waiter = asyncio.create_task(stop.wait())
+    try:
+        await asyncio.wait([*work, waiter], return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        waiter.cancel()
+        for t in work:
+            t.cancel()
+        for t in work:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await t
+
+
 async def _run_monitoring() -> None:
     # Imported here so the process only pulls in what its role needs.
     from app.api import rules, server_monitor, user_stats, xray_checker
+    from app.services import worker_lease
 
-    tasks = [
-        asyncio.create_task(xray_checker.poller_loop()),
-        asyncio.create_task(user_stats.collector_loop()),
-        asyncio.create_task(rules.rules_loop()),
-        asyncio.create_task(xray_checker.autostart_checker()),
-        asyncio.create_task(server_monitor.monitor_loop()),
-    ]
+    # autostart_checker is a ONE-SHOT boot hook, so it is deliberately kept out
+    # of the wait set — `_until_shutdown` returns when any task in that set does,
+    # and this one returns within seconds.
+    autostart = asyncio.create_task(xray_checker.autostart_checker())
     try:
-        await asyncio.gather(*tasks)
+        await _until_shutdown([
+            asyncio.create_task(xray_checker.poller_loop()),
+            asyncio.create_task(user_stats.collector_loop()),
+            asyncio.create_task(rules.rules_loop()),
+            asyncio.create_task(server_monitor.monitor_loop()),
+        ])
     finally:
-        for t in tasks:
-            t.cancel()
-        for t in tasks:
-            with contextlib.suppress(asyncio.CancelledError):
-                await t
+        autostart.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await autostart
+        # Hand the duty straight back instead of making the gateway wait out the
+        # lease TTL before it resumes monitoring.
+        worker_lease.release(worker_lease.MONITORING)
 
 
 async def _run_deploy() -> None:
@@ -60,7 +104,8 @@ async def _run_deploy() -> None:
             "deploy worker requires TASK_STORE=shared (the gateway and the worker "
             "must share the task store to exchange jobs and logs)"
         )
-    await job_runner.run_forever()
+    # run_forever's own `finally` fails the in-flight job and releases the lease.
+    await _until_shutdown([asyncio.create_task(job_runner.run_forever())])
 
 
 def main(argv: list[str]) -> int:

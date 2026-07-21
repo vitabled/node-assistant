@@ -43,7 +43,7 @@ from app.api import (
     library,
 )
 from app.api.auth import require_account
-from app.services import worker_lease
+from app.services import job_runner, shared_task_store, worker_lease
 from app.services.task_store import task_store
 
 
@@ -72,7 +72,13 @@ async def lifespan(app: FastAPI):
     #  - server monitor: probes each account's tracked servers by IP (TCP/ICMP)
     #    for the «Server uptime» dashboard tab.
     srv_monitor = asyncio.create_task(server_monitor.monitor_loop())
-    tasks = (poller, collector, rules_task, autostart, srv_monitor)
+    tasks = [poller, collector, rules_task, autostart, srv_monitor]
+    #  - recovery: with a shared task store, claim jobs nobody else will. It idles
+    #    while a real deploy-worker holds the duty, and picks up whatever that
+    #    worker left behind when it dies — without this, jobs queued in the window
+    #    before its lease expired would never run at all.
+    if shared_task_store.enabled():
+        tasks.append(asyncio.create_task(job_runner.run_forever(hold_lease=False)))
     try:
         yield
     finally:
@@ -81,6 +87,11 @@ async def lifespan(app: FastAPI):
         for t in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await t
+        # Hand back the duties we hold so a restart (or a worker starting up)
+        # does not have to wait out the lease TTL. Notably `autostart_checker`
+        # skips itself while another holder looks fresh — including this very
+        # process's stale lease from before a restart.
+        worker_lease.release(worker_lease.MONITORING)
 
 
 # The encryption key signs session JWTs AND derives the infra-billing vault key.
@@ -165,12 +176,25 @@ async def health():
     gateway is doing the work (monolith, or a split worker that died), a foreign
     `holder` means a dedicated container has it. Ungated on purpose — it is the
     compose healthcheck and exposes no account data."""
-    return {
+    duties = [
+        worker_lease.status(worker_lease.MONITORING),
+        worker_lease.status(worker_lease.DEPLOY_WORKER),
+    ]
+    body = {
         "ok": True,
         "role": worker_lease.role(),
         "taskStore": task_store.stats(),
-        "duties": [
-            worker_lease.status(worker_lease.MONITORING),
-            worker_lease.status(worker_lease.DEPLOY_WORKER),
-        ],
+        "duties": duties,
     }
+    # Half-split: a deploy-worker is running but this gateway is on the in-process
+    # store, so they share no queue — deploys silently keep running here and that
+    # container idles forever. Nothing breaks (the fallback is correct), but it
+    # looks like a working split, so say so out loud.
+    dw = next(d for d in duties if d["name"] == worker_lease.DEPLOY_WORKER)
+    if dw["fresh"] and not dw["self"] and task_store.mode != "shared":
+        body["warning"] = (
+            "deploy-worker is running but this gateway uses TASK_STORE=memory — "
+            "they share no queue, so deploys still run in the gateway. "
+            "Set TASK_STORE=shared to hand them off."
+        )
+    return body

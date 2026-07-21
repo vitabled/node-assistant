@@ -22,10 +22,14 @@ class StopRequest(BaseModel):
 
 @router.post("/deploy")
 async def deploy(req: DeployRequest):
-    # With a live split worker the pipeline runs there, so our local SSH-session
-    # cap does not apply; only guard the in-process path.
+    # The admission cap applies in BOTH modes, just against a different resource:
+    # locally it is the SSH-session semaphore, offloaded it is the queue depth.
+    # Without the second one the split would silently accept unbounded deploys
+    # into an invisible backlog instead of answering the same clear 503.
     offloading = job_runner.offload_available("deploy")
-    if not offloading and _deploy_sem._value == 0:
+    busy = (task_store.stats().get("queued", 0) >= settings.max_ssh_sessions
+            if offloading else _deploy_sem._value == 0)
+    if busy:
         raise HTTPException(
             status_code=503,
             detail=f"Server busy — max {settings.max_ssh_sessions} concurrent deploys reached",

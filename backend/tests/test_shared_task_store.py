@@ -225,6 +225,27 @@ def test_lease_blocks_a_second_holder_until_it_expires():
     assert worker_lease.acquire(name, ttl=60) is True       # taken over
 
 
+def test_health_warns_about_a_half_split_deployment():
+    """`--profile split` without TASK_STORE=shared on the gateway is not broken,
+    but it silently does nothing — the health endpoint must say so."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    assert "warning" not in client.get("/api/health").json()
+
+    sts._exec(
+        "INSERT INTO leases (name, holder, expires_at) VALUES (?,?,?) "
+        "ON CONFLICT(name) DO UPDATE SET holder=excluded.holder, expires_at=excluded.expires_at",
+        (worker_lease.DEPLOY_WORKER, "a-worker-container:1", 2 ** 31),
+    )
+    try:
+        body = client.get("/api/health").json()
+        assert "TASK_STORE=shared" in body["warning"]
+    finally:
+        sts._exec("DELETE FROM leases WHERE name=?", (worker_lease.DEPLOY_WORKER,))
+
+
 def test_lease_release_frees_the_duty():
     name = f"duty-{uuid.uuid4().hex[:8]}"
     worker_lease.acquire(name, ttl=60)

@@ -6,6 +6,7 @@ a worker in another process runs the job, and the gateway's WS subscriber sees
 the logs live — with an in-process fallback whenever no worker is alive.
 """
 import asyncio
+import contextlib
 import uuid
 
 import pytest
@@ -212,6 +213,93 @@ def test_cancel_flag_stops_a_running_job(shared, monkeypatch):
     asyncio.run(go())
     assert task.status == TaskStatus.FAILED
     assert task.error == "Остановлено пользователем"
+
+
+# ── nothing may be stranded ──────────────────────────────────────
+def test_a_job_claimed_by_a_dead_worker_is_failed_not_stranded(shared):
+    """A claimed row can only be advanced by its claimer. If that process is gone
+    the deploy card would spin forever, so it must be reaped."""
+    _no_worker()
+    task = shared.create(total_steps=14)
+    shared.enqueue(task.task_id, "deploy", {"ip": "10.0.0.1"})
+    claimed = shared.claim_next(["deploy"], "worker-that-then-died:1")
+    assert claimed is not None
+    claimed[0].set_step(3, TaskStatus.RUNNING)
+
+    assert job_runner.reap_orphans() >= 1
+    assert task.status == TaskStatus.FAILED
+    assert "недоступен" in (task.error or "")
+
+
+def test_reaping_never_touches_a_healthy_running_job(shared):
+    """The live worker keeps renewing the lease — its job must survive reaping."""
+    task = shared.create(total_steps=14)
+    shared.enqueue(task.task_id, "deploy", {"ip": "10.0.0.1"})
+    holder = "the-live-worker:7"
+    sts._exec(
+        "INSERT INTO leases (name, holder, expires_at) VALUES (?,?,?) "
+        "ON CONFLICT(name) DO UPDATE SET holder=excluded.holder, expires_at=excluded.expires_at",
+        (worker_lease.DEPLOY_WORKER, holder, 2 ** 31),
+    )
+    try:
+        shared.claim_next(["deploy"], holder)
+        job_runner.reap_orphans()
+        assert task.status != TaskStatus.FAILED
+    finally:
+        _no_worker()
+
+
+def test_a_job_cancelled_while_queued_is_never_started(shared):
+    """/api/deploy/stop already answered ok — the worker must not run it anyway."""
+    _no_worker()
+    task = shared.create(total_steps=14)
+    shared.enqueue(task.task_id, "deploy", {"ip": "10.0.0.1"})
+    assert shared.request_cancel(task.task_id) is True
+
+    assert shared.claim_next(["deploy"], "worker-1") is None
+    assert task.status == TaskStatus.FAILED
+    assert task.error == "Остановлено пользователем"
+
+
+def test_an_undecryptable_job_is_failed_not_orphaned(shared, monkeypatch):
+    """Claiming happens before the payload can be read, so a decrypt failure
+    (mismatched ENCRYPTION_KEY) must still end the task."""
+    _no_worker()
+    task = shared.create(total_steps=14)
+    shared.enqueue(task.task_id, "deploy", {"ip": "10.0.0.1"})
+    monkeypatch.setattr(sts, "_decrypt", lambda blob: None)
+
+    assert shared.claim_next(["deploy"], "worker-1") is None
+    assert task.status == TaskStatus.FAILED
+    assert "прочитать" in (task.error or "")
+
+
+def test_shutdown_fails_the_in_flight_job_and_releases_the_lease(shared, monkeypatch):
+    """SIGTERM during a deploy: the card must get a verdict, and the gateway must
+    be able to take the duty back immediately rather than after the TTL."""
+    started = asyncio.Event()
+
+    async def handler(payload, task):
+        task.set_step(1, TaskStatus.RUNNING)
+        started.set()
+        await asyncio.sleep(30)
+
+    monkeypatch.setitem(job_runner._HANDLERS, "t-shutdown", handler)
+    monkeypatch.setattr(job_runner, "_HEARTBEAT", 1)
+    task = shared.create(total_steps=1)
+    shared.enqueue(task.task_id, "t-shutdown", {})
+
+    async def go():
+        loop = asyncio.create_task(job_runner.run_forever(idle_poll=0.05))
+        await asyncio.wait_for(started.wait(), timeout=10)
+        loop.cancel()                                  # what SIGTERM does
+        with contextlib.suppress(asyncio.CancelledError):
+            await loop
+
+    asyncio.run(go())
+    assert task.status == TaskStatus.FAILED
+    assert task.error == "Рабочий процесс остановлен"
+    assert worker_lease.status(worker_lease.DEPLOY_WORKER)["holder"] is None
 
 
 # ── the whole loop, end to end ───────────────────────────────────

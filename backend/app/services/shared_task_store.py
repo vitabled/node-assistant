@@ -284,6 +284,21 @@ class SharedTask:
                     step, status = int(st["current_step"]), st["status"]
                     q.put_nowait(("step", step, status, self.total_steps))
                 if status in (TaskStatus.SUCCESS.value, TaskStatus.FAILED.value):
+                    # Drain before closing. The log SELECT above is capped at 500
+                    # rows and ran BEFORE the status read, so a final burst bigger
+                    # than that — or lines committed in between — would otherwise
+                    # be lost: ws.py breaks out of its loop on ('done',).
+                    while True:
+                        tail = _rows(
+                            "SELECT id, line FROM task_logs WHERE task_id=? AND id>? "
+                            "ORDER BY id ASC LIMIT 500",
+                            (self.task_id, last_id),
+                        )
+                        if not tail:
+                            break
+                        for r in tail:
+                            q.put_nowait(("log", r["line"]))
+                            last_id = r["id"]
                     q.put_nowait(("done",))
                     return
             except asyncio.CancelledError:
@@ -342,22 +357,68 @@ class SharedTaskStore:
         if not kinds:
             return None
         placeholders = ",".join("?" for _ in kinds)
+        # cancel_requested is honoured HERE: a job cancelled while still queued
+        # must never start. `POST /api/deploy/stop` already answered ok for it.
         row = _one(
             f"SELECT task_id, kind, total_steps FROM tasks WHERE kind IN ({placeholders}) "
-            "AND claimed_at IS NULL AND status=? ORDER BY created_at ASC LIMIT 1",
+            "AND claimed_at IS NULL AND status=? AND cancel_requested=0 "
+            "ORDER BY created_at ASC LIMIT 1",
             (*kinds, TaskStatus.PENDING.value),
         )
         if row is None:
+            self._finish_cancelled_queued(kinds)
             return None
         cur = _exec("UPDATE tasks SET claimed_by=?, claimed_at=? WHERE task_id=? AND claimed_at IS NULL",
                     (holder, int(time.time()), row["task_id"]))
         if cur.rowcount != 1:
             return None                      # lost the race
+        task = SharedTask(row["task_id"], int(row["total_steps"]))
         got = _one("SELECT payload_enc FROM tasks WHERE task_id=?", (row["task_id"],))
         payload = _decrypt(got["payload_enc"]) if got and got["payload_enc"] else None
         if payload is None:
+            # The row is already claimed, so nobody else can ever advance it —
+            # give it a verdict instead of leaving the card spinning forever.
+            # Usually means ENCRYPTION_KEY differs between gateway and worker.
+            task.add_log("\x1b[1;31m[СИСТЕМА] Не удалось расшифровать задание "
+                         "(ENCRYPTION_KEY отличается?).\x1b[0m")
+            task.finish(TaskStatus.FAILED, "Не удалось прочитать задание")
             return None
-        return SharedTask(row["task_id"], int(row["total_steps"])), row["kind"], payload
+        return task, row["kind"], payload
+
+    def _finish_cancelled_queued(self, kinds: list[str]) -> None:
+        """Close out jobs cancelled before anyone claimed them."""
+        placeholders = ",".join("?" for _ in kinds)
+        for r in _rows(
+            f"SELECT task_id FROM tasks WHERE kind IN ({placeholders}) AND claimed_at IS NULL "
+            "AND status=? AND cancel_requested=1",
+            (*kinds, TaskStatus.PENDING.value),
+        ):
+            _exec("UPDATE tasks SET status=?, error=?, updated_at=?, payload_enc=NULL WHERE task_id=?",
+                  (TaskStatus.FAILED.value, "Остановлено пользователем",
+                   int(time.time()), r["task_id"]))
+
+    def reap_orphans(self, alive_holders: set) -> int:
+        """Fail rows claimed by a process that no longer exists (see
+        job_runner.reap_orphans for how 'no longer exists' is decided)."""
+        rows = _rows(
+            "SELECT task_id, claimed_by FROM tasks WHERE claimed_by IS NOT NULL AND status IN (?,?)",
+            (TaskStatus.PENDING.value, TaskStatus.RUNNING.value),
+        )
+        n = 0
+        for r in rows:
+            if r["claimed_by"] in alive_holders:
+                continue
+            _exec("INSERT INTO task_logs (task_id, ts, line) VALUES (?,?,?)",
+                  (r["task_id"], int(time.time()),
+                   "\n\x1b[1;31m[СИСТЕМА] Рабочий процесс, выполнявший задачу, "
+                   "недоступен — задача прервана.\x1b[0m"))
+            _exec("UPDATE tasks SET status=?, error=?, updated_at=?, payload_enc=NULL WHERE task_id=?",
+                  (TaskStatus.FAILED.value, "Рабочий процесс недоступен",
+                   int(time.time()), r["task_id"]))
+            n += 1
+        if n:
+            log.warning("shared_task_store.reaped_orphans n=%d", n)
+        return n
 
     def request_cancel(self, task_id: str) -> bool:
         """Ask a worker in another process to stop. True when the task exists

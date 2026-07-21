@@ -111,6 +111,9 @@ class TaskStore:
     def cancel_requested(self, task_id: str) -> bool:
         return False
 
+    def reap_orphans(self, alive_holders: set) -> int:
+        return 0          # nothing is ever claimed by another process
+
     def stats(self) -> dict[str, Any]:
         active = sum(1 for t in self._tasks.values()
                      if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING))
