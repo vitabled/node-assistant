@@ -3,7 +3,7 @@ import {
   PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
-  Workflow, Bell, Bot,
+  Workflow, Bell, Bot, Map as MapIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -12,6 +12,7 @@ export type Tab =
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
+  | "hostings-map" | "hostings-list"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
@@ -45,6 +46,11 @@ const RW_TABS: NavItemDef[] = [
   { tab: "rw-variables", label: "Переменные",           Icon: SlidersHorizontal },
   { tab: "rw-backup",    label: "Резервное копирование", Icon: DatabaseBackup },
   { tab: "rw-migration", label: "Миграция",             Icon: ArrowLeftRight },
+];
+
+const HOSTINGS_TABS: NavItemDef[] = [
+  { tab: "hostings-map",  label: "Карта",    Icon: MapIcon },
+  { tab: "hostings-list", label: "Хостинги", Icon: Server  },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
@@ -121,6 +127,10 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Remnawave</p>
         {RW_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
+
+        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Хостинги</p>
+        {HOSTINGS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Инфра-биллинг</p>

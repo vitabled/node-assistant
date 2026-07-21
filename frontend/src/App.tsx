@@ -24,6 +24,8 @@ import { PanelDashboard }                   from "./components/rw/PanelDashboard
 import { SubPages }                        from "./components/rw/SubPages";
 import { PanelVariables }                  from "./components/rw/PanelVariables";
 import { Backup }                          from "./components/rw/Backup";
+import { HostingsCatalog }                from "./components/hostings/HostingsCatalog";
+import { HostingsMap }                     from "./components/hostings/HostingsMap";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
 import { InfraProjects }                  from "./components/infra/InfraProjects";
@@ -68,6 +70,8 @@ const CRUMB: Record<Tab, [string, string]> = {
   "rw-backup":       ["Remnawave", "Резервное копирование"],
   "rw-migration":    ["Remnawave", "Миграция"],
   "rw-profiles":     ["Node Installer", "Профили"],
+  "hostings-map":    ["Хостинги", "Карта"],
+  "hostings-list":   ["Хостинги", "Хостинги"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
   "infra-projects":  ["Инфра-биллинг", "Проекты"],
@@ -215,6 +219,9 @@ export default function App() {
           {tab === "rw-backup"    && <Backup />}
           {tab === "rw-migration" && <Migration />}
           {tab === "rw-profiles"  && <Profiles />}
+
+          {tab === "hostings-map"  && <HostingsMap />}
+          {tab === "hostings-list" && <HostingsCatalog />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}
