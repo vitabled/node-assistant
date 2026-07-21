@@ -15,6 +15,7 @@ import { TestServers } from "./settings/TestServers";
 import { McpTab } from "./settings/McpTab";
 import { InfraTab } from "./settings/InfraTab";
 import { ApiTokensTab } from "./settings/ApiTokensTab";
+import { DataTransfer } from "./settings/DataTransfer";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -786,7 +787,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "tokens" | "infra" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "tokens" | "transfer" | "infra" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -799,6 +800,7 @@ export function Settings() {
     { id: "testservers", label: "Сервера для тестирования" },
     { id: "mcp",         label: "MCP" },
     { id: "tokens",      label: "Токены API" },
+    { id: "transfer",    label: "Экспорт/импорт" },
     { id: "infra",       label: "Инфраструктура" },
     { id: "theme",       label: "Тема" },
   ];
@@ -827,6 +829,7 @@ export function Settings() {
         {sub === "testservers"  && <TestServersTab />}
         {sub === "mcp"          && <div className="flex flex-col gap-4 max-w-2xl"><McpTab /></div>}
         {sub === "tokens"       && <ApiTokensTab />}
+        {sub === "transfer"     && <DataTransfer />}
         {sub === "infra"        && <InfraTab />}
         {sub === "theme"        && <ThemeTab />}
       </div>
