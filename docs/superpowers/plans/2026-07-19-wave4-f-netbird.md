@@ -1,5 +1,11 @@
 # Волна 4 · План F — E8: self-hosted Netbird mesh-оверлей панель↔ноды
 
+> **Статус (2026-07-21):** ✅ Ф1-Ф3. Backend `services/netbird.py`+`api/netbird.py` (control-plane deploy via
+> getting-started.sh, PAT в Fernet-волте, setup-key через management API, agent join с `--disable-*-routes`;
+> `test_netbird.py` 7 зелёных). Frontend Settings→«Инфраструктура» (`settings/InfraTab.tsx`).
+> Отклонение: тумблер `join_netbird` в деплой-пайплайн НЕ вшивался (14-шаговый инвариант) — нода подключается
+> отдельной операцией `/agent/join`. pytest+tsc зелёные; живой деплой CP — build-ahead (нет Netbird-сервера).
+
 > eGames-вики (`/configuration/netbird/`). Приватная WireGuard-mesh между панелью и нодами для control-трафика
 > вместо публичного IP/SSH. **Self-hosted control plane** (свой Netbird, без облака).
 > Затрагивает: `services/netbird.py` (новый), `api/netbird.py` (новый), `frontend/rw/*` (управление), опц.

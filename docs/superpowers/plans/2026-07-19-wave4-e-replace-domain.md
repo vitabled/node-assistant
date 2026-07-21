@@ -1,5 +1,9 @@
 # Волна 4 · План E — E7: визард смены домена (панель + нода)
 
+> **Статус (2026-07-21):** ✅ Ф1-Ф3. Backend `services/replace_domain.py`+`api/replace_domain.py` (POST /node,/panel,
+> переиспользуют build_ssl_script; `test_replace_domain.py` 7 зелёных). Frontend `rw/ReplaceDomainModal.tsx` +
+> кнопки в `DeployCard` (нода) и `PanelManageModal` (панель). pytest+tsc зелёные; живой smoke — build-ahead.
+
 > eGames-вики (`/configuration/how-to-replace-a-domain/`). Мастер смены домена: новый серт → правка
 > `.env`/`docker-compose.yml`/`nginx.conf` → рестарт. Для **панели и ноды**.
 > Затрагивает: `services/replace_domain.py` (новый), `api/replace_domain.py` (новый), `frontend/rw/*` (панель) +

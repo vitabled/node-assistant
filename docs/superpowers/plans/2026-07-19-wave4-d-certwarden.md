@@ -1,5 +1,10 @@
 # Волна 4 · План D — E6: Certwarden (централизованный ACME)
 
+> **Статус (2026-07-21):** ✅ Ф1-Ф3. Backend `services/certwarden.py`+`api/certwarden.py` (server deploy + наш
+> pull-and-restart клиент; `test_certwarden.py` 7 зелёных). Frontend Settings→«Инфраструктура» (`settings/InfraTab.tsx`).
+> Отклонение: тумблер `use_certwarden` в деплой-пайплайн НЕ вшивался (14-шаговый инвариант) — клиент ставится
+> отдельной операцией `/client/install`. pytest+tsc зелёные; живой деплой сервера — build-ahead (нет Certwarden-сервера).
+
 > eGames-вики. Один Certwarden-сервер управляет сертификатами всех нод; клиенты на нодах тянут серты и
 > авто-рестартят Docker-контейнеры при обновлении. Placement — **выбор оператора** (бокс панели ИЛИ выделенный).
 > Затрагивает: `services/certwarden.py` (новый), `api/certwarden.py` (новый), `models` (запрос), `frontend/rw/*`
