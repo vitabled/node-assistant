@@ -13,8 +13,10 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter
+from pydantic import BaseModel, Field, field_validator
 
 from app.services import accounts, storage
+from app.services import worker_lease
 from app.services import user_stats_store as store
 from app.services.remnawave_client import RemnavaveClient
 from app.models.settings import AppSettings
@@ -42,6 +44,47 @@ async def top_users(hours: int = 24) -> dict[str, Any]:
 @router.get("/migrations")
 async def migrations(hours: int = 24) -> dict[str, Any]:
     return await store.migrations(max(1, min(hours, 720)))
+
+
+# ── Widget layout (Wave-5 Plan G) — per-account dashboard config ──
+
+_WIDGET_KINDS = {
+    "node-load", "avg-per-node", "top-users", "migrations",
+    "stable-nodes", "fast-nodes", "uptime-summary", "speedtest-history",
+}
+_MAX_WIDGETS = 40
+
+
+class WidgetInstance(BaseModel):
+    instance_id: str = Field(..., min_length=1, max_length=64)
+    kind: str
+    w: int = Field(1, ge=1, le=2)
+    order: int = 0
+    settings: dict = Field(default_factory=dict)
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v: str) -> str:
+        if v not in _WIDGET_KINDS:
+            raise ValueError(f"неизвестный тип виджета: {v}")
+        return v
+
+
+class WidgetLayout(BaseModel):
+    layout: list[WidgetInstance] = Field(default_factory=list, max_length=_MAX_WIDGETS)
+
+
+@router.get("/widgets")
+async def get_widgets() -> dict:
+    """The account's stats-widget layout ({layout: []} → frontend seeds default 6)."""
+    return {"layout": storage.load_stat_widgets().get("layout", [])}
+
+
+@router.put("/widgets")
+async def put_widgets(body: WidgetLayout) -> dict:
+    data = {"layout": [w.model_dump() for w in body.layout]}
+    storage.save_stat_widgets(data)
+    return data
 
 
 # ── Background collector ──────────────────────────────────────
@@ -85,9 +128,14 @@ async def _collect_account(account_id: str) -> None:
 async def collector_loop() -> None:
     """Runs for the app's lifetime; snapshots each account's Remnawave node load
     into the per-account user_stats store. One account's failure never kills the
-    loop (mirrors xray_checker.poller_loop). No request context → explicit account_id."""
+    loop (mirrors xray_checker.poller_loop). No request context → explicit account_id.
+
+    Gated on the `monitoring` lease (see services/worker_lease.py)."""
     while True:
         try:
+            if not worker_lease.acquire(worker_lease.MONITORING):
+                await asyncio.sleep(_COLLECT_INTERVAL)
+                continue
             for acc in accounts.list_accounts():
                 try:
                     await _collect_account(acc["id"])

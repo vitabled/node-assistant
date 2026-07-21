@@ -7,6 +7,29 @@
 // ============================================================
 
 import { useState } from 'react';
+import { HeadersEditor } from '../common/HeadersEditor';
+
+// Read/write the transport headers object for the active network, into the raw
+// streamSettings shape Xray expects (Wave-5 Plan F).
+function readTransportHeaders(ss: any): Record<string, string> {
+  const net = ss?.network;
+  if (net === 'ws') return ss?.wsSettings?.headers ?? {};
+  if (net === 'httpupgrade') return ss?.httpupgradeSettings?.headers ?? {};
+  if (net === 'tcp') return ss?.tcpSettings?.header?.request?.headers ?? {};
+  return {};
+}
+function writeTransportHeaders(ss: any, headers: Record<string, string>): Record<string, unknown> {
+  const net = ss?.network;
+  if (net === 'ws') return { wsSettings: { ...(ss.wsSettings || {}), headers } };
+  if (net === 'httpupgrade') return { httpupgradeSettings: { ...(ss.httpupgradeSettings || {}), headers } };
+  if (net === 'tcp') {
+    const tcp = ss.tcpSettings || {};
+    const header = tcp.header || {};
+    return { tcpSettings: { ...tcp, header: { ...header, request: { ...(header.request || {}), headers } } } };
+  }
+  return {};
+}
+const HEADER_NETWORKS = ['ws', 'httpupgrade', 'tcp'];
 import { X, Save, ChevronDown, ChevronRight } from 'lucide-react';
 import { PROTOCOLS, NETWORKS, SECURITIES } from './core/schema';
 import { validateInbound, validateOutbound } from './core/validators';
@@ -119,6 +142,16 @@ export function ItemModal({ kind, initial, onClose, onSave }: Props) {
             </div>
           </div>
 
+          {HEADER_NETWORKS.includes(item.streamSettings?.network || '') && (
+            <div className="field">
+              <label className="label">Заголовки транспорта ({item.streamSettings.network})</label>
+              <HeadersEditor
+                key={item.streamSettings.network}
+                value={readTransportHeaders(item.streamSettings)}
+                onChange={h => setStream(writeTransportHeaders(item.streamSettings, h))}
+              />
+            </div>
+          )}
           <JsonBlock label="settings (JSON)" value={item.settings} onChange={v => set({ settings: v })} />
           <JsonBlock label="streamSettings (JSON)" value={item.streamSettings} onChange={v => set({ streamSettings: v })} />
 

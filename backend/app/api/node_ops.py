@@ -24,6 +24,7 @@ from app.models.deploy import DeployRequest
 from app.services.ssh_manager import SSHSession
 from app.services.task_store import task_store, TaskStatus
 from app.services.backend_ip import get_backend_ip
+from app.services import job_runner
 from app.services import pipeline
 
 router = APIRouter(prefix="/api/node")
@@ -225,8 +226,19 @@ async def node_detect(req: NodeDetectRequest):
 @router.post("/step")
 async def node_step(req: NodeOpRequest, background_tasks: BackgroundTasks):
     task = task_store.create(total_steps=1)
-    background_tasks.add_task(_run_op, req, task.task_id)
+    # Reinstall re-runs pipeline.step_* over SSH and can be long, so it is
+    # offloaded to the deploy-worker when one is live; otherwise unchanged.
+    if not job_runner.offload(task, "node-op", req.model_dump(mode="json")):
+        background_tasks.add_task(_run_op, req, task.task_id)
     return {"task_id": task.task_id, "task_type": "node-op"}
+
+
+async def _job_node_op(payload: dict, task) -> None:
+    """deploy-worker entry for a queued node operation."""
+    await _run_op(NodeOpRequest(**payload), task.task_id)
+
+
+job_runner.register("node-op", _job_node_op)
 
 
 def _effective_port(req: NodeOpRequest) -> int:

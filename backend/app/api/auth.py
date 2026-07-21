@@ -8,10 +8,10 @@ client stores them per-account on the device (see the frontend auth store).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.services import accounts
+from app.services import accounts, api_tokens
 
 router = APIRouter(prefix="/api/auth")
 
@@ -51,14 +51,31 @@ async def login(body: Credentials):
     return _account_response(account)
 
 
-async def require_account(authorization: str = Header(default="")) -> str:
-    """FastAPI dependency: resolve the Bearer JWT into the active account id and
-    publish it on the `current_account` ContextVar. Raises 401 when the token is
-    missing, malformed, invalid, or names an account that no longer exists."""
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+async def require_account(request: Request, authorization: str = Header(default="")) -> str:
+    """FastAPI dependency: resolve the Bearer credential into the active account id
+    and publish it on the `current_account` ContextVar. Accepts either a session
+    JWT or a long-lived API token (``nai_...``, see services.api_tokens). Raises
+    401 when the credential is missing, malformed, invalid, or names an account
+    that no longer exists; 403 when a readonly API token is used on a mutating
+    method."""
     token = ""
     if authorization.lower().startswith("bearer "):
         token = authorization[7:].strip()
-    account_id = accounts.account_id_from_token(token) if token else None
+
+    api_tokens.token_readonly.set(False)
+    if token.startswith(api_tokens.TOKEN_PREFIX):
+        resolved = api_tokens.resolve(token)
+        account_id = resolved.account_id if resolved else None
+        if resolved and resolved.readonly:
+            if request.method not in _SAFE_METHODS:
+                raise HTTPException(403, "Токен только для чтения: запись запрещена")
+            api_tokens.token_readonly.set(True)
+    else:
+        account_id = accounts.account_id_from_token(token) if token else None
+
     if not account_id or not accounts.get(account_id):
         raise HTTPException(401, "Требуется авторизация")
     accounts.current_account.set(account_id)

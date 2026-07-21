@@ -159,6 +159,47 @@ class RemnavaveClient:
             )
         )
 
+    # ── Subscription templates (Wave-5 Plan D) ─────────────────
+
+    async def list_subscription_templates(self) -> list[dict]:
+        """GET /api/subscription-templates → response.templates list."""
+        payload = _unwrap(await self._req("GET", "/api/subscription-templates"))
+        if isinstance(payload, dict):
+            return payload.get("templates", [])
+        return payload if isinstance(payload, list) else []
+
+    async def get_subscription_template(self, uuid: str) -> dict:
+        """GET /api/subscription-templates/{uuid} → the template (with content)."""
+        return _unwrap(await self._req("GET", f"/api/subscription-templates/{uuid}"))
+
+    async def create_subscription_template(self, name: str, template_type: str) -> dict:
+        """POST /api/subscription-templates {name, templateType} — creates an EMPTY
+        template; content is written by a follow-up update. Returns the template."""
+        import re as _re
+
+        safe = _re.sub(r"[^A-Za-z0-9_\s\-]", "_", name)[:255].strip() or "template"
+        if len(safe) < 2:
+            safe = "tpl_" + safe
+        return _unwrap(await self._req(
+            "POST", "/api/subscription-templates",
+            json={"name": safe, "templateType": template_type},
+        ))
+
+    async def update_subscription_template(
+        self, uuid: str, *, template_json=None, encoded_template_yaml=None
+    ) -> dict:
+        """PATCH /api/subscription-templates — write template content (JSON cores use
+        templateJson, YAML cores use encodedTemplateYaml=base64(YAML))."""
+        body: dict = {"uuid": uuid}
+        if template_json is not None:
+            body["templateJson"] = template_json
+        if encoded_template_yaml is not None:
+            body["encodedTemplateYaml"] = encoded_template_yaml
+        return _unwrap(await self._req("PATCH", "/api/subscription-templates", json=body))
+
+    async def delete_subscription_template(self, uuid: str) -> dict:
+        return _unwrap(await self._req("DELETE", f"/api/subscription-templates/{uuid}"))
+
     # ── Nodes ──────────────────────────────────────────────────
 
     async def create_node(

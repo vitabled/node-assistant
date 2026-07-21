@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import re
+from urllib.parse import urlparse
 from typing import Any, AsyncIterator, Optional
 
 import httpx
@@ -33,7 +34,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import settings
 from app.models.settings import AiConfig, AppSettings
-from app.services import metrics_store, net_guard, rules_store, storage
+from app.services import metrics_store, net_guard, prompt_presets_store, rules_store, storage
 from app.services.remnawave_client import RemnavaveClient
 
 # Cap on a single tool result serialized back into the message history (prevents
@@ -195,19 +196,55 @@ class AgentError(Exception):
     pass
 
 
-async def _provider_turn(
-    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True
-) -> dict:
-    """One assistant turn. Returns {"text", "tool_calls", "raw"}. Raises AgentError
-    (redacted) on provider failure. SSRF guard: base_url is account-supplied and
-    fetched by the SERVER carrying the key — re-check it every turn (handles DNS
-    rebinding), same posture as net_guard elsewhere."""
+# CLIProxyAPI gateway (Plan J) container names reachable only on our network.
+_INTERNAL_GATEWAY_HOSTS = {"node-installer-cliproxy", "cli-proxy"}
+
+
+def _check_base_url(config: AiConfig) -> None:
+    """SSRF guard on the account-supplied base_url, re-run every turn (DNS
+    rebinding). Exemption: an INTERNAL CLIProxyAPI gateway on our
+    node-assistant-net is reached by container-name and is unroutable externally
+    — trusted, same posture as xray_checker._get_json for the local checker."""
+    if getattr(config, "gateway", "none") == "cliproxy" and getattr(config, "gateway_internal", False):
+        host = (urlparse(config.base_url).hostname or "").lower()
+        if host in _INTERNAL_GATEWAY_HOSTS:
+            return
     if not net_guard.is_safe_url(config.base_url):
         raise AgentError(
             "base_url не разрешён: нужен http(s) с публичным хостом (защита от SSRF)."
         )
+
+
+async def list_models(config: AiConfig, key: str) -> list[str]:
+    """Fetch available model ids from an OpenAI-format {base_url}/models endpoint
+    (CLIProxyAPI). Never raises — returns [] on any failure."""
+    try:
+        _check_base_url(config)
+    except AgentError:
+        return []
+    url = f"{config.base_url.rstrip('/')}/models"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.get(url, headers={"Authorization": f"Bearer {key}"})
+        if r.status_code >= 400:
+            return []
+        data = r.json()
+        items = data.get("data") if isinstance(data, dict) else None
+        return [m["id"] for m in (items or []) if isinstance(m, dict) and m.get("id")]
+    except Exception:
+        return []
+
+
+async def _provider_turn(
+    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True, system: str = ""
+) -> dict:
+    """One assistant turn. Returns {"text", "tool_calls", "raw"}. Raises AgentError
+    (redacted) on provider failure. SSRF guard runs every turn via
+    _check_base_url (base_url is account-supplied and fetched by the SERVER
+    carrying the key)."""
+    _check_base_url(config)
     if config.provider == "anthropic":
-        return await _anthropic_turn(config, key, messages, with_tools)
+        return await _anthropic_turn(config, key, messages, with_tools, system)
     return await _openai_turn(config, key, messages, with_tools)
 
 
@@ -251,13 +288,13 @@ async def _openai_turn(
 
 
 async def _anthropic_turn(
-    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True
+    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True, system: str = ""
 ) -> dict:
     url = f"{config.base_url.rstrip('/')}/messages"
     body: dict = {
         "model": config.model,
         "max_tokens": 1024,
-        "system": _SYSTEM,  # Anthropic takes system at top level, NOT in messages
+        "system": system or _SYSTEM,  # Anthropic takes system at top level, NOT in messages
         "messages": messages,
     }
     if with_tools:
@@ -362,6 +399,23 @@ _SYSTEM = (
     "Используй инструменты только для чтения данных панели. Не выдумывай данные."
 )
 
+# Non-editable suffix appended to EVERY active preset so a foreign preset (e.g.
+# the Cloudflare one) can't strip awareness of our read-only tools (Plan I).
+_TOOLING_SUFFIX = (
+    "У тебя есть read-only инструменты панели node-installer/Remnawave "
+    "(list_rules, list_subscriptions, node_health, list_nodes) — используй их для "
+    "чтения данных, не выдумывай."
+)
+
+
+def build_system(account_id: str, config: AiConfig) -> str:
+    """The effective system prompt: the account's active preset (fallback: the
+    `default` builtin) + our always-on tooling suffix."""
+    text = prompt_presets_store.resolve_active_text(
+        getattr(config, "active_preset_id", "") or "", account_id
+    )
+    return f"{text or _SYSTEM}\n\n{_TOOLING_SUFFIX}"
+
 
 async def run_agent(
     prompt: str, config: AiConfig, account_id: str, key: Optional[str] = None
@@ -373,11 +427,12 @@ async def run_agent(
         yield {"type": "error", "message": "API-ключ провайдера не задан."}
         return
 
+    system = build_system(account_id, config)
     if config.provider == "anthropic":
         messages: list[dict] = [{"role": "user", "content": prompt}]
     else:
         messages = [
-            {"role": "system", "content": _SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ]
 
@@ -387,7 +442,7 @@ async def run_agent(
         # final answer from what it fetched, instead of dead-ending on the budget.
         is_last = step == steps - 1
         try:
-            turn = await _provider_turn(config, key, messages, with_tools=not is_last)
+            turn = await _provider_turn(config, key, messages, with_tools=not is_last, system=system)
         except AgentError as exc:
             yield {"type": "error", "message": str(exc)}
             return

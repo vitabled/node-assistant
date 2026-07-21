@@ -3,16 +3,16 @@ import {
   PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
-  Workflow, Bell, Bot, Map as MapIcon,
+  Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen, FileJson,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export type Tab =
-  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings"
+  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings" | "mihomo" | "configs"
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
-  | "hostings-map" | "hostings-list"
+  | "hostings-map" | "hostings-list" | "library"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
@@ -25,6 +25,10 @@ const NAV_MAIN: NavItemDef[] = [
   { tab: "templates",  label: "Шаблоны",       Icon: FileCode2 },
   // Профили — сразу после «Шаблонов» (10a); раздел независим от шаблонов.
   { tab: "rw-profiles", label: "Профили",      Icon: UserCog   },
+  // Mihomo-конфигуратор (встроенный, iframe) — рядом с редакторами конфигов.
+  { tab: "mihomo",      label: "Mihomo",       Icon: Waypoints },
+  // Пользовательские конфиги (шаблоны по типам клиента, Wave-5 План D).
+  { tab: "configs",     label: "Конфиги",      Icon: FileJson  },
   { tab: "hosts",      label: "Хосты",         Icon: Network   },
   { tab: "traffic",    label: "Трафик",        Icon: Gauge     },
 ];
@@ -48,9 +52,11 @@ const RW_TABS: NavItemDef[] = [
   { tab: "rw-migration", label: "Миграция",             Icon: ArrowLeftRight },
 ];
 
+// Группа «Справка» (бывш. «Хостинги»): карта хостингов + каталог + библиотека знаний.
 const HOSTINGS_TABS: NavItemDef[] = [
-  { tab: "hostings-map",  label: "Карта",    Icon: MapIcon },
-  { tab: "hostings-list", label: "Хостинги", Icon: Server  },
+  { tab: "hostings-map",  label: "Карта хостингов", Icon: MapIcon  },
+  { tab: "hostings-list", label: "Хостинги",        Icon: Server   },
+  { tab: "library",       label: "Библиотека",      Icon: BookOpen },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
@@ -129,7 +135,7 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         {RW_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Хостинги</p>
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Справка</p>
         {HOSTINGS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />

@@ -1,4 +1,6 @@
 import { useState, useEffect, type ReactNode } from "react";
+import { Pencil, Plus, Trash2, ChevronUp, ChevronDown, Columns2 } from "lucide-react";
+import { useStatWidgets, WIDGET_KINDS, type WidgetKind } from "./statWidgetsStore";
 import { TrendingUp, BarChart3, Users, ArrowRightLeft, ShieldCheck, Zap } from "lucide-react";
 import { WidgetSettings } from "./WidgetSettings";
 
@@ -355,9 +357,24 @@ function WFastNodes({ instances }: { instances: Instance[] }) {
   );
 }
 
+// Widget registry (Wave-5 Plan G) — the store holds only layout; kind→component here.
+interface WidgetCtx { nameMap: Record<string, string>; instances: Instance[] }
+const WIDGETS: Record<WidgetKind, { title: string; render: (c: WidgetCtx) => ReactNode }> = {
+  "node-load":     { title: "Загрузка нод",       render: () => <WNodeLoad /> },
+  "avg-per-node":  { title: "Среднее и пик",      render: () => <WAvgPerNode /> },
+  "top-users":     { title: "Топ пользователей",  render: () => <WTopUsers /> },
+  "migrations":    { title: "Миграции",           render: c => <WMigrations nameMap={c.nameMap} /> },
+  "stable-nodes":  { title: "Стабильные ноды",    render: c => <WStableNodes instances={c.instances} /> },
+  "fast-nodes":    { title: "Быстрые ноды",       render: c => <WFastNodes instances={c.instances} /> },
+};
+
 export function UsersStats() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [nameMap, setNameMap] = useState<Record<string, string>>({});
+  const { layout, editing, hydrate, setEditing, add, remove, resize, move } = useStatWidgets();
+  const [palette, setPalette] = useState(false);
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
     getJson("/api/checker/instances").then(d => setInstances(d.instances ?? [{ id: "local", name: "Локальный чекер", kind: "local" }])).catch(() => setInstances([{ id: "local", name: "Локальный чекер", kind: "local" }]));
     getJson("/api/stats/users/node-load?hours=720").then(d => {
@@ -371,18 +388,55 @@ export function UsersStats() {
     <div className="ni-pagebody" style={{ flex: 1, overflowY: "auto", padding: 20 }}>
       <div className="ni-pagehead" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
         <Users size={18} style={{ color: "var(--accent)" }} />
-        <div>
+        <div style={{ flex: 1 }}>
           <h1 style={{ fontSize: 16, fontWeight: 700, color: "var(--t-hi)" }}>Статистика пользователей</h1>
           <p style={{ fontSize: 12, color: "var(--t-low)" }}>Загрузка нод, миграции и качество — по историческим снимкам</p>
         </div>
+        <div className="ni-pagehead-actions" style={{ display: "flex", gap: 6 }}>
+          {editing && (
+            <div style={{ position: "relative" }}>
+              <button className="btn btn-sm" onClick={() => setPalette(p => !p)}><Plus size={13} /> Виджет</button>
+              {palette && (
+                <div className="card" style={{ position: "absolute", right: 0, top: "110%", zIndex: 20, padding: 6, display: "flex", flexDirection: "column", gap: 2, minWidth: 190 }}>
+                  {WIDGET_KINDS.map(k => (
+                    <button key={k} className="navitem" style={{ textAlign: "left" }} onClick={() => { add(k); setPalette(false); }}>
+                      {WIDGETS[k].title}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <button className={`btn btn-sm ${editing ? "btn-primary" : ""}`} onClick={() => setEditing(!editing)}>
+            <Pencil size={13} /> {editing ? "Готово" : "Редактировать"}
+          </button>
+        </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2" style={{ display: "grid", gap: 16 }}>
-        <WNodeLoad />
-        <WAvgPerNode />
-        <WTopUsers />
-        <WMigrations nameMap={nameMap} />
-        <WStableNodes instances={instances} />
-        <WFastNodes instances={instances} />
+        {[...layout].sort((a, b) => a.order - b.order).map(inst => {
+          const def = WIDGETS[inst.kind];
+          if (!def) return null;
+          return (
+            <div key={inst.instanceId} style={{ gridColumn: inst.w === 2 ? "1 / -1" : undefined, position: "relative" }}>
+              {editing && (
+                <div style={{ position: "absolute", top: 6, right: 6, zIndex: 10, display: "flex", gap: 2,
+                  background: "var(--bg2)", border: "1px solid var(--line-soft)", borderRadius: "var(--r-sm)", padding: 2 }}>
+                  <button className="iconbtn" title="Вверх" onClick={() => move(inst.instanceId, -1)}><ChevronUp size={13} /></button>
+                  <button className="iconbtn" title="Вниз" onClick={() => move(inst.instanceId, 1)}><ChevronDown size={13} /></button>
+                  <button className="iconbtn" title="Ширина 1↔2" onClick={() => resize(inst.instanceId, inst.w === 2 ? 1 : 2)}><Columns2 size={13} /></button>
+                  <button className={`iconbtn ${confirmDel === inst.instanceId ? "text-[var(--err)]" : ""}`} title="Удалить"
+                    onClick={() => {
+                      if (confirmDel === inst.instanceId) { remove(inst.instanceId); setConfirmDel(null); }
+                      else { setConfirmDel(inst.instanceId); setTimeout(() => setConfirmDel(c => (c === inst.instanceId ? null : c)), 3000); }
+                    }}>
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              )}
+              {def.render({ nameMap, instances })}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

@@ -20,7 +20,7 @@ def _auth():
 def test_sample_once_records_scraped_proxies(monkeypatch):
     recorded = {}
 
-    async def fake_fetch():
+    async def fake_fetch(base_url=None, cfg=None):
         return [{"stableId": "n1", "online": True}, {"stableId": "n2", "online": False}]
 
     async def fake_record(proxies):
@@ -35,7 +35,7 @@ def test_sample_once_records_scraped_proxies(monkeypatch):
 
 
 def test_sample_once_returns_zero_when_fetch_fails(monkeypatch):
-    async def boom():
+    async def boom(base_url=None, cfg=None):
         raise RuntimeError("checker unreachable")
 
     monkeypatch.setattr(xcapi.xc, "fetch_proxies", boom)

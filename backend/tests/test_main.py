@@ -10,7 +10,13 @@ client = TestClient(app)
 
 def test_health_is_public():
     r = client.get("/api/health")
-    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    # Plan M: health also reports which process owns each background duty.
+    assert body["role"] == "gateway"
+    assert body["taskStore"]["mode"] == "memory"
+    assert {d["name"] for d in body["duties"]} == {"monitoring", "deploy-worker"}
 
 
 def test_auth_routes_are_public():

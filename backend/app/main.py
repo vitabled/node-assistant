@@ -36,8 +36,15 @@ from app.api import (
     replace_domain,
     certwarden,
     netbird,
+    api_tokens,
+    config_templates,
+    ai_prompts,
+    export_io,
+    library,
 )
 from app.api.auth import require_account
+from app.services import job_runner, shared_task_store, worker_lease
+from app.services.task_store import task_store
 
 
 @contextlib.asynccontextmanager
@@ -52,6 +59,12 @@ async def lifespan(app: FastAPI):
     #    receiver, not here.
     #  - autostart: on boot, start the shared xray-checker if any account has it
     #    enabled (monitoring is on by default now) and Docker is available.
+    #
+    # All five are gated on the `monitoring` worker lease. In the default
+    # single-container deployment this process holds it and they behave exactly as
+    # before; under `docker compose --profile split` the dedicated `monitoring`
+    # container takes the lease and these copies idle — and take over again by
+    # themselves if that container dies. See services/worker_lease.py.
     poller = asyncio.create_task(xray_checker.poller_loop())
     collector = asyncio.create_task(user_stats.collector_loop())
     rules_task = asyncio.create_task(rules.rules_loop())
@@ -59,7 +72,13 @@ async def lifespan(app: FastAPI):
     #  - server monitor: probes each account's tracked servers by IP (TCP/ICMP)
     #    for the «Server uptime» dashboard tab.
     srv_monitor = asyncio.create_task(server_monitor.monitor_loop())
-    tasks = (poller, collector, rules_task, autostart, srv_monitor)
+    tasks = [poller, collector, rules_task, autostart, srv_monitor]
+    #  - recovery: with a shared task store, claim jobs nobody else will. It idles
+    #    while a real deploy-worker holds the duty, and picks up whatever that
+    #    worker left behind when it dies — without this, jobs queued in the window
+    #    before its lease expired would never run at all.
+    if shared_task_store.enabled():
+        tasks.append(asyncio.create_task(job_runner.run_forever(hold_lease=False)))
     try:
         yield
     finally:
@@ -68,6 +87,11 @@ async def lifespan(app: FastAPI):
         for t in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await t
+        # Hand back the duties we hold so a restart (or a worker starting up)
+        # does not have to wait out the lease TTL. Notably `autostart_checker`
+        # skips itself while another holder looks fresh — including this very
+        # process's stale lease from before a restart.
+        worker_lease.release(worker_lease.MONITORING)
 
 
 # The encryption key signs session JWTs AND derives the infra-billing vault key.
@@ -124,6 +148,11 @@ app.include_router(hostings.router, dependencies=_auth)
 app.include_router(replace_domain.router, dependencies=_auth)
 app.include_router(certwarden.router, dependencies=_auth)
 app.include_router(netbird.router, dependencies=_auth)
+app.include_router(api_tokens.router, dependencies=_auth)
+app.include_router(config_templates.router, dependencies=_auth)
+app.include_router(ai_prompts.router, dependencies=_auth)
+app.include_router(export_io.router, dependencies=_auth)
+app.include_router(library.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.
@@ -141,4 +170,31 @@ app.include_router(rules.webhook_router)
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True}
+    """Liveness + which process currently owns each background duty.
+
+    `duties` is the split's observability surface: `self: true` means this
+    gateway is doing the work (monolith, or a split worker that died), a foreign
+    `holder` means a dedicated container has it. Ungated on purpose — it is the
+    compose healthcheck and exposes no account data."""
+    duties = [
+        worker_lease.status(worker_lease.MONITORING),
+        worker_lease.status(worker_lease.DEPLOY_WORKER),
+    ]
+    body = {
+        "ok": True,
+        "role": worker_lease.role(),
+        "taskStore": task_store.stats(),
+        "duties": duties,
+    }
+    # Half-split: a deploy-worker is running but this gateway is on the in-process
+    # store, so they share no queue — deploys silently keep running here and that
+    # container idles forever. Nothing breaks (the fallback is correct), but it
+    # looks like a working split, so say so out loud.
+    dw = next(d for d in duties if d["name"] == worker_lease.DEPLOY_WORKER)
+    if dw["fresh"] and not dw["self"] and task_store.mode != "shared":
+        body["warning"] = (
+            "deploy-worker is running but this gateway uses TASK_STORE=memory — "
+            "they share no queue, so deploys still run in the gateway. "
+            "Set TASK_STORE=shared to hand them off."
+        )
+    return body

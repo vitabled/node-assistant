@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import {
   CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight,
 } from "lucide-react";
@@ -16,6 +16,9 @@ import { UsersStats }                      from "./components/stats/UsersStats";
 import { SpeedTests }                      from "./components/stats/SpeedTests";
 import { Placeholder }                     from "./components/rw/Placeholder";
 import { Profiles }                         from "./components/profiles/Profiles";
+import { MihomoEditor }                     from "./components/MihomoEditor";
+import { ConfigTemplates }                  from "./components/configs/ConfigTemplates";
+import { Library }                          from "./components/Library";
 import { RuleBuilder }                      from "./components/automation/RuleBuilder";
 import { Notifications }                    from "./components/automation/Notifications";
 import { AiChat }                           from "./components/settings/AiChat";
@@ -42,7 +45,26 @@ import { tabKey, getActiveId }             from "./auth/store";
 import {
   applyAccent, applyDensity, applyThemeMode, applySkin,
   loadAccent, loadDensity, loadThemeMode, loadSkin,
+  loadNeonGlow, applyNeonGlow,
 } from "./theme/tweaks";
+import { motion } from "motion/react";
+import { tabFade, useMotionEnabled } from "./theme/motion";
+
+// Fade/slide the active screen in on tab change; a plain div when motion is off
+// so layout is byte-identical. Keyed by tab → remounts and replays the enter
+// animation each switch (enter-only; the screen content is driven by `tab`, so
+// an AnimatePresence exit copy would render empty — not worth the blank delay).
+// Preserves the flex-column context of <main>.
+function Screen({ tabKey: k, children }: { tabKey: string; children: ReactNode }) {
+  const on = useMotionEnabled();
+  const style = { flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } as const;
+  if (!on) return <div style={style}>{children}</div>;
+  return (
+    <motion.div key={k} style={style} variants={tabFade} initial="initial" animate="animate">
+      {children}
+    </motion.div>
+  );
+}
 
 const SIDEBAR_KEY = "sidebar_collapsed";
 
@@ -70,8 +92,11 @@ const CRUMB: Record<Tab, [string, string]> = {
   "rw-backup":       ["Remnawave", "Резервное копирование"],
   "rw-migration":    ["Remnawave", "Миграция"],
   "rw-profiles":     ["Node Installer", "Профили"],
-  "hostings-map":    ["Хостинги", "Карта"],
-  "hostings-list":   ["Хостинги", "Хостинги"],
+  "mihomo":          ["Node Installer", "Mihomo"],
+  "configs":         ["Node Installer", "Пользовательские конфиги"],
+  "hostings-map":    ["Справка", "Карта хостингов"],
+  "hostings-list":   ["Справка", "Хостинги"],
+  "library":         ["Справка", "Библиотека"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
   "infra-projects":  ["Инфра-биллинг", "Проекты"],
@@ -123,6 +148,7 @@ export default function App() {
     applyThemeMode(loadThemeMode(getActiveId()));
     applyAccent(loadAccent());
     applyDensity(loadDensity());
+    applyNeonGlow(loadNeonGlow());
   }, []);
 
   // ── Certs task state ───────────────────────────────────────
@@ -200,6 +226,7 @@ export default function App() {
 
         {/* Screen */}
         <main className="ni-main" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <Screen tabKey={tab}>
           {tab === "dashboard" && <Dashboard />}
           {tab === "deploy" && <DeployDashboard />}
           {tab === "templates" && <Templates />}
@@ -219,9 +246,12 @@ export default function App() {
           {tab === "rw-backup"    && <Backup />}
           {tab === "rw-migration" && <Migration />}
           {tab === "rw-profiles"  && <Profiles />}
+          {tab === "mihomo"       && <MihomoEditor />}
+          {tab === "configs"      && <ConfigTemplates />}
 
           {tab === "hostings-map"  && <HostingsMap />}
           {tab === "hostings-list" && <HostingsCatalog />}
+          {tab === "library" && <Library />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}
@@ -300,6 +330,7 @@ export default function App() {
               </div>
             </div>
           )}
+          </Screen>
         </main>
       </div>
 

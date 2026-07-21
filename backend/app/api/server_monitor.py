@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.services import accounts
+from app.services import worker_lease
 from app.services import server_monitor_store as store
 
 router = APIRouter(prefix="/api/server-monitor")
@@ -220,9 +221,14 @@ async def _monitor_account(account_id: str) -> None:
 
 async def monitor_loop() -> None:
     """Runs for the app's lifetime; probes each account's tracked servers every
-    `_MONITOR_INTERVAL`s. One account's failure never kills the loop."""
+    `_MONITOR_INTERVAL`s. One account's failure never kills the loop.
+
+    Gated on the `monitoring` lease (see services/worker_lease.py)."""
     while True:
         try:
+            if not worker_lease.acquire(worker_lease.MONITORING):
+                await asyncio.sleep(_MONITOR_INTERVAL)
+                continue
             for acc in accounts.list_accounts():
                 try:
                     await _monitor_account(acc["id"])

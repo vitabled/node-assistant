@@ -1,42 +1,29 @@
 """
-In-memory task state store with typed pub/sub queue.
+Task state store with typed pub/sub queue.
 
 Queue item shapes:
   ("log",  text: str)                         — log line
   ("step", step: int, status: str, total: int) — step/status changed
   ("done",)                                   — stream finished (success or fail)
+
+Two implementations sit behind the module-level `task_store` singleton:
+  * `TaskStore` (default) — in-process dict, exactly as before.
+  * `SharedTaskStore`     — SQLite under DATA_DIR, so a worker in a SEPARATE
+                            process can stream into a task this process serves
+                            over `/ws/logs/{task_id}` (Plan M, `--profile split`).
+Selected by env `TASK_STORE=memory|shared`; `memory` keeps the monolith byte-for-byte.
 """
 import asyncio
+import os
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
-
-class TaskStatus(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCESS = "success"
-    FAILED  = "failed"
-
-
-STEP_LABELS = [
-    "Подключение к серверу",
-    "Обновление системы",
-    "Node Accelerator (оптимизация ОС)",
-    "TrafficGuard (защита от сканеров)",
-    "Тест-инструменты",
-    "Добавление порта SSH",
-    "Перезагрузка",
-    "Проверка нового порта SSH",
-    "Удаление старого порта SSH",
-    "Cloudflare DNS + SSL",
-    "Установка Remnanode",
-    "Уникализация маскировочного сайта",
-    "WARP Native",
-    "Hysteria2",
-]
+# Defined in a leaf module so `shared_task_store` can use them without importing
+# this one (which would be a cycle — see task_types). Re-exported here because
+# ~250 call sites import them from `app.services.task_store`.
+from app.services.task_types import STEP_LABELS, TaskStatus  # noqa: F401
 
 
 @dataclass
@@ -98,6 +85,8 @@ class Task:
 
 
 class TaskStore:
+    mode = "memory"
+
     def __init__(self) -> None:
         self._tasks: dict[str, Task] = {}
 
@@ -113,5 +102,31 @@ class TaskStore:
     def cleanup(self, task_id: str) -> None:
         self._tasks.pop(task_id, None)
 
+    # ── parity with SharedTaskStore ──
+    # In-process work is cancelled through its asyncio handle (see api/deploy.py),
+    # so there is never a cross-process task to flag here.
+    def request_cancel(self, task_id: str) -> bool:
+        return False
 
-task_store = TaskStore()
+    def cancel_requested(self, task_id: str) -> bool:
+        return False
+
+    def reap_orphans(self, alive_holders: set) -> int:
+        return 0          # nothing is ever claimed by another process
+
+    def stats(self) -> dict[str, Any]:
+        active = sum(1 for t in self._tasks.values()
+                     if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING))
+        return {"mode": self.mode, "active": active, "queued": 0}
+
+
+def _build_store():
+    """Pick the implementation from env. Import is deferred to here so
+    `shared_task_store` can import TaskStatus/STEP_LABELS from this module."""
+    if os.getenv("TASK_STORE", "memory").strip().lower() == "shared":
+        from app.services.shared_task_store import SharedTaskStore
+        return SharedTaskStore()
+    return TaskStore()
+
+
+task_store = _build_store()

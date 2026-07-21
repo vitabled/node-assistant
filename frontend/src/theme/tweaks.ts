@@ -1,7 +1,7 @@
 // Appearance tweaks — accent colour + density. Writes CSS variables on :root,
 // fully self-contained (no other component needs to know). Persisted locally.
 
-export type AccentKey = "blue" | "green" | "violet" | "amber" | "cyan";
+export type AccentKey = "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime";
 export type Density = "comfortable" | "compact";
 export type ThemeMode = "light" | "dark" | "system";
 
@@ -14,18 +14,22 @@ export const THEME_MODES: { key: ThemeMode; label: string }[] = [
 // Design skin — a second, independent theme axis on :root (data-skin), on top of
 // the light/dark data-theme axis. "apple" = System-Settings aesthetic (SF font,
 // iOS controls, glass); "console" = the JetBrains-Mono default. Apple is default.
-export type AppSkin = "apple" | "console";
+export type AppSkin = "apple" | "console" | "neon";
 export const SKINS: { key: AppSkin; label: string }[] = [
   { key: "apple",   label: "Apple" },
   { key: "console", label: "Консоль" },
+  { key: "neon",    label: "Неон" },
 ];
 
 export const ACCENTS: Record<AccentKey, { base: string; hi: string; ink: string }> = {
-  blue:   { base: "#4C8DFF", hi: "#82AEFF", ink: "#0A0E16" },
-  green:  { base: "#3ECF8E", hi: "#63E0A7", ink: "#04140D" },
-  violet: { base: "#9D7BFF", hi: "#B9A0FF", ink: "#0E0A1A" },
-  amber:  { base: "#F0B054", hi: "#F7C77E", ink: "#1A1204" },
-  cyan:   { base: "#38C3D2", hi: "#6FD8E4", ink: "#041416" },
+  blue:    { base: "#4C8DFF", hi: "#82AEFF", ink: "#0A0E16" },
+  green:   { base: "#3ECF8E", hi: "#63E0A7", ink: "#04140D" },
+  violet:  { base: "#9D7BFF", hi: "#B9A0FF", ink: "#0E0A1A" },
+  amber:   { base: "#F0B054", hi: "#F7C77E", ink: "#1A1204" },
+  cyan:    { base: "#38C3D2", hi: "#6FD8E4", ink: "#041416" },
+  // Neon-forward hues — work on every skin, but "fire" under the neon skin's glow.
+  magenta: { base: "#FF4D9D", hi: "#FF80BC", ink: "#1A0510" },
+  lime:    { base: "#B4FF3A", hi: "#CDFF77", ink: "#0C1400" },
 };
 
 function hexA(hex: string, a: number): string {
@@ -41,6 +45,9 @@ export function applyAccent(key: AccentKey): void {
   r.setProperty("--accent-ink", a.ink);
   r.setProperty("--accent-dim", hexA(a.base, 0.13));
   r.setProperty("--accent-line", hexA(a.base, 0.4));
+  // Glow colour derived from the accent, emitted on every skin. Only the neon
+  // skin renders it (via --glow); apple/console keep --glow:none → no change.
+  r.setProperty("--accent-glow", hexA(a.base, 0.55));
 }
 
 export function applyDensity(d: Density): void {
@@ -110,8 +117,23 @@ export function saveThemeMode(accountId: string | null | undefined, m: ThemeMode
   localStorage.setItem(themeModeKey(accountId), m);
 }
 export function loadSkin(accountId?: string | null): AppSkin {
-  return localStorage.getItem(skinKey(accountId)) === "console" ? "console" : "apple";
+  const v = localStorage.getItem(skinKey(accountId));
+  return v === "console" || v === "neon" ? v : "apple";
 }
 export function saveSkin(accountId: string | null | undefined, s: AppSkin): void {
   localStorage.setItem(skinKey(accountId), s);
+}
+
+// Device-global toggles (like accent/density). Motion defaults ON (but
+// prefers-reduced-motion always wins at runtime); neon-glow defaults ON and only
+// affects the neon skin. applyNeonGlow stamps data-glow so CSS can force
+// --glow:none when the user disables it even under neon.
+const MOTION_KEY = "ni_motion";
+const NEON_GLOW_KEY = "ni_neon_glow";
+export function loadMotion(): boolean { return localStorage.getItem(MOTION_KEY) !== "off"; }
+export function saveMotion(on: boolean): void { localStorage.setItem(MOTION_KEY, on ? "on" : "off"); }
+export function loadNeonGlow(): boolean { return localStorage.getItem(NEON_GLOW_KEY) !== "off"; }
+export function saveNeonGlow(on: boolean): void { localStorage.setItem(NEON_GLOW_KEY, on ? "on" : "off"); }
+export function applyNeonGlow(on: boolean): void {
+  document.documentElement.dataset.glow = on ? "on" : "off";
 }

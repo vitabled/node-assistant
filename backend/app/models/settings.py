@@ -1,6 +1,7 @@
 from __future__ import annotations
-from typing import Optional
-from pydantic import BaseModel
+import uuid as _uuid
+from typing import Literal, Optional
+from pydantic import BaseModel, Field, model_validator
 
 
 class RemnavaveConfig(BaseModel):
@@ -8,6 +9,26 @@ class RemnavaveConfig(BaseModel):
     api_token: str = ""
     default_internal_squad_ids: list[str] = []
     default_external_squad_ids: list[str] = []
+
+
+class PanelEntry(BaseModel):
+    """One Remnawave panel in the per-account registry (Wave-5 Plan K)."""
+    id: str = Field(default_factory=lambda: _uuid.uuid4().hex[:12])
+    name: str = "Основная"
+    kind: str = "custom"  # custom | deployed
+    panel_url: str = ""
+    api_token: str = ""
+    default_internal_squad_ids: list[str] = []
+    default_external_squad_ids: list[str] = []
+
+
+class RemnawaveRegistry(BaseModel):
+    panels: list[PanelEntry] = []
+    active_panel_id: str = ""
+
+
+# Stable id for the entry auto-migrated from a legacy single-panel config.
+_MIGRATED_PANEL_ID = "primary"
 
 
 class DeployDefaults(BaseModel):
@@ -81,15 +102,67 @@ class AiConfig(BaseModel):
     api_key_enc: str = ""  # Fernet ciphertext (base64); never plaintext
     max_steps: int = 6  # tool-calling loop cap (anti-runaway)
     readonly: bool = True  # only read-only tools exposed to the agent
+    active_preset_id: str = ""  # active system-prompt preset (Plan I; "" = default)
+    gateway: str = "none"  # Plan J: none | cliproxy (route via CLIProxyAPI gateway)
+    gateway_internal: bool = False  # gateway runs on our node-assistant-net → SSRF-exempt
+
+
+class AppearanceConfig(BaseModel):
+    """Per-account mirror of the UI appearance prefs (Wave-5 Plan B) so the look
+    follows the account across devices. No secrets → plain JSON, no Fernet.
+    localStorage stays the fast local cache; this is the seed on first login on a
+    new device. Literal fields reject invalid values with 422."""
+
+    skin: Literal["apple", "console", "neon"] = "apple"
+    mode: Literal["light", "dark", "system"] = "system"
+    accent: Literal["blue", "green", "violet", "amber", "cyan", "magenta", "lime"] = "blue"
+    density: Literal["comfortable", "compact"] = "comfortable"
+    animations: bool = True
+    neon_glow: bool = True
 
 
 class AppSettings(BaseModel):
     remnawave: RemnavaveConfig = RemnavaveConfig()
+    remnawave_registry: RemnawaveRegistry = RemnawaveRegistry()
     deploy_defaults: DeployDefaults = DeployDefaults()
     optimization: OptimizationSettings = OptimizationSettings()
     xray_checker: XrayCheckerConfig = XrayCheckerConfig()
     mcp: McpConfig = McpConfig()
     ai: AiConfig = AiConfig()
+    appearance: AppearanceConfig = AppearanceConfig()
+
+    @model_validator(mode="after")
+    def _resolve_active_panel(self):
+        """Wave-5 Plan K: keep `remnawave` a computed view of the ACTIVE panel so
+        the ~13 sites reading `.remnawave` stay untouched. If the registry is empty
+        but a legacy single-panel `remnawave` is set, migrate it into the registry
+        (stable id) in-memory. A bad/missing active_panel_id falls back to the
+        first panel."""
+        reg = self.remnawave_registry
+        if not reg.panels:
+            legacy = self.remnawave
+            if legacy.panel_url or legacy.api_token:
+                reg.panels = [PanelEntry(
+                    id=_MIGRATED_PANEL_ID, name="Основная", kind="custom",
+                    panel_url=legacy.panel_url, api_token=legacy.api_token,
+                    default_internal_squad_ids=legacy.default_internal_squad_ids,
+                    default_external_squad_ids=legacy.default_external_squad_ids,
+                )]
+                reg.active_panel_id = _MIGRATED_PANEL_ID
+            else:
+                return self  # both empty → Remnawave "not configured", as before
+        # Pick the active panel (fallback: first) and project it into `remnawave`.
+        active = next((p for p in reg.panels if p.id == reg.active_panel_id), None)
+        if active is None:
+            active = reg.panels[0]
+            reg.active_panel_id = active.id
+        self.remnawave = RemnavaveConfig(
+            panel_url=active.panel_url,
+            api_token=active.api_token,
+            default_internal_squad_ids=active.default_internal_squad_ids,
+            default_external_squad_ids=active.default_external_squad_ids,
+        )
+        return self
 
 
 class Template(BaseModel):

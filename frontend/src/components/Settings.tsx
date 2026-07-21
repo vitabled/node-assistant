@@ -6,6 +6,7 @@ import {
   applyAccent, applyDensity, applyThemeMode, applySkin,
   loadAccent, loadDensity, loadThemeMode, loadSkin,
   saveAccent, saveDensity, saveThemeMode, saveSkin,
+  loadMotion, saveMotion, loadNeonGlow, saveNeonGlow, applyNeonGlow,
 } from "../theme/tweaks";
 import { getActiveId } from "../auth/store";
 import { CheckerControls } from "./monitoring/CheckerControls";
@@ -13,6 +14,8 @@ import { CheckerRegistry } from "./monitoring/CheckerRegistry";
 import { TestServers } from "./settings/TestServers";
 import { McpTab } from "./settings/McpTab";
 import { InfraTab } from "./settings/InfraTab";
+import { ApiTokensTab } from "./settings/ApiTokensTab";
+import { DataTransfer } from "./settings/DataTransfer";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -113,6 +116,38 @@ function SettingField({
 
 // ── Remnawave sub-tab ─────────────────────────────────────────
 
+// Panel registry manager (Wave-5 Plan K). Lists panels, activates/deletes/adds;
+// the form below edits the ACTIVE panel. Hidden when no panels exist yet.
+function PanelSelector({ onChange }: { onChange: () => void }) {
+  const [panels, setPanels] = useState<any[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const load = () => fetch("/api/settings/remnawave/panels").then(r => r.json())
+    .then(d => { setPanels(d.panels || []); setActiveId(d.active_panel_id || ""); }).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const activate = async (id: string) => { await fetch(`/api/settings/remnawave/panels/${id}/activate`, { method: "POST" }); await load(); onChange(); };
+  const del = async (id: string) => { await fetch(`/api/settings/remnawave/panels/${id}`, { method: "DELETE" }); await load(); onChange(); };
+  const add = async () => { await fetch("/api/settings/remnawave/panels", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Новая панель" }) }); await load(); };
+  if (panels.length === 0) return null;
+  return (
+    <div className="card card-p" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center" }}>
+        <span className="micro">Панели Remnawave</span>
+        <button type="button" className="btn btn-sm" style={{ marginLeft: "auto" }} onClick={add}>+ Панель</button>
+      </div>
+      {panels.map(p => (
+        <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ flex: 1, fontSize: 13, color: "var(--t-hi)" }}>{p.name || p.panel_url || "—"}</span>
+          {p.id === activeId
+            ? <span className="chip ok" style={{ fontSize: 10 }}>главная</span>
+            : <button type="button" className="btn btn-sm" onClick={() => activate(p.id)}>Сделать главной</button>}
+          <button type="button" className="btn btn-sm" onClick={() => del(p.id)} disabled={panels.length === 1}>Удалить</button>
+        </div>
+      ))}
+      <p className="hint">Форма ниже редактирует активную панель. Ручной ввод url/токена сохраняется.</p>
+    </div>
+  );
+}
+
 function RemnavaveTab() {
   const [cfg,      setCfg]      = useState<RemnavaveConfig>(REMNAWAVE_INIT);
   const [squads,   setSquads]   = useState<SelectOption[]>([]);
@@ -125,7 +160,7 @@ function RemnavaveTab() {
     { ok: boolean; msg: string } | null
   >(null);
 
-  useEffect(() => {
+  const loadCfg = () => {
     fetch("/api/settings")
       .then(r => r.json())
       .then(d => {
@@ -142,7 +177,8 @@ function RemnavaveTab() {
         }
       })
       .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  };
+  useEffect(() => { loadCfg(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadSquads = async () => {
     setSqLoading(true);
@@ -202,6 +238,7 @@ function RemnavaveTab() {
 
   return (
     <div className="flex flex-col gap-5 max-w-lg">
+      <PanelSelector onChange={loadCfg} />
       <SettingField
         label="URL панели Remnawave"
         value={cfg.panel_url}
@@ -562,16 +599,36 @@ export function ThemeTab() {
   const [accent, setAccent]   = useState<AccentKey>(loadAccent);
   const [density, setDensity] = useState<Density>(loadDensity);
 
-  const pickSkin = (s: AppSkin) => { setSkin(s); applySkin(s); saveSkin(accountId, s); };
-  const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); };
-  const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); };
-  const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); };
+  const [motionOn, setMotionOn] = useState(loadMotion);
+  const [glowOn, setGlowOn]     = useState(loadNeonGlow);
+
+  // Best-effort mirror of the prefs into the account's backend appearance config
+  // (Wave-5 Plan B / idea 5) so the look follows the account across devices.
+  const mirror = (patch: Record<string, unknown>) => {
+    const body = { skin, mode, accent, density, animations: motionOn, neon_glow: glowOn, ...patch };
+    fetch("/api/settings/appearance", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).catch(() => {});
+  };
+
+  const pickSkin = (s: AppSkin) => { setSkin(s); applySkin(s); saveSkin(accountId, s); mirror({ skin: s }); };
+  const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); mirror({ mode: m }); };
+  const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); mirror({ accent: a }); };
+  const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); mirror({ density: d }); };
+  const toggleMotion = (v: boolean) => { setMotionOn(v); saveMotion(v); mirror({ animations: v }); };
+  const toggleGlow = (v: boolean) => { setGlowOn(v); applyNeonGlow(v); saveNeonGlow(v); mirror({ neon_glow: v }); };
+
+  const SKIN_SUB: Record<AppSkin, string> = {
+    apple: "Системный вид macOS/iOS",
+    console: "Моноширинный, консольный",
+    neon: "Неон, свечения и градиенты",
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 26, maxWidth: 460 }}>
       <div>
         <p className="micro" style={{ marginBottom: 10 }}>Стиль</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
           {SKINS.map(s => {
             const on = skin === s.key;
             return (
@@ -584,14 +641,12 @@ export function ThemeTab() {
                   color: on ? "var(--accent-hi)" : "var(--t-mid)",
                 }}>
                 <span style={{ fontSize: 14, fontWeight: 700 }}>{s.label}</span>
-                <span style={{ fontSize: 11, color: "var(--t-low)" }}>
-                  {s.key === "apple" ? "Системный вид macOS/iOS" : "Моноширинный, консольный"}
-                </span>
+                <span style={{ fontSize: 11, color: "var(--t-low)" }}>{SKIN_SUB[s.key]}</span>
               </button>
             );
           })}
         </div>
-        <p className="hint">Apple — по умолчанию. «Консоль» возвращает моноширинный вид JetBrains Mono.</p>
+        <p className="hint">Apple — по умолчанию. «Консоль» — моноширинный JetBrains Mono. «Неон» — тёмная палитра со свечениями.</p>
       </div>
 
       <div>
@@ -641,6 +696,27 @@ export function ThemeTab() {
           <button className={density === "comfortable" ? "on" : ""} onClick={() => pickDensity("comfortable")}>Обычная</button>
           <button className={density === "compact" ? "on" : ""} onClick={() => pickDensity("compact")}>Плотная</button>
         </div>
+      </div>
+
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Анимации и свечение</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <button type="button" role="switch" aria-checked={motionOn} onClick={() => toggleMotion(!motionOn)}
+              className={`relative w-9 h-5 rounded-full transition-colors ${motionOn ? "bg-[var(--accent)]" : "bg-[var(--bg3)]"}`}>
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${motionOn ? "translate-x-4" : ""}`} />
+            </button>
+            <span style={{ fontSize: 13, color: "var(--t-mid)" }}>Анимации интерфейса</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <button type="button" role="switch" aria-checked={glowOn} onClick={() => toggleGlow(!glowOn)}
+              className={`relative w-9 h-5 rounded-full transition-colors ${glowOn ? "bg-[var(--accent)]" : "bg-[var(--bg3)]"}`}>
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${glowOn ? "translate-x-4" : ""}`} />
+            </button>
+            <span style={{ fontSize: 13, color: "var(--t-mid)" }}>Неон-свечение <span style={{ color: "var(--t-low)" }}>(для скина «Неон»)</span></span>
+          </label>
+        </div>
+        <p className="hint">Анимации автоматически отключаются, если в системе включён режим уменьшения движения.</p>
       </div>
     </div>
   );
@@ -711,7 +787,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "infra" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "tokens" | "transfer" | "infra" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -723,6 +799,8 @@ export function Settings() {
     { id: "monitoring",  label: "Мониторинг" },
     { id: "testservers", label: "Сервера для тестирования" },
     { id: "mcp",         label: "MCP" },
+    { id: "tokens",      label: "Токены API" },
+    { id: "transfer",    label: "Экспорт/импорт" },
     { id: "infra",       label: "Инфраструктура" },
     { id: "theme",       label: "Тема" },
   ];
@@ -750,6 +828,8 @@ export function Settings() {
         {sub === "monitoring"   && <MonitoringTab />}
         {sub === "testservers"  && <TestServersTab />}
         {sub === "mcp"          && <div className="flex flex-col gap-4 max-w-2xl"><McpTab /></div>}
+        {sub === "tokens"       && <ApiTokensTab />}
+        {sub === "transfer"     && <DataTransfer />}
         {sub === "infra"        && <InfraTab />}
         {sub === "theme"        && <ThemeTab />}
       </div>
