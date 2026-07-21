@@ -3,7 +3,7 @@ import {
   PieChart, CreditCard, FolderKanban, ReceiptText,
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
-  Workflow, Bell, Bot, Map as MapIcon, Waypoints,
+  Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -12,7 +12,7 @@ export type Tab =
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
-  | "hostings-map" | "hostings-list"
+  | "hostings-map" | "hostings-list" | "library"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
@@ -50,9 +50,11 @@ const RW_TABS: NavItemDef[] = [
   { tab: "rw-migration", label: "Миграция",             Icon: ArrowLeftRight },
 ];
 
+// Группа «Справка» (бывш. «Хостинги»): карта хостингов + каталог + библиотека знаний.
 const HOSTINGS_TABS: NavItemDef[] = [
-  { tab: "hostings-map",  label: "Карта",    Icon: MapIcon },
-  { tab: "hostings-list", label: "Хостинги", Icon: Server  },
+  { tab: "hostings-map",  label: "Карта хостингов", Icon: MapIcon  },
+  { tab: "hostings-list", label: "Хостинги",        Icon: Server   },
+  { tab: "library",       label: "Библиотека",      Icon: BookOpen },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
@@ -131,7 +133,7 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         {RW_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Хостинги</p>
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Справка</p>
         {HOSTINGS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />

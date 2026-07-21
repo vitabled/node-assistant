@@ -72,8 +72,9 @@ const CRUMB: Record<Tab, [string, string]> = {
   "rw-migration":    ["Remnawave", "Миграция"],
   "rw-profiles":     ["Node Installer", "Профили"],
   "mihomo":          ["Node Installer", "Mihomo"],
-  "hostings-map":    ["Хостинги", "Карта"],
-  "hostings-list":   ["Хостинги", "Хостинги"],
+  "hostings-map":    ["Справка", "Карта хостингов"],
+  "hostings-list":   ["Справка", "Хостинги"],
+  "library":         ["Справка", "Библиотека"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
   "infra-projects":  ["Инфра-биллинг", "Проекты"],
@@ -225,6 +226,15 @@ export default function App() {
 
           {tab === "hostings-map"  && <HostingsMap />}
           {tab === "hostings-list" && <HostingsCatalog />}
+          {/* «Библиотека» — заглушка до Плана C (wave5-c-library), который заменит её на <Library/>. */}
+          {tab === "library" && (
+            <div className="ni-pagebody" style={{ flex: 1, display: "grid", placeItems: "center", padding: 24 }}>
+              <div style={{ textAlign: "center", color: "var(--t-low)" }}>
+                <p style={{ fontSize: 15, fontWeight: 600, color: "var(--t-hi)", marginBottom: 4 }}>Библиотека</p>
+                <p style={{ fontSize: 13 }}>Раздел в разработке</p>
+              </div>
+            </div>
+          )}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}
