@@ -67,3 +67,18 @@ def test_hosts_required_fields_and_bounds():
 def test_hosts_requires_auth():
     assert client.get("/api/hosts").status_code == 401
     assert client.post("/api/hosts", json=_body()).status_code == 401
+
+
+def test_host_shell_safety(monkeypatch=None):
+    """Wave-5 Plan F — host/sni/path reject shell metacharacters + CR/LF."""
+    a = _auth()
+    # host / sni metacharacters → 422
+    assert client.post("/api/hosts", headers=a, json=_body(host="a.com; rm -rf /")).status_code == 422
+    assert client.post("/api/hosts", headers=a, json=_body(sni="$(whoami).com")).status_code == 422
+    # CR/LF (header/response splitting) → 422
+    assert client.post("/api/hosts", headers=a, json=_body(host="a.com\r\nInjected: 1")).status_code == 422
+    # path metacharacters → 422
+    assert client.post("/api/hosts", headers=a, json=_body(path="/a;$(id)")).status_code == 422
+    # valid host/sni/path → 201
+    assert client.post("/api/hosts", headers=a,
+                       json=_body(host="cdn.example.com", sni="sni.example.com", path="/ws/path")).status_code == 201
