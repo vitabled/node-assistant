@@ -22,6 +22,7 @@ from app.api import (
     user_stats,
     testservers,
     panel_deploy,
+    panel_metrics,
     backup,
     subpages,
     speedtest,
@@ -106,6 +107,7 @@ app.include_router(hosts.router, dependencies=_auth)
 app.include_router(user_stats.router, dependencies=_auth)
 app.include_router(testservers.router, dependencies=_auth)
 app.include_router(panel_deploy.router, dependencies=_auth)
+app.include_router(panel_metrics.router, dependencies=_auth)
 app.include_router(backup.router, dependencies=_auth)
 app.include_router(subpages.router, dependencies=_auth)
 app.include_router(speedtest.router, dependencies=_auth)

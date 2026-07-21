@@ -3,6 +3,7 @@ import {
   X, RefreshCw, Trash2, ShieldAlert, Wrench, Server, Loader2,
   CheckCircle2, XCircle, Save, AlertTriangle, BarChart3, Boxes,
   ShieldCheck, Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
+  Users, Gauge,
 } from "lucide-react";
 import { TerminalOutput } from "../TerminalOutput";
 import { useTaskStream, type StatusFrame, type TaskStatus } from "../../hooks/useTaskStream";
@@ -342,29 +343,138 @@ function StatsTab({ job }: { job: PanelJobSummary }) {
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
-  if (state === "offline") {
-    return (
-      <div className="flex flex-col items-center justify-center gap-3 py-14 text-center">
-        <XCircle size={30} className="text-[var(--err)]" />
-        <p className="text-sm text-[var(--t-low)]">Сервер недоступен по SSH</p>
-        <button type="button" onClick={fetchStats}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--line)] bg-[var(--bg2)] text-[var(--t-mid)] hover:bg-[var(--bg3)] transition-colors">
-          <RefreshCw size={12} /> Повторить
-        </button>
-      </div>
-    );
-  }
+  // Prometheus metrics are only on the panel box (/opt/remnawave/.env); skip for
+  // a pure subscription-page install.
+  const hasPanel = p.target !== "subpage";
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex justify-end">
-        <button type="button" onClick={fetchStats} disabled={state === "loading"}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--line)] bg-[var(--bg2)] text-[var(--t-mid)] hover:bg-[var(--bg3)] transition-colors disabled:opacity-50">
-          {state === "loading" ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Обновить
+      {hasPanel && <PanelMetricsBlock job={job} />}
+
+      {state === "offline" ? (
+        <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
+          <XCircle size={28} className="text-[var(--err)]" />
+          <p className="text-sm text-[var(--t-low)]">Сервер недоступен по SSH</p>
+          <button type="button" onClick={fetchStats}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--line)] bg-[var(--bg2)] text-[var(--t-mid)] hover:bg-[var(--bg3)] transition-colors">
+            <RefreshCw size={12} /> Повторить
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="flex justify-end">
+            <button type="button" onClick={fetchStats} disabled={state === "loading"}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--line)] bg-[var(--bg2)] text-[var(--t-mid)] hover:bg-[var(--bg3)] transition-colors disabled:opacity-50">
+              {state === "loading" ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Обновить
+            </button>
+          </div>
+          <SecurityBlock stats={security} loading={state === "loading"} />
+          <TrafficBlock stats={traffic} loading={state === "loading"} />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── «Метрики панели» — scrape :3001 Prometheus over SSH (Wave-4 Plan C) ──
+interface PanelMetrics {
+  users_online: number | null;
+  users_by_status: Record<string, number>;
+  nodes_online: number;
+  nodes_total: number;
+  nodes: { name: string; online: boolean }[];
+  metric_count: number;
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  ACTIVE: "Активные", DISABLED: "Отключены", LIMITED: "Лимит", EXPIRED: "Истекли",
+};
+
+function PanelMetricsBlock({ job }: { job: PanelJobSummary }) {
+  const p = job.savedForm;
+  const [data, setData] = useState<PanelMetrics | null>(null);
+  const [state, setState] = useState<"loading" | "ok" | "error">("loading");
+  const [msg, setMsg] = useState("");
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+
+  const fetchMetrics = useCallback(async () => {
+    setState("loading"); setMsg("");
+    try {
+      const res = await fetch("/api/panel/metrics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ip: p.ip, ssh_port: p.ssh_port, ssh_user: p.ssh_user, ssh_password: p.ssh_password,
+        }),
+      });
+      if (!aliveRef.current) return;
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        setMsg(typeof err.detail === "string" ? err.detail : "Метрики недоступны");
+        setState("error");
+        return;
+      }
+      setData(await res.json());
+      setState("ok");
+    } catch (e) {
+      if (aliveRef.current) { setMsg((e as Error).message); setState("error"); }
+    }
+  }, [p.ip, p.ssh_port, p.ssh_user, p.ssh_password]);
+
+  useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
+
+  return (
+    <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5">
+      <div className="flex items-center gap-1.5 mb-2">
+        <Gauge size={12} className="text-[var(--t-low)]" />
+        <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest">
+          Метрики панели
+        </span>
+        <button type="button" onClick={fetchMetrics} disabled={state === "loading"}
+          className="ml-auto p-1 rounded text-[var(--t-faint)] hover:text-[var(--accent-hi)] hover:bg-[var(--bg3)] transition-colors disabled:opacity-40" title="Обновить">
+          {state === "loading" ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
         </button>
       </div>
-      <SecurityBlock stats={security} loading={state === "loading"} />
-      <TrafficBlock stats={traffic} loading={state === "loading"} />
+
+      {state === "loading" ? (
+        <p className="text-[11px] text-[var(--t-faint)] flex items-center gap-1.5">
+          <Loader2 size={10} className="animate-spin" /> Скрейп :3001 по SSH…
+        </p>
+      ) : state === "error" ? (
+        <p className="text-[11px] text-[var(--t-faint)]">{msg || "Метрики недоступны."}</p>
+      ) : data ? (
+        <div className="flex flex-col gap-2.5">
+          {/* Headline tiles */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-md border border-[var(--line-soft)] bg-[var(--bg2)] px-2.5 py-2">
+              <div className="flex items-center gap-1.5 text-[10px] text-[var(--t-low)]"><Users size={11} /> Онлайн-юзеры</div>
+              <div className="text-lg font-semibold text-[var(--t-hi)] tabular-nums mt-0.5">
+                {data.users_online ?? "—"}
+              </div>
+            </div>
+            <div className="rounded-md border border-[var(--line-soft)] bg-[var(--bg2)] px-2.5 py-2">
+              <div className="flex items-center gap-1.5 text-[10px] text-[var(--t-low)]"><Server size={11} /> Ноды онлайн</div>
+              <div className="text-lg font-semibold text-[var(--t-hi)] tabular-nums mt-0.5">
+                {data.nodes_online}<span className="text-[var(--t-faint)] text-sm"> / {data.nodes_total}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Users by status */}
+          {Object.keys(data.users_by_status).length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(data.users_by_status).map(([k, v]) => (
+                <span key={k} className="text-[11px] px-1.5 py-0.5 rounded border border-[var(--line)] bg-[var(--bg3)] text-[var(--t-mid)] tabular-nums">
+                  {STATUS_LABEL[k] ?? k}: <span className="text-[var(--t-hi)]">{v}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <p className="text-[10px] text-[var(--t-faint)]">{data.metric_count} метрик получено с :3001</p>
+        </div>
+      ) : null}
     </div>
   );
 }
