@@ -6,6 +6,7 @@ import {
   applyAccent, applyDensity, applyThemeMode, applySkin,
   loadAccent, loadDensity, loadThemeMode, loadSkin,
   saveAccent, saveDensity, saveThemeMode, saveSkin,
+  loadMotion, saveMotion, loadNeonGlow, saveNeonGlow, applyNeonGlow,
 } from "../theme/tweaks";
 import { getActiveId } from "../auth/store";
 import { CheckerControls } from "./monitoring/CheckerControls";
@@ -563,16 +564,36 @@ export function ThemeTab() {
   const [accent, setAccent]   = useState<AccentKey>(loadAccent);
   const [density, setDensity] = useState<Density>(loadDensity);
 
-  const pickSkin = (s: AppSkin) => { setSkin(s); applySkin(s); saveSkin(accountId, s); };
-  const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); };
-  const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); };
-  const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); };
+  const [motionOn, setMotionOn] = useState(loadMotion);
+  const [glowOn, setGlowOn]     = useState(loadNeonGlow);
+
+  // Best-effort mirror of the prefs into the account's backend appearance config
+  // (Wave-5 Plan B / idea 5) so the look follows the account across devices.
+  const mirror = (patch: Record<string, unknown>) => {
+    const body = { skin, mode, accent, density, animations: motionOn, neon_glow: glowOn, ...patch };
+    fetch("/api/settings/appearance", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).catch(() => {});
+  };
+
+  const pickSkin = (s: AppSkin) => { setSkin(s); applySkin(s); saveSkin(accountId, s); mirror({ skin: s }); };
+  const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); mirror({ mode: m }); };
+  const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); mirror({ accent: a }); };
+  const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); mirror({ density: d }); };
+  const toggleMotion = (v: boolean) => { setMotionOn(v); saveMotion(v); mirror({ animations: v }); };
+  const toggleGlow = (v: boolean) => { setGlowOn(v); applyNeonGlow(v); saveNeonGlow(v); mirror({ neon_glow: v }); };
+
+  const SKIN_SUB: Record<AppSkin, string> = {
+    apple: "Системный вид macOS/iOS",
+    console: "Моноширинный, консольный",
+    neon: "Неон, свечения и градиенты",
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 26, maxWidth: 460 }}>
       <div>
         <p className="micro" style={{ marginBottom: 10 }}>Стиль</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
           {SKINS.map(s => {
             const on = skin === s.key;
             return (
@@ -585,14 +606,12 @@ export function ThemeTab() {
                   color: on ? "var(--accent-hi)" : "var(--t-mid)",
                 }}>
                 <span style={{ fontSize: 14, fontWeight: 700 }}>{s.label}</span>
-                <span style={{ fontSize: 11, color: "var(--t-low)" }}>
-                  {s.key === "apple" ? "Системный вид macOS/iOS" : "Моноширинный, консольный"}
-                </span>
+                <span style={{ fontSize: 11, color: "var(--t-low)" }}>{SKIN_SUB[s.key]}</span>
               </button>
             );
           })}
         </div>
-        <p className="hint">Apple — по умолчанию. «Консоль» возвращает моноширинный вид JetBrains Mono.</p>
+        <p className="hint">Apple — по умолчанию. «Консоль» — моноширинный JetBrains Mono. «Неон» — тёмная палитра со свечениями.</p>
       </div>
 
       <div>
@@ -642,6 +661,27 @@ export function ThemeTab() {
           <button className={density === "comfortable" ? "on" : ""} onClick={() => pickDensity("comfortable")}>Обычная</button>
           <button className={density === "compact" ? "on" : ""} onClick={() => pickDensity("compact")}>Плотная</button>
         </div>
+      </div>
+
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Анимации и свечение</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <button type="button" role="switch" aria-checked={motionOn} onClick={() => toggleMotion(!motionOn)}
+              className={`relative w-9 h-5 rounded-full transition-colors ${motionOn ? "bg-[var(--accent)]" : "bg-[var(--bg3)]"}`}>
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${motionOn ? "translate-x-4" : ""}`} />
+            </button>
+            <span style={{ fontSize: 13, color: "var(--t-mid)" }}>Анимации интерфейса</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <button type="button" role="switch" aria-checked={glowOn} onClick={() => toggleGlow(!glowOn)}
+              className={`relative w-9 h-5 rounded-full transition-colors ${glowOn ? "bg-[var(--accent)]" : "bg-[var(--bg3)]"}`}>
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${glowOn ? "translate-x-4" : ""}`} />
+            </button>
+            <span style={{ fontSize: 13, color: "var(--t-mid)" }}>Неон-свечение <span style={{ color: "var(--t-low)" }}>(для скина «Неон»)</span></span>
+          </label>
+        </div>
+        <p className="hint">Анимации автоматически отключаются, если в системе включён режим уменьшения движения.</p>
       </div>
     </div>
   );

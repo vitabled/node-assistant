@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel
 
 
@@ -83,6 +83,20 @@ class AiConfig(BaseModel):
     readonly: bool = True  # only read-only tools exposed to the agent
 
 
+class AppearanceConfig(BaseModel):
+    """Per-account mirror of the UI appearance prefs (Wave-5 Plan B) so the look
+    follows the account across devices. No secrets → plain JSON, no Fernet.
+    localStorage stays the fast local cache; this is the seed on first login on a
+    new device. Literal fields reject invalid values with 422."""
+
+    skin: Literal["apple", "console", "neon"] = "apple"
+    mode: Literal["light", "dark", "system"] = "system"
+    accent: Literal["blue", "green", "violet", "amber", "cyan", "magenta", "lime"] = "blue"
+    density: Literal["comfortable", "compact"] = "comfortable"
+    animations: bool = True
+    neon_glow: bool = True
+
+
 class AppSettings(BaseModel):
     remnawave: RemnavaveConfig = RemnavaveConfig()
     deploy_defaults: DeployDefaults = DeployDefaults()
@@ -90,6 +104,7 @@ class AppSettings(BaseModel):
     xray_checker: XrayCheckerConfig = XrayCheckerConfig()
     mcp: McpConfig = McpConfig()
     ai: AiConfig = AiConfig()
+    appearance: AppearanceConfig = AppearanceConfig()
 
 
 class Template(BaseModel):

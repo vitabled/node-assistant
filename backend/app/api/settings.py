@@ -9,6 +9,7 @@ from app.models.settings import (
     DeployDefaults,
     OptimizationSettings,
     XrayCheckerConfig,
+    AppearanceConfig,
     TemplateCreate,
     TemplateUpdate,
 )
@@ -39,6 +40,17 @@ async def save_optimization_settings(body: OptimizationSettings):
     raw = storage.load_settings()
     settings = AppSettings(**raw)
     settings.optimization = body
+    storage.save_settings(settings.model_dump())
+    return {"ok": True}
+
+
+@router.post("/settings/appearance")
+async def save_appearance(body: AppearanceConfig):
+    """Persist the account's UI appearance prefs (skin/mode/accent/density/motion).
+    No secrets → plain per-account settings.json. Invalid enum values → 422."""
+    raw = storage.load_settings()
+    settings = AppSettings(**raw)
+    settings.appearance = body
     storage.save_settings(settings.model_dump())
     return {"ok": True}
 

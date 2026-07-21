@@ -32,6 +32,11 @@
   --shadow-pop:0 16px 44px rgba(0,0,0,.5); --shadow-modal:0 24px 70px rgba(0,0,0,.55);
   --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --font:var(--mono);
+  /* Glow — inert on apple/console; the neon skin renders it (Wave-5 Plan B). */
+  --glow:none; --accent-glow:transparent;
+  /* Data-viz ink ramp (charts/bars); the neon skin boosts these. */
+  --viz-1:#4C8DFF; --viz-2:#3ECF8E; --viz-3:#F0B054; --viz-4:#F0716E;
+  --viz-5:#9D7BFF; --viz-6:#38C3D2; --viz-7:#FF4D9D; --viz-8:#B4FF3A;
 }
 body[data-density="compact"]{ --row-py:5px; --card-p:13px; --ctl-py:6px; --nav-py:5px; }
 
@@ -333,3 +338,50 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
   .ni-drawer aside{padding-top:max(16px,env(safe-area-inset-top)) !important}
 }
 @keyframes ni-sheetUp{from{transform:translateY(100%)}to{transform:none}}
+
+/* ════════ Neon skin (Wave-5 Plan B) — third data-skin, additive & dark-committed ════════ */
+:root[data-skin="neon"]{
+  --r-sm:5px; --r-md:8px; --r-lg:12px; --glass-blur:14px;
+  --glow:0 0 16px -2px var(--accent-glow);
+}
+/* Dark-committed: identical palette under light AND dark (like --term-bg). */
+:root[data-skin="neon"]:not([data-theme="light"]),
+:root[data-skin="neon"][data-theme="light"]{
+  --bg0:#05060A; --bg1:#090B12; --bg2:#0D1018; --bg3:#151A28;
+  --line:#1B2740; --line-soft:#121A2C;
+  --t-hi:#EAF6FF; --t-mid:#AEC0DA; --t-low:#8091AD; --t-faint:#586A88;
+  --raised:rgba(9,11,18,.66); --row-hover:rgba(21,26,40,.5); --overlay:rgba(2,3,7,.8);
+  --topbar-bg:rgba(9,11,18,.72); --sidebar-bg:#070810; --scroll-thumb:#1E2A44;
+  --ok:#2BF5A6; --ok-dim:rgba(43,245,166,.12); --ok-line:rgba(43,245,166,.4);
+  --warn:#FFC24D; --warn-dim:rgba(255,194,77,.12); --warn-line:rgba(255,194,77,.4);
+  --err:#FF5B7F; --err-dim:rgba(255,91,127,.13); --err-line:rgba(255,91,127,.42);
+  --viz-1:#4CC8FF; --viz-2:#2BF5A6; --viz-3:#FFC24D; --viz-4:#FF5B7F;
+  --viz-5:#B98CFF; --viz-6:#3DE0F0; --viz-7:#FF4D9D; --viz-8:#B4FF3A;
+}
+/* Glow can be disabled device-wide even under neon (data-glow="off"). */
+:root[data-glow="off"]{ --glow:none; }
+/* Glow utilities — inert wherever --glow is none (apple/console/glow-off). */
+.hover-glow{ transition:box-shadow .18s ease }
+.hover-glow:hover,
+:root[data-skin="neon"] .card:hover,
+:root[data-skin="neon"] .btn-primary,
+:root[data-skin="neon"] .navitem.active{ box-shadow:var(--glow) }
+:root[data-skin="neon"] .neon-text{ text-shadow:0 0 8px var(--accent-glow) }
+
+/* Shimmer skeleton — animated only when motion is allowed. */
+@media (prefers-reduced-motion: no-preference){
+  @keyframes ni-shimmer{ 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+  .ni-skeleton{
+    background:linear-gradient(90deg,var(--bg2) 25%,var(--bg3) 37%,var(--bg2) 63%);
+    background-size:200% 100%; animation:ni-shimmer 1.4s ease-in-out infinite;
+    border-radius:var(--r-sm);
+  }
+}
+/* Reduced-motion — highest-priority safety net for the whole motion layer. */
+@media (prefers-reduced-motion: reduce){
+  .ni-skeleton{ background:var(--bg3); border-radius:var(--r-sm) }
+  *,*::before,*::after{
+    animation-duration:.001ms !important; animation-iteration-count:1 !important;
+    transition-duration:.001ms !important; scroll-behavior:auto !important;
+  }
+}
