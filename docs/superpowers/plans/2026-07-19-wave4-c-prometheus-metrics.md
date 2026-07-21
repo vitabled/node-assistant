@@ -1,5 +1,10 @@
 # Волна 4 · План C — E5: Prometheus-метрики Remnawave на дэшборде
 
+> **Статус (2026-07-21):** ✅ Ф1 (backend `services/panel_metrics.py` парсер+summarize+scrape, `POST /api/panel/metrics`,
+> `test_panel_metrics.py` 7 тестов) + ✅ Ф2 (frontend `PanelManageModal` «Статистика» → блок «Метрики панели»).
+> R1/R2 закрыты по докам (нет живой панели). Проверено: unit-тесты + endpoint вживую на VPS-ноде без панели → 404.
+> **Полная проверка плиток с живыми данными — при развёрнутой панели (pending).**
+
 > eGames-вики. Лёгкий скрейп метрик панели (порт 3001, basic-auth) и вывод нескольких показателей нагрузки —
 > без Grafana/VictoriaMetrics-стека.
 > Затрагивает: `services/panel_metrics.py` (новый), `api/panel_deploy.py`/новый роут, `frontend` дэшборд/статистика.
