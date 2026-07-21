@@ -18,6 +18,7 @@ import { Placeholder }                     from "./components/rw/Placeholder";
 import { Profiles }                         from "./components/profiles/Profiles";
 import { MihomoEditor }                     from "./components/MihomoEditor";
 import { ConfigTemplates }                  from "./components/configs/ConfigTemplates";
+import { Library }                          from "./components/Library";
 import { RuleBuilder }                      from "./components/automation/RuleBuilder";
 import { Notifications }                    from "./components/automation/Notifications";
 import { AiChat }                           from "./components/settings/AiChat";
@@ -250,15 +251,7 @@ export default function App() {
 
           {tab === "hostings-map"  && <HostingsMap />}
           {tab === "hostings-list" && <HostingsCatalog />}
-          {/* «Библиотека» — заглушка до Плана C (wave5-c-library), который заменит её на <Library/>. */}
-          {tab === "library" && (
-            <div className="ni-pagebody" style={{ flex: 1, display: "grid", placeItems: "center", padding: 24 }}>
-              <div style={{ textAlign: "center", color: "var(--t-low)" }}>
-                <p style={{ fontSize: 15, fontWeight: 600, color: "var(--t-hi)", marginBottom: 4 }}>Библиотека</p>
-                <p style={{ fontSize: 13 }}>Раздел в разработке</p>
-              </div>
-            </div>
-          )}
+          {tab === "library" && <Library />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}

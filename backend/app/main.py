@@ -40,6 +40,7 @@ from app.api import (
     config_templates,
     ai_prompts,
     export_io,
+    library,
 )
 from app.api.auth import require_account
 
@@ -132,6 +133,7 @@ app.include_router(api_tokens.router, dependencies=_auth)
 app.include_router(config_templates.router, dependencies=_auth)
 app.include_router(ai_prompts.router, dependencies=_auth)
 app.include_router(export_io.router, dependencies=_auth)
+app.include_router(library.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.
