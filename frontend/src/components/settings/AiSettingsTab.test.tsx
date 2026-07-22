@@ -42,7 +42,10 @@ describe("AiSettingsTab", () => {
   it("offers a model selector when the catalogue is not empty", async () => {
     installFetch(["gpt-5.6", "claude-opus-4.66"]);
     render(<AiSettingsTab />);
-    await waitFor(() => expect(screen.getByRole("option", { name: "gpt-5.6" })).toBeInTheDocument());
+    // findBy* (а не waitFor с дефолтным 1 с): каталог приезжает через две
+    // последовательные загрузки — конфиг, затем модели, — и под параллельной
+    // нагрузкой полного прогона в секунду это не всегда укладывается.
+    await screen.findByRole("option", { name: "gpt-5.6" }, { timeout: 5000 });
   });
 
   it("falls back to a free-text model input when the catalogue is empty", async () => {
