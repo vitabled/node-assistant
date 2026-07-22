@@ -8,6 +8,30 @@ function renderSidebar(active = "deploy" as const) {
   return { onTabChange };
 }
 
+/**
+ * Пункты одной группы навигации, в порядке рендера.
+ *
+ * Группы рендерятся ПЛОСКО: заголовок `<p class="micro">`, затем кнопки `.navitem`
+ * — все сиблинги в одной колонке (Sidebar.tsx). Поэтому идём по
+ * `nextElementSibling` до следующего заголовка, пропуская разделители.
+ *
+ * Скоуп обязателен: неограниченный `getByText` по всему сайдбару НЕ проверяет,
+ * в какой группе оказался пункт (именно на этом два прежних теста были зелёными
+ * при неверном составе групп).
+ */
+function groupItems(name: string): string[] {
+  const header = screen
+    .getAllByText(name)
+    .find((el) => el.tagName === "P" && el.classList.contains("micro"));
+  if (!header) throw new Error(`заголовок группы «${name}» не найден`);
+  const out: string[] = [];
+  for (let el = header.nextElementSibling; el; el = el.nextElementSibling) {
+    if (el.tagName === "P" && el.classList.contains("micro")) break;
+    if (el.classList.contains("navitem")) out.push((el.textContent ?? "").trim());
+  }
+  return out;
+}
+
 afterEach(cleanup);
 
 describe("Sidebar", () => {
@@ -29,21 +53,41 @@ describe("Sidebar", () => {
     expect(onTabChange).toHaveBeenCalledWith("settings");
   });
 
-  it("expands the infra group and exposes its tabs", () => {
+  // Инфра-биллинг — плоская секция, аккордеона нет (CLAUDE.md §4c).
+  it("renders the infra group flat, with its exact tabs", () => {
     renderSidebar();
-    fireEvent.click(screen.getByText("Инфра-биллинг"));
-    expect(screen.getByText("Провайдеры")).toBeInTheDocument();
-    expect(screen.getByText("API токены")).toBeInTheDocument();
+    expect(groupItems("Инфра-биллинг")).toEqual([
+      "Dashboard", "Провайдеры", "Проекты", "Услуги и тарифы",
+      "Платежи", "Настройки биллинга", "API токены",
+    ]);
   });
 
-  it("renders the Remnawave group with its six tabs", () => {
+  // Строгие проверки состава И порядка групп. Падают при переносе пункта между
+  // группами и при перестановке внутри группы — в отличие от прежних проверок
+  // через неограниченный getByText.
+  it("renders the Управление group with its exact tabs, in order", () => {
     renderSidebar();
-    expect(screen.getByText("Remnawave")).toBeInTheDocument();
-    for (const label of [
-      "Установка", "Страницы подписок", "Переменные",
-      "Резервное копирование", "Миграция", "Профили",
-    ]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+    expect(groupItems("Управление")).toEqual([
+      "Дешборд", "Деплой ноды", "Управление SSL", "Шаблоны", "Хосты", "Трафик",
+    ]);
+  });
+
+  // Волна 6, План A: три редактора конфигов переехали сюда из «Управления».
+  it("renders the Remnawave group with its exact tabs, in order", () => {
+    renderSidebar();
+    expect(groupItems("Remnawave")).toEqual([
+      "Установка", "Страницы подписок", "Переменные", "Резервное копирование",
+      "Миграция", "Профили", "Mihomo", "Конфиги",
+    ]);
+  });
+
+  // «Настройки»/«Уведомления» живут в футере, вне групп — заодно фиксирует, что
+  // обход групп не «утекает» за последнюю группу.
+  it("keeps the footer items out of every nav group", () => {
+    renderSidebar();
+    for (const group of ["Управление", "Статистика", "Автоматизация", "Remnawave", "Справка", "Инфра-биллинг"]) {
+      expect(groupItems(group)).not.toContain("Настройки");
+      expect(groupItems(group)).not.toContain("Уведомления");
     }
   });
 

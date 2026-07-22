@@ -22,13 +22,30 @@ vi.mock("./components/StepProgress", () => ({ StepProgress: () => null, RENEW_ST
 vi.mock("./components/TerminalOutput", () => ({ TerminalOutput: () => null }));
 vi.mock("./hooks/useTaskStream", () => ({ useTaskStream: () => {} }));
 
-import App from "./App";
+import App, { CRUMB } from "./App";
 import { addAccount, forget, getSnapshot, tabKey } from "./auth/store";
 
 function reset() {
   localStorage.clear();
   getSnapshot().accounts.slice().forEach(a => forget(a.id));
 }
+
+// Группа в CRUMB — рукописный дубль группировки сайдбара, TypeScript их не
+// связывает. Это единственное место, где перенос вкладки между группами можно
+// сделать наполовину и не заметить: крошка начнёт противоречить сайдбару.
+describe("CRUMB group labels", () => {
+  it("puts the Remnawave editors in the Remnawave group", () => {
+    for (const tab of ["rw-profiles", "mihomo", "configs"] as const) {
+      expect(CRUMB[tab][0]).toBe("Remnawave");
+    }
+  });
+
+  it("keeps every rw-* tab in the Remnawave group", () => {
+    for (const [tab, [group]] of Object.entries(CRUMB)) {
+      if (tab.startsWith("rw-")) expect(group).toBe("Remnawave");
+    }
+  });
+});
 
 describe("App tab persistence (per account)", () => {
   beforeEach(() => { reset(); addAccount({ id: "id-a", login: "alice", token: "t" }); });

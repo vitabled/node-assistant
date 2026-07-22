@@ -23,12 +23,6 @@ const NAV_MAIN: NavItemDef[] = [
   { tab: "deploy",     label: "Деплой ноды",   Icon: Rocket    },
   { tab: "certs",      label: "Управление SSL", Icon: ShieldCheck },
   { tab: "templates",  label: "Шаблоны",       Icon: FileCode2 },
-  // Профили — сразу после «Шаблонов» (10a); раздел независим от шаблонов.
-  { tab: "rw-profiles", label: "Профили",      Icon: UserCog   },
-  // Mihomo-конфигуратор (встроенный, iframe) — рядом с редакторами конфигов.
-  { tab: "mihomo",      label: "Mihomo",       Icon: Waypoints },
-  // Пользовательские конфиги (шаблоны по типам клиента, Wave-5 План D).
-  { tab: "configs",     label: "Конфиги",      Icon: FileJson  },
   { tab: "hosts",      label: "Хосты",         Icon: Network   },
   { tab: "traffic",    label: "Трафик",        Icon: Gauge     },
 ];
@@ -50,6 +44,12 @@ const RW_TABS: NavItemDef[] = [
   { tab: "rw-variables", label: "Переменные",           Icon: SlidersHorizontal },
   { tab: "rw-backup",    label: "Резервное копирование", Icon: DatabaseBackup },
   { tab: "rw-migration", label: "Миграция",             Icon: ArrowLeftRight },
+  // Редакторы конфигов Remnawave — после операционных пунктов (Волна 6, План A).
+  { tab: "rw-profiles",  label: "Профили",              Icon: UserCog        },
+  // Mihomo-конфигуратор (встроенный, iframe).
+  { tab: "mihomo",       label: "Mihomo",               Icon: Waypoints      },
+  // Пользовательские конфиги (шаблоны по типам клиента, Wave-5 План D).
+  { tab: "configs",      label: "Конфиги",              Icon: FileJson       },
 ];
 
 // Группа «Справка» (бывш. «Хостинги»): карта хостингов + каталог + библиотека знаний.
