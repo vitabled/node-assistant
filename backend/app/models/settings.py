@@ -109,6 +109,13 @@ class AiConfig(BaseModel):
     # contract). Off by default — it only works when the shared MCP container
     # belongs to this account, and it makes every turn's prompt much larger.
     use_mcp: bool = False
+    # Wave-7 Plan F: self-hosted CLIProxyAPI reached with OAuth provider accounts
+    # instead of API keys. Both secrets are Fernet ciphertext, never plaintext.
+    cliproxy_enabled: bool = False
+    cliproxy_image: str = "eceasy/cli-proxy-api:v7.2.50"
+    cliproxy_master_key_enc: str = ""   # client key our backend presents on /v1
+    cliproxy_mgmt_key_enc: str = ""     # Management API key — NEVER to a browser
+    cliproxy_owner_account_id: str = ""  # shared container: who configured it
 
 
 class AppearanceConfig(BaseModel):

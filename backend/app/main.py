@@ -26,6 +26,7 @@ from app.api import (
     backup,
     subpages,
     subpage_configs,
+    cliproxy,
     speedtest,
     rules,
     mcp,
@@ -139,6 +140,7 @@ app.include_router(panel_metrics.router, dependencies=_auth)
 app.include_router(backup.router, dependencies=_auth)
 app.include_router(subpages.router, dependencies=_auth)
 app.include_router(subpage_configs.router, dependencies=_auth)
+app.include_router(cliproxy.router, dependencies=_auth)
 app.include_router(speedtest.router, dependencies=_auth)
 app.include_router(rules.router, dependencies=_auth)
 app.include_router(mcp.router, dependencies=_auth)
