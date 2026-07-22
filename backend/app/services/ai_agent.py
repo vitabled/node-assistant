@@ -160,8 +160,64 @@ TOOLS: dict[str, dict] = {
 }
 
 
-def _tool_specs_openai() -> list[dict]:
-    return [
+# ── MCP tools (Wave-7 Plan E Ф2) ──────────────────────────────
+#
+# Our own MCP container already exposes the whole Remnawave contract. Rather than
+# hand-writing those tools a second time, the assistant borrows them — but only
+# when the shared container belongs to THIS account.
+#
+# ⚠️ The container is one per installation and carries the creds of whoever
+# enabled it (`mcp_server._OWNER_FILE`). Borrowing tools from a container owned
+# by someone else would answer this account's questions with another account's
+# panel, so `mcp_status.container == "foreign"` disables the whole set.
+
+MCP_PREFIX = "mcp__"
+# Whole-contract injection would add tens of kB of schemas to every turn and
+# make the model choose worse. Cap it, and say so out loud when we truncate.
+MAX_MCP_TOOLS = 60
+
+
+async def _mcp_tools(config: AiConfig) -> list[dict]:
+    """Tool descriptors borrowed from our MCP server, or [] when unavailable.
+
+    Never raises: the assistant must keep working with its built-in tools when
+    MCP is off, unreachable, or owned by another account."""
+    if not getattr(config, "use_mcp", False):
+        return []
+    try:
+        from app.services import mcp_client, mcp_server
+
+        status = await mcp_server.status()
+        if status.get("container") != "running" or not status.get("reachable"):
+            return []
+        token = mcp_server.read_auth_token()
+        if not token:
+            return []
+        tools = await mcp_client.McpSession(
+            mcp_client.internal_base_url(), token,
+        ).list_tools()
+    except Exception as exc:  # noqa: BLE001 — degradation is the contract
+        log.info("ai_agent.mcp_unavailable", extra={"err": str(exc)[:200]})
+        return []
+
+    allow_writes = not getattr(config, "readonly", True)
+    out = []
+    for t in tools:
+        name = t.get("name") or ""
+        if not name:
+            continue
+        if not allow_writes and not mcp_client.is_read_only(name):
+            continue
+        out.append({
+            "name": MCP_PREFIX + name,
+            "description": (t.get("description") or "")[:400],
+            "schema": t.get("inputSchema") or {"type": "object", "properties": {}},
+        })
+    return out[:MAX_MCP_TOOLS]
+
+
+def _tool_specs_openai(extra: Optional[list[dict]] = None) -> list[dict]:
+    specs = [
         {
             "type": "function",
             "function": {
@@ -172,16 +228,42 @@ def _tool_specs_openai() -> list[dict]:
         }
         for n, t in TOOLS.items()
     ]
+    specs += [
+        {"type": "function",
+         "function": {"name": e["name"], "description": e["description"],
+                      "parameters": e["schema"]}}
+        for e in (extra or [])
+    ]
+    return specs
 
 
-def _tool_specs_anthropic() -> list[dict]:
-    return [
+def _tool_specs_anthropic(extra: Optional[list[dict]] = None) -> list[dict]:
+    specs = [
         {"name": n, "description": t["description"], "input_schema": t["schema"]}
         for n, t in TOOLS.items()
     ]
+    specs += [
+        {"name": e["name"], "description": e["description"], "input_schema": e["schema"]}
+        for e in (extra or [])
+    ]
+    return specs
 
 
 async def _run_tool(name: str, args: dict, account_id: str) -> tuple[bool, Any]:
+    if name.startswith(MCP_PREFIX):
+        try:
+            from app.services import mcp_client, mcp_server
+
+            token = mcp_server.read_auth_token()
+            if not token:
+                return False, "MCP недоступен"
+            result = await mcp_client.McpSession(
+                mcp_client.internal_base_url(), token,
+            ).call_tool(name[len(MCP_PREFIX):], args or {})
+            return True, result
+        except Exception as exc:  # noqa: BLE001
+            return False, redact(str(exc))
+
     tool = TOOLS.get(name)
     if not tool:
         return False, f"неизвестный инструмент '{name}'"
@@ -252,7 +334,8 @@ async def list_models(config: AiConfig, key: str) -> list[str]:
 
 
 async def _provider_turn(
-    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True, system: str = ""
+    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True,
+    system: str = "", mcp: Optional[list[dict]] = None,
 ) -> dict:
     """One assistant turn. Returns {"text", "tool_calls", "raw"}. Raises AgentError
     (redacted) on provider failure. SSRF guard runs every turn via
@@ -260,17 +343,18 @@ async def _provider_turn(
     carrying the key)."""
     _check_base_url(config)
     if config.provider == "anthropic":
-        return await _anthropic_turn(config, key, messages, with_tools, system)
-    return await _openai_turn(config, key, messages, with_tools)
+        return await _anthropic_turn(config, key, messages, with_tools, system, mcp)
+    return await _openai_turn(config, key, messages, with_tools, mcp)
 
 
 async def _openai_turn(
-    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True
+    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True,
+    mcp: Optional[list[dict]] = None,
 ) -> dict:
     url = f"{config.base_url.rstrip('/')}/chat/completions"
     body: dict = {"model": config.model, "messages": messages}
     if with_tools:
-        body["tools"] = _tool_specs_openai()
+        body["tools"] = _tool_specs_openai(mcp)
         body["tool_choice"] = "auto"
     try:
         async with httpx.AsyncClient(timeout=60.0) as c:
@@ -304,7 +388,8 @@ async def _openai_turn(
 
 
 async def _anthropic_turn(
-    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True, system: str = ""
+    config: AiConfig, key: str, messages: list[dict], with_tools: bool = True,
+    system: str = "", mcp: Optional[list[dict]] = None,
 ) -> dict:
     url = f"{config.base_url.rstrip('/')}/messages"
     body: dict = {
@@ -314,7 +399,7 @@ async def _anthropic_turn(
         "messages": messages,
     }
     if with_tools:
-        body["tools"] = _tool_specs_anthropic()
+        body["tools"] = _tool_specs_anthropic(mcp)
     try:
         async with httpx.AsyncClient(timeout=60.0) as c:
             r = await c.post(
@@ -452,13 +537,25 @@ async def run_agent(
             {"role": "user", "content": prompt},
         ]
 
+    # Fetched ONCE per conversation, not per turn: tools/list is a round-trip and
+    # the server's catalogue does not change mid-answer.
+    mcp_tools = await _mcp_tools(config)
+    if mcp_tools:
+        yield {"type": "tool_call", "name": "__mcp__",
+               "args": {"tools": len(mcp_tools)}}
+        yield {"type": "tool_result", "name": "__mcp__", "ok": True,
+               "preview": f"Подключено инструментов Remnawave: {len(mcp_tools)}"}
+
     steps = max(1, config.max_steps)
     for step in range(steps):
         # Reserve the LAST step for a tools-off turn so the model must synthesize a
         # final answer from what it fetched, instead of dead-ending on the budget.
         is_last = step == steps - 1
         try:
-            turn = await _provider_turn(config, key, messages, with_tools=not is_last, system=system)
+            turn = await _provider_turn(
+                config, key, messages, with_tools=not is_last, system=system,
+                mcp=mcp_tools,
+            )
         except AgentError as exc:
             yield {"type": "error", "message": str(exc)}
             return

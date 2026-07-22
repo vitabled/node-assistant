@@ -105,6 +105,10 @@ class AiConfig(BaseModel):
     active_preset_id: str = ""  # active system-prompt preset (Plan I; "" = default)
     gateway: str = "none"  # Plan J: none | cliproxy (route via CLIProxyAPI gateway)
     gateway_internal: bool = False  # gateway runs on our node-assistant-net → SSRF-exempt
+    # Wave-7 Plan E Ф2: borrow the MCP server's tools (the whole Remnawave
+    # contract). Off by default — it only works when the shared MCP container
+    # belongs to this account, and it makes every turn's prompt much larger.
+    use_mcp: bool = False
 
 
 class AppearanceConfig(BaseModel):
