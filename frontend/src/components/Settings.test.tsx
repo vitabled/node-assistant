@@ -1,6 +1,6 @@
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ThemeTab } from "./Settings";
+import { ThemeTab, Settings } from "./Settings";
 
 // jsdom has no matchMedia — install a stub so applyThemeMode("system") works.
 function mockMatchMedia(light: boolean) {
@@ -53,5 +53,42 @@ describe("Settings › ThemeTab", () => {
     fireEvent.click(screen.getByTitle("green"));
     expect(localStorage.getItem("ni_accent")).toBe("green");
     expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#3ECF8E");
+  });
+});
+
+// ── Wave-7 Plan E Ф1: the tab bar must fit on one screen ───────
+describe("Settings › tab bar", () => {
+  const TABS = [
+    "Remnawave", "Деплой (умолчания)", "Оптимизация ОС", "Мониторинг",
+    "Сервера для тестирования", "MCP", "Ассистент", "Токены API",
+    "Экспорт/импорт", "Инфраструктура", "Тема",
+  ];
+
+  beforeEach(() => {
+    // Every tab body fetches something on mount; a permissive stub keeps the
+    // test about layout rather than about each tab's data.
+    (globalThis as any).fetch = vi.fn(async () => ({
+      ok: true, status: 200, json: async () => ({}), text: async () => "",
+    }));
+  });
+
+  it("renders every tab", async () => {
+    render(<Settings />);
+    for (const label of TABS) expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it("wraps onto multiple rows instead of scrolling horizontally", () => {
+    const { container } = render(<Settings />);
+    const bar = container.querySelector(".seg");
+    // `seg-wrap` is what allows the second row; without it `width:fit-content`
+    // forces a single overflowing row.
+    expect(bar?.className).toContain("seg-wrap");
+    expect((bar as HTMLElement).style.width).toBe("");
+  });
+
+  it("the last tab is reachable and switches the content", async () => {
+    render(<Settings />);
+    fireEvent.click(screen.getByText("Тема"));
+    await waitFor(() => expect(screen.getByText("Плотность")).toBeInTheDocument());
   });
 });
