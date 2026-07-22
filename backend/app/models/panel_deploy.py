@@ -98,7 +98,23 @@ class PanelDeployRequest(BaseModel):
     sub_server: Optional[SubServer] = None
 
     # Raw Orion subscription-page HTML (from the Ф5 catalog later). Size-capped.
+    #
+    # ⚠️ Волна 6, План E Ф1 — ПРОВЕРЕНО НА ОБРАЗЕ 7.2.6: `/opt/app/frontend/`
+    # это собранная Vite/React SPA (160 файлов), а её `index.html` — EJS-шаблон
+    # с `<%- panelData %>`, `<%= metaTitle %>`, `<%= metaDescription %>`.
+    # Монтирование произвольного HTML поверх него ТИХО УБИВАЕТ канал данных
+    # страницы. Поле оставлено для legacy-Orion, но пайплайн теперь требует,
+    # чтобы шаблон нёс эти теги (см. _validate_subpage_html).
     subpage_html: str = ""
+
+    # Образ страницы подписок. Пиннится, а не `:latest`: overlay/шаблон верны
+    # только для конкретной версии фронтенда.
+    subpage_image: str = "remnawave/subscription-page:7.2.6"
+
+    # Обязателен для target ∈ {subpage, both}: без него контейнер падает с
+    # кодом 1 («Environment Configuration Errors»), проверено запуском образа.
+    # Не персистится у нас — уходит в .env на целевом боксе тихим каналом.
+    subpage_api_token: str = ""
 
     install_test_tools: bool = True
 
@@ -172,6 +188,14 @@ class PanelDeployRequest(BaseModel):
     def _validate_subpage_html(cls, v: str) -> str:
         if len(v.encode("utf-8")) > _SUBPAGE_HTML_MAX:
             raise ValueError("subpage_html too large (>512 KiB)")
+        # `<%- panelData %>` — единственный канал данных SPA. Шаблон без него
+        # даёт визуально «рабочую», но пустую страницу, и это молчаливый отказ.
+        if v.strip() and "panelData" not in v:
+            raise ValueError(
+                "subpage_html не содержит `<%- panelData %>` — страница подписок "
+                "останется без данных. Шаблон должен быть EJS-совместим с "
+                "remnawave/subscription-page."
+            )
         return v
 
     # ── cross-field validation ────────────────────────────────
@@ -183,6 +207,12 @@ class PanelDeployRequest(BaseModel):
         if self.target in ("subpage", "both") and not self.sub_domain:
             raise ValueError(
                 "sub_domain is required when installing the subscription page"
+            )
+        if self.target in ("subpage", "both") and not self.subpage_api_token.strip():
+            raise ValueError(
+                "subpage_api_token is required: без него контейнер страницы "
+                "подписок завершается с ошибкой конфигурации (создайте токен в "
+                "Remnawave → Settings → API Tokens)"
             )
         # Caddy manages TLS itself (built-in ACME) and ignores cert_provider/
         # cf_api_key/email — those only matter for the nginx (acme.sh) branch.

@@ -315,6 +315,16 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - **Frontend `rw/`:** `PanelDashboard` (`panel_jobs_<id>`, **стабильный `id` переживает retry**), `PanelWidget` (2 подрамки, `useTaskStream`; **клик-управление гейтится на `success`** — гонка с `run_panel_pipeline`), `PanelDeployForm` (`validatePanelForm` зеркалит сервер 1:1), `PanelManageModal` (Компоненты + Статистика).
 
 ### 7d. Subscription-page catalog / Variables / Backup (Ф5/Ф8/Ф9)
+- **⚠️ Страница подписок: ПРОВЕРЕНО НА ОБРАЗЕ 7.2.6 (Волна 6, План E Ф1).** `remnawave/subscription-page`
+  НИКОГДА не был «одним HTML»: `/opt/app/frontend/` — собранная Vite/React SPA (160 файлов, 6.9 МБ:
+  `index.html` + `assets/`), а `index.html` — **EJS-шаблон** с `<%- panelData %>`, `<%= metaTitle %>`,
+  `<%= metaDescription %>`. Наш прежний монтаж произвольного `index.html` поверх него ТИХО убивал единственный
+  канал данных страницы. Теперь `subpage_html` без `panelData` отвергается моделью (и формой). Второе:
+  **`REMNAWAVE_API_TOKEN` обязателен** — с пустым контейнер падает кодом 1 («Environment Configuration Errors»,
+  воспроизведено запуском). Добавлено обязательное поле `PanelDeployRequest.subpage_api_token` для
+  target ∈ {subpage, both} (не персистится у нас — уходит в `.env` на боксе тихим каналом) и поле в форме.
+  Образ **пиннится** (`subpage_image`, дефолт `7.2.6`) вместо `:latest`: шаблон/overlay верны только для
+  конкретной версии фронтенда.
 - **Каталог Orion (Ф5):** `services/subpage_store.py` (per-account HTML, `threading.Lock` + лимит 512KiB/`MAX_PAGES=100`, membership-guard от traversal), `api/subpages.py` CRUD, `rw/SubPages.tsx` (iframe `sandbox=""` srcDoc). **`/raw` → CSP `sandbox`+`nosniff`** (latent-XSS при открытии в новой вкладке).
 - **Переменные (Ф8):** `/api/panel/env/{read,write}` — маскировка `_is_secret_env_key` (**`PASS`**/SECRET/TOKEN/KEY/PWD/PRIVATE/CREDENTIAL/DATABASE_URL — ловит `METRICS_PASS`), merge через тихий канал (нетронутый секрет не затирается пустым), `restarted` по `docker ps` (не rc). `rw/PanelVariables.tsx`.
 - **Бэкап (Ф9):** `services/backup_service.py` — distillium-обёртка (самодостаточный wrapper, НЕ клон): `config.env` секреты в **одинарно-кавыченном heredoc** `<<'RWCFG_EOF'`+`umask 077`+`_shell_safe`; restore за confirm-гейтом; дампы БД 0600. `api/backup.py`: `/api/backup/{setup,run,restore,status}` (restore без confirm→400; run/restore **rc→FAILED**; GD через `RCLONE_CONFIG_DRIVE_*`). `rw/Backup.tsx` (двойной confirm + «TLS не бэкапится»).

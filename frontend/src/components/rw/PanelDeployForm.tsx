@@ -37,6 +37,7 @@ export interface PanelFormData {
   sub_ssh_password: string;
   sub_ssh_port:     string;
   subpage_html:     string;       // raw Orion index.html (from catalog OR pasted/uploaded)
+  subpage_api_token: string;      // Волна 6: обязателен для target subpage/both
   subpage_source_id:string;       // selected catalog page id ("" = pasted/none)
   install_test_tools: boolean;
 }
@@ -62,6 +63,7 @@ export interface PanelDeployPayload {
   extra_env:        Record<string, string>;
   sub_server:       SubServerPayload | null;
   subpage_html:     string;
+  subpage_api_token: string;
   install_test_tools: boolean;
 }
 
@@ -86,6 +88,7 @@ export const PANEL_FORM_DEFAULT: PanelFormData = {
   sub_ssh_password: "",
   sub_ssh_port:     "22",
   subpage_html:     "",
+  subpage_api_token: "",
   subpage_source_id:"",
   install_test_tools: true,
 };
@@ -111,7 +114,7 @@ function validIp(v: string): boolean {
 export type PanelErrKey =
   | "ip" | "ssh_password" | "ssh_port"
   | "panel_domain" | "sub_domain" | "email" | "cf_api_key" | "webhook_url"
-  | "extra_env" | "subpage_html"
+  | "extra_env" | "subpage_html" | "subpage_api_token"
   | "sub_ip" | "sub_ssh_password" | "sub_ssh_port" | "sub_server";
 
 export function validatePanelForm(f: PanelFormData): Partial<Record<PanelErrKey, string>> {
@@ -136,7 +139,13 @@ export function validatePanelForm(f: PanelFormData): Partial<Record<PanelErrKey,
   if (wantSub) {
     if (!f.sub_domain.trim()) e.sub_domain = "Обязательное поле";
     else if (!DOMAIN.test(f.sub_domain.trim())) e.sub_domain = "Неверный домен";
+    // Без токена контейнер страницы подписок падает на старте (проверено на
+    // образе 7.2.6) — зеркалим серверную проверку, чтобы не ловить 422.
+    if (!f.subpage_api_token.trim()) e.subpage_api_token = "Обязательное поле";
   }
+  // Шаблон без `<%- panelData %>` — молчаливо пустая страница.
+  if (f.subpage_html.trim() && !f.subpage_html.includes("panelData"))
+    e.subpage_html = "Шаблон должен содержать `<%- panelData %>`";
 
   // email: valid if present; required for nginx + letsencrypt/zerossl.
   if (f.email.trim() && !EMAIL_RE.test(f.email.trim())) e.email = "Неверный email";
@@ -209,6 +218,7 @@ export function toPayload(f: PanelFormData): PanelDeployPayload {
     ssh_port:        parseInt(f.ssh_port, 10) || 22,
     panel_domain:    wantPanel ? f.panel_domain.trim() : "",
     sub_domain:      wantSub ? f.sub_domain.trim() : "",
+    subpage_api_token: wantSub ? f.subpage_api_token.trim() : "",
     email:           f.email.trim(),
     reverse_proxy:   f.reverse_proxy,
     cert_provider:   f.cert_provider,
@@ -453,6 +463,13 @@ export function PanelDeployForm({ onSubmit, onCancel, initial }: Props) {
       {wantSub && (
         <Field label="Домен страницы подписок" value={form.sub_domain} onChange={v => set("sub_domain", v)}
           placeholder="sub.example.com" error={errors.sub_domain} disabled={f} />
+      )}
+      {wantSub && (
+        <Field label="API-токен Remnawave" value={form.subpage_api_token}
+          onChange={v => set("subpage_api_token", v)} type="password"
+          placeholder="создайте в Remnawave → Settings → API Tokens"
+          error={errors.subpage_api_token} disabled={f}
+          hint="Обязателен: без него контейнер страницы подписок не стартует" />
       )}
       <Field label="Email (ACME)" value={form.email} onChange={v => set("email", v)} type="email"
         placeholder="you@example.com" error={errors.email} disabled={f}

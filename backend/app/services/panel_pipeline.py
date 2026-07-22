@@ -281,8 +281,8 @@ def _nginx_conf(req: PanelDeployRequest) -> str:
 def _subpage_env(req: PanelDeployRequest) -> str:
     """Subscription-page `.env`. REMNAWAVE_PANEL_URL points at the bundled backend
     by container name (same box) or the panel's public URL (separate box). The API
-    token starts empty — the operator sets it later (Variables) once created in
-    Dashboard → API Tokens."""
+    token is REQUIRED (validated on the model): проверено на образе 7.2.6 — с
+    пустым токеном контейнер падает с кодом 1 ещё на старте Nest."""
     if _subpage_bundled(req):
         panel_url = "http://remnawave-backend:3000"
     elif req.panel_domain:
@@ -292,7 +292,7 @@ def _subpage_env(req: PanelDeployRequest) -> str:
     pairs = {
         "APP_PORT": str(_SUBPAGE_PORT),
         "REMNAWAVE_PANEL_URL": panel_url,
-        "REMNAWAVE_API_TOKEN": "",
+        "REMNAWAVE_API_TOKEN": req.subpage_api_token.strip(),
         "CUSTOM_SUB_PREFIX": "",
         "TRUST_PROXY": "true",
     }
@@ -316,7 +316,7 @@ def _subpage_compose(req: PanelDeployRequest) -> str:
     return (
         "services:\n"
         "  remnawave-subscription-page:\n"
-        "    image: remnawave/subscription-page:latest\n"
+        f"    image: {req.subpage_image}\n"
         "    container_name: remnawave-subscription-page\n"
         "    hostname: remnawave-subscription-page\n"
         "    restart: always\n"
