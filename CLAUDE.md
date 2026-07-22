@@ -261,7 +261,22 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - **Collector** `api/user_stats.collector_loop` — lifespan background task (mirrors `poller_loop` resilience: per-account try/except, explicit `account_id`, skips accounts w/o `panel_url`+`api_token`, never dies), every **300s** snapshots each account's nodes; per-node top-users fetched **concurrently** (`asyncio.gather(return_exceptions=True)`, capped `_TOP_USERS_CAP=20`). `remnawave_client.get_nodes_metrics()` / `get_node_users_usage(uuid)`.
 - **Routes** (`/api/stats/users`, under `require_account`): `GET /node-load|/top-users|/migrations?hours=` (clamped 1–720). Tests: `backend/tests/test_user_stats.py`.
 - **Frontend (Ф4)** — Sidebar «Статистика» group → «Пользователи» (Tab `stats-users`, routed in `App.tsx`). `components/stats/UsersStats.tsx` = 6 inline-SVG widgets (no chart lib, CSP self-contained): a) node load over time, b) avg/busiest, c) top users by usage, d) migrations from→to (badge «оценка», `approximate`), e) most stable (xray uptime30d), f) fastest (xray latency). Each has a gear (`stats/WidgetSettings.tsx`): a–d time-window (24h/7d/30d), e–f `checker_id` selector (from `/api/checker/instances`) — per-widget refetch. Empty/loading/error states; stacks 1-col ≤820px.
-- **Widget editor (Wave-5 Plan G):** `UsersStats.tsx` refactored to a **registry** (`WIDGETS: kind→component`) + a per-account **layout store** `stats/statWidgetsStore.ts` (zustand): `{instanceId, kind, w:1|2, order, settings}`, hydrate (server→localStorage→`DEFAULT_LAYOUT` of the 6 widgets), `add/remove/resize/move`, debounced persist (localStorage mirror + `PUT /api/stats/users/widgets`). Backend `GET/PUT /api/stats/users/widgets` (same `stats.router`), `WidgetInstance` pydantic (closed-enum `kind`, `w` 1–2, ≤40), store `storage.load/save_stat_widgets` → `accounts/<id>/stat_widgets.json`. «Редактировать» toggle in the page head → per-widget move ↑/↓ (splice-reorder, no DnD lib), width 1↔2, two-click delete; «+ Виджет» palette (dups allowed). Empty layout migrates to the current 6-widget view. Tests `test_stat_widgets.py`. (Deferred: lifting per-widget window/checker settings into the store — they stay local for now.)
+- **Widget editor (Wave-5 Plan G):** `UsersStats.tsx` refactored to a **registry** (`WIDGETS: kind→component`) + a per-account **layout store** `stats/statWidgetsStore.ts` (zustand): `{instanceId, kind, w:1|2, order, settings}`, hydrate (server→localStorage→`DEFAULT_LAYOUT` of the 6 widgets), `add/remove/resize/move`, debounced persist (localStorage mirror + `PUT /api/stats/users/widgets`). Backend `GET/PUT /api/stats/users/widgets` — на **`user_stats.router`** (`api/user_stats.py`, подключён в `main.py`), НЕ на `stats.router`; `WidgetInstance` pydantic (closed-enum `kind`, `w` 1–2, ≤40), store `storage.load/save_stat_widgets` → `accounts/<id>/stat_widgets.json`. ⚠️ Бэкендный энум `_WIDGET_KINDS` содержит **8** типов, фронтовый `WIDGET_KINDS` — **6**; лишние молча отбрасываются в `normalize` при гидрации (не баг, но помнить при добавлении виджета: править надо ОБА списка). «Редактировать» toggle in the page head → per-widget move ↑/↓ (splice-reorder, no DnD lib), width 1↔2, two-click delete; «+ Виджет» palette (dups allowed). Empty layout migrates to the current 6-widget view. Tests `test_stat_widgets.py`. (Deferred: lifting per-widget window/checker settings into the store — they stay local for now.)
+- **Скрытие серверов в статистике (Волна 6, План B):** соседний ключ **`hidden`** на том же документе виджетов —
+  `{nodes: {node_uuid: name}, checker: {checker_id: {stableId: name}}}`. **ДВЕ оси не по прихоти:** node-load/
+  avg-per-node/migrations ключуются на Remnawave `node_uuid`, а stable-nodes/fast-nodes — на `stableId`, который
+  уникален только ВНУТРИ своего чекера (один и тот же `n1` у local и remote — разные узлы). Значение = последнее
+  известное имя, чтобы пикер показывал пропавшую запись человеку, а не голый uuid. Набор **page-global на аккаунт**
+  (не per-instance: палитра допускает дубликаты виджетов, наборы разъехались бы). Лимиты 200/20/64 продублированы
+  на клиенте (`normalizeHidden`) — localStorage правится руками. Фильтрация **клиентская** (эндпоинты и так отдают
+  всё) и применяется **ДО срезов top-N**, иначе скрытая нода занимала бы место видимой. `filterMigrations` режет
+  строку по ЛЮБОМУ концу. **«Топ пользователей» НЕ фильтруется** (`_top_users` группирует по username и теряет
+  node_uuid — нужен новый backend-параметр, отложено). `cid='server-monitor'` — passthrough на клиенте, там
+  подавление делает бэкенд (§9b), иначе считалось бы дважды. ⚠️ `PUT` — **full-replace**: `persist()` обязан слать
+  `{layout, hidden}` ЦЕЛИКОМ, иначе перестановка виджета сотрёт набор скрытых. localStorage мигрирует со старого
+  формата (голый массив layout). UI: кнопка «Серверы» с бейджем в шапке (доступна ВНЕ режима редактирования) →
+  `stats/HiddenServers.tsx`, группа «Не найдено в текущих данных» для записей, ушедших из выдачи (страховка от
+  смены `stableId`). `State` отличает «Данных пока нет» от «Все серверы скрыты».
 
 ## 5. Backend Routes
 - **Xray-Checker:** `GET /api/checker/status|history|statuspage?ticks=N|incidents?days=N|logs`, `POST /api/checker/check|update|start|stop`; `POST /api/settings/xray-checker`.
@@ -382,6 +397,16 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 ### 9b. Dashboard: 2 вкладки Xray/Server uptime (Wave3 План A)
 - `Dashboard.tsx` — переключатель Xray uptime (2-уровневая группировка подписка→страна) / **Server uptime** (ручные серверы + подтяжка из `deploy_jobs`).
 - **`server_monitor` (backend, NEW):** `services/server_monitor_store.py` (per-account SQLite `server_monitor.db`, servers+samples, sync_deployed, аналитика как `metrics_store`) + `api/server_monitor.py` (`/api/server-monitor` CRUD + `/statuspage` + `/incidents`; `_probe` = TCP порт→22 fallback + ICMP; `monitor_loop` 60с). Роутер под `_auth` в main.py; `monitor_loop` в lifespan.
+- **Скрытие серверов (Волна 6, План B Ф4):** колонка **`servers.hidden`** (+ идемпотентный `ALTER TABLE` для БД,
+  созданных раньше — приём из `metrics_store`/checker_id). `PATCH /servers/{id}` с `hidden` идёт через отдельную
+  `store.set_hidden` и работает для **ЛЮБОГО `source`** — в отличие от прочих полей, ограниченных
+  `source='manual'`. Это закрывает реальный тупик: deployed-строку нельзя ни отредактировать, ни удалить
+  (`_sync_deployed` вернёт её из `deploy_jobs`), то есть убрать с глаз было нечем. Флаг **переживает ре-синк** —
+  апсерт трогает только `name/country/port`. `statuspage` считает `total/online/state/uptime30d` **только по
+  нескрытым**, но отдаёт скрытые с флагом (UI показывает их свёрнутым блоком «Скрытые (N)»); побочно это же даёт
+  подавление вкладке «Статистика» с `cid='server-monitor'`. **Пробы продолжаются** (`monitor_loop` не тронут), так
+  что после возврата история и 30-дневный аптайм на месте — в отличие от удаления, которое стирает
+  `server_samples`.
 - `XrayCheckerConfig.enabled` дефолт **True** (мониторинг вкл. по умолчанию); `xray_checker.autostart_checker()` стартует общий контейнер на буте; `subscriptions._schedule_checker_reload()` (debounce 8с) перезапускает чекер при CRUD подписок.
 - Users-статы (`stats/UsersStats.tsx`): большой мульти-лайн график загрузки нод (6a), селектор чекера включает «Server uptime».
 

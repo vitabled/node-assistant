@@ -59,6 +59,9 @@ class ServerUpdate(BaseModel):
     ip: Optional[str] = None
     port: Optional[int] = Field(default=None, ge=1, le=65535)
     note: Optional[str] = None
+    # Скрытие — единственный способ убрать с глаз deployed-строку, поэтому оно
+    # идёт мимо ограничения `source='manual'` остальных полей.
+    hidden: Optional[bool] = None
 
     @field_validator("ip")
     @classmethod
@@ -91,7 +94,16 @@ async def create_server(body: ServerCreate) -> dict[str, Any]:
 
 @router.patch("/servers/{server_id}")
 async def patch_server(server_id: str, body: ServerUpdate) -> dict[str, Any]:
-    updated = await store.update_server(server_id, body.model_dump(exclude_none=True))
+    fields = body.model_dump(exclude_none=True)
+    # `hidden` идёт своим путём: `update_server` ограничен source='manual', а
+    # скрывать нужно в первую очередь deployed-строки, которые иначе с глаз не
+    # убрать вообще.
+    hidden = fields.pop("hidden", None)
+    updated = None
+    if hidden is not None:
+        updated = await store.set_hidden(server_id, hidden)
+    if fields:
+        updated = await store.update_server(server_id, fields)
     if updated is None:
         raise HTTPException(404, "Сервер не найден")
     return updated
@@ -140,11 +152,17 @@ async def statuspage(ticks: int = 30) -> dict[str, Any]:
             "port":    s["port"],
             "country": s["country"],
             "note":    s["note"],
+            "hidden":  s.get("hidden", False),
         })
-    total = len(nodes)
-    online = sum(1 for n in nodes if n["online"])
+    # Счётчики и баннер здоровья — ТОЛЬКО по нескрытым: иначе скрытый мёртвый
+    # сервер продолжал бы красить дэшборд в «down». Скрытые едут в ответе с
+    # флагом, чтобы UI показал их в отдельном блоке. Побочно это же даёт
+    # подавление вкладке «Статистика» с cid='server-monitor'.
+    shown = [n for n in nodes if not n["hidden"]]
+    total = len(shown)
+    online = sum(1 for n in shown if n["online"])
     gstate = "unknown" if total == 0 else "ok" if online == total else "down" if online == 0 else "partial"
-    own = [n["uptime30d"] for n in nodes if n["uptime30d"] is not None]
+    own = [n["uptime30d"] for n in shown if n["uptime30d"] is not None]
     return {
         "reachable": True,
         "nodes": nodes,

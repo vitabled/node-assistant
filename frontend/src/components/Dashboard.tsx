@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Activity, Zap, RefreshCw, Loader2, ChevronDown, CheckCircle2,
   AlertTriangle, XCircle, Clock,
-  Check, Plus, Trash2, Pencil, X, Save, Server, Radio,
+  Check, Plus, Trash2, Pencil, X, Save, Server, Radio, Eye, EyeOff,
 } from "lucide-react";
 import { COUNTRIES } from "./CountrySelect";
 import { getFlagEmoji } from "../utils/format";
@@ -16,6 +16,7 @@ interface Node {
   subId?: string;
   // server-uptime extras (present only on the Server uptime tab)
   source?: string; ip?: string; port?: number; country?: string; note?: string;
+  hidden?: boolean;   // Волна 6: убран с глаз, но продолжает пробиться
 }
 type GState = "ok" | "partial" | "down" | "unknown";
 interface Global {
@@ -409,10 +410,23 @@ function ServerUptime() {
     load(ticks);
   };
 
-  // Group by country.
+  // Скрытие — единственный способ убрать с глаз deployed-строку: удалить её
+  // нельзя (ре-синк из deploy_jobs вернёт), а PATCH остальных полей у неё
+  // запрещён. В отличие от удаления, скрытие НЕ трогает историю проб.
+  const setHidden = async (id: string, hidden: boolean) => {
+    await fetch(`/api/server-monitor/servers/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hidden }),
+    }).catch(() => {});
+    load(ticks);
+  };
+
+  const hiddenNodes = useMemo(() => (data?.nodes ?? []).filter(n => n.hidden), [data]);
+
+  // Group by country — скрытые в страновые группы не попадают.
   const groups = useMemo(() => {
     const map = new Map<string, Node[]>();
-    (data?.nodes ?? []).forEach(n => {
+    (data?.nodes ?? []).filter(n => !n.hidden).forEach(n => {
       const key = n.country || n.groupName || "Прочее";
       (map.get(key) ?? map.set(key, []).get(key)!).push(n);
     });
@@ -470,23 +484,50 @@ function ServerUptime() {
                 <div className="divide-y divide-[var(--line-soft)]">
                   {nodes.map(n => (
                     <NodeRow key={n.stableId} node={n} flag={flag} ticks={ticks}
-                      trailing={n.source === "manual" ? (
+                      trailing={
                         <div className="flex items-center gap-1 shrink-0">
-                          <button className="iconbtn" title="Редактировать"
-                            onClick={() => setModal({ editing: n })}><Pencil size={13} /></button>
-                          <button className="iconbtn danger" title="Удалить"
-                            onClick={() => { if (confirm("Удалить сервер?")) removeServer(n.stableId); }}>
-                            <Trash2 size={13} /></button>
+                          {n.source !== "manual" && (
+                            <span className="text-[10px] text-[var(--t-faint)]" title="Из деплоя">авто</span>
+                          )}
+                          <button className="iconbtn" title="Скрыть из списка"
+                            onClick={() => setHidden(n.stableId, true)}><EyeOff size={13} /></button>
+                          {n.source === "manual" && (
+                            <>
+                              <button className="iconbtn" title="Редактировать"
+                                onClick={() => setModal({ editing: n })}><Pencil size={13} /></button>
+                              <button className="iconbtn danger" title="Удалить (сотрёт историю)"
+                                onClick={() => { if (confirm("Удалить сервер? История проб будет стёрта.")) removeServer(n.stableId); }}>
+                                <Trash2 size={13} /></button>
+                            </>
+                          )}
                         </div>
-                      ) : (
-                        <span className="text-[10px] text-[var(--t-faint)] shrink-0" title="Из деплоя">авто</span>
-                      )} />
+                      } />
                   ))}
                 </div>
               </div>
             );
           })}
         </div>
+      )}
+
+      {hiddenNodes.length > 0 && (
+        <details className="rounded-xl border border-[var(--line-soft)] overflow-hidden">
+          <summary className="flex items-center gap-2.5 px-4 py-2.5 bg-[var(--bg2)] cursor-pointer text-sm text-[var(--t-mid)]">
+            <EyeOff size={14} className="text-[var(--t-low)]" />
+            Скрытые ({hiddenNodes.length})
+            <span className="text-[11px] text-[var(--t-faint)]">не влияют на счётчики и статус</span>
+          </summary>
+          <div className="divide-y divide-[var(--line-soft)]">
+            {hiddenNodes.map(n => (
+              <div key={n.stableId} className="flex items-center gap-2 px-4 py-2 text-sm">
+                <span className="trunc flex-1 text-[var(--t-low)]">{n.name}</span>
+                <span className="text-[11px] text-[var(--t-faint)]">{n.ip}</span>
+                <button className="iconbtn" title="Показать снова"
+                  onClick={() => setHidden(n.stableId, false)}><Eye size={13} /></button>
+              </div>
+            ))}
+          </div>
+        </details>
       )}
 
       <IncidentLog incidents={incidents} />

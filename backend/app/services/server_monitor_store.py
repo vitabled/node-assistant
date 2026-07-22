@@ -69,7 +69,8 @@ def _ensure_schema(path: Path) -> None:
                     port       INTEGER NOT NULL DEFAULT 443,
                     note       TEXT NOT NULL DEFAULT '',
                     source     TEXT NOT NULL DEFAULT 'manual',  -- manual | deployed
-                    created_at INTEGER NOT NULL DEFAULT 0
+                    created_at INTEGER NOT NULL DEFAULT 0,
+                    hidden     INTEGER NOT NULL DEFAULT 0        -- убран с глаз, но продолжает пробиться
                 );
                 CREATE INDEX IF NOT EXISTS idx_srv_source ON servers(source);
 
@@ -84,6 +85,12 @@ def _ensure_schema(path: Path) -> None:
                 CREATE INDEX IF NOT EXISTS idx_ssamp_sid_ts ON server_samples(server_id, ts);
                 """
             )
+            # Миграция для БД, созданных до Волны 6: CREATE TABLE IF NOT EXISTS
+            # выше не добавит колонку в уже существующую таблицу. Тот же приём,
+            # что применялся в metrics_store для checker_id (CLAUDE.md §4b).
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(servers)")}
+            if "hidden" not in cols:
+                conn.execute("ALTER TABLE servers ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
         _initialised.add(key)
 
 
@@ -96,11 +103,27 @@ def _connect(account_id: Optional[str]) -> sqlite3.Connection:
 
 
 def _row_to_server(r: sqlite3.Row) -> dict[str, Any]:
+    keys = r.keys()
     return {
         "id": r["id"], "name": r["name"], "country": r["country"],
         "ip": r["ip"], "port": r["port"], "note": r["note"],
         "source": r["source"], "created_at": r["created_at"],
+        # БД, созданная до Волны 6, колонки не имеет — читаем защитно.
+        "hidden": bool(r["hidden"]) if "hidden" in keys else False,
     }
+
+
+def _set_hidden(sid: str, hidden: bool, account_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """Скрыть/показать сервер — ДЛЯ ЛЮБОГО source.
+
+    Отдельно от `_update_server`, который намеренно ограничен `source='manual'`:
+    скрывать нужно в первую очередь deployed-строки, которые иначе убрать с глаз
+    невозможно вообще (их возвращает каждый ре-синк из deploy_jobs).
+    """
+    with _connect(account_id) as conn:
+        conn.execute("UPDATE servers SET hidden = ? WHERE id = ?", (1 if hidden else 0, sid))
+        r = conn.execute("SELECT * FROM servers WHERE id = ?", (sid,)).fetchone()
+    return _row_to_server(r) if r else None
 
 
 # ── server registry (CRUD) ─────────────────────────────────────
@@ -124,7 +147,8 @@ def _add_server(name: str, country: str, ip: str, port: int, note: str,
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", row,
         )
     return {"id": sid, "name": row[1], "country": row[2], "ip": row[3],
-            "port": row[4], "note": row[5], "source": source, "created_at": row[7]}
+            "port": row[4], "note": row[5], "source": source, "created_at": row[7],
+            "hidden": False}
 
 
 def _update_server(sid: str, fields: dict[str, Any],
@@ -327,6 +351,10 @@ async def add_server(name: str, country: str, ip: str, port: int, note: str,
 async def update_server(sid: str, fields: dict[str, Any],
                         account_id: Optional[str] = None) -> Optional[dict[str, Any]]:
     return await asyncio.to_thread(_update_server, sid, fields, account_id)
+
+
+async def set_hidden(sid: str, hidden: bool, account_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    return await asyncio.to_thread(_set_hidden, sid, hidden, account_id)
 
 
 async def delete_server(sid: str, account_id: Optional[str] = None) -> bool:
