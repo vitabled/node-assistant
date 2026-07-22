@@ -37,11 +37,37 @@ function installFetch(chatEvents: any[]) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("AiChat", () => {
-  it("renders the provider config once loaded", async () => {
+  it("renders the chat once loaded", async () => {
     installFetch([]);
     render(<AiChat />);
     expect(await screen.findByText(/Встроенный ИИ-агент/)).toBeInTheDocument();
-    expect(screen.getByText(/сохранён/)).toBeInTheDocument(); // has_key badge
+  });
+
+  // Волна 6, План C Ф1: конфигурация уехала в «Настройки → Ассистент».
+  it("shows no provider config on the chat page", async () => {
+    installFetch([]);
+    render(<AiChat />);
+    await screen.findByPlaceholderText(/Сообщение агенту/);
+    expect(screen.queryByText(/Base URL/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Лимит шагов/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/сохранён/)).not.toBeInTheDocument(); // has_key badge живёт в настройках
+  });
+
+  it("gives the log its own scroller instead of a fixed max height", async () => {
+    installFetch([]);
+    render(<AiChat />);
+    const log = await screen.findByTestId("ai-chat-log");
+    expect(log.className).toContain("overflow-y-auto");
+    expect(log.className).toContain("min-h-0");
+    expect(log.className).not.toContain("max-h-80");
+  });
+
+  it("does not POST the config from the chat page", async () => {
+    const fn = installFetch([]);
+    render(<AiChat />);
+    await screen.findByPlaceholderText(/Сообщение агенту/);
+    const posts = fn.mock.calls.filter(([url, o]: any[]) => url === "/api/ai/config" && o?.method === "POST");
+    expect(posts).toHaveLength(0);
   });
 
   it("streams a tool-call and the final answer into the chat", async () => {

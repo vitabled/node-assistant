@@ -12,41 +12,31 @@ interface Preset {
   unavailable?: boolean;
 }
 
-// System-prompt presets for the AI agent (Wave-5 Plan I). Self-contained: reads
-// the active preset from /api/ai/config and persists changes back through it.
-export function PromptPresets() {
+interface Props {
+  activeId: string;
+  onPickActive: (id: string) => void;
+}
+
+// System-prompt presets for the AI agent (Wave-5 Plan I).
+//
+// КОНТРОЛИРУЕМЫЙ компонент (Волна 6, План C Ф1): активный пресет приходит
+// пропсом, а выбор уезжает наверх. Раньше он сам делал GET-modify-POST по
+// /api/ai/config — рядом с формой настроек это гонка: два владельца одного
+// документа, и тот, кто сохранится вторым, затирает правки первого.
+export function PromptPresets({ activeId, onPickActive }: Props) {
   const [presets, setPresets] = useState<Preset[]>([]);
-  const [activeId, setActiveId] = useState("");
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<{ id: string | null; name: string; text: string } | null>(null);
 
   const load = async () => {
     try {
-      const [pr, cfg] = await Promise.all([
-        fetch("/api/ai/prompts").then(r => r.json()),
-        fetch("/api/ai/config").then(r => r.json()),
-      ]);
-      setPresets(pr);
-      setActiveId(cfg.active_preset_id || "");
+      setPresets(await fetch("/api/ai/prompts").then(r => r.json()));
     } catch { toast("Не удалось загрузить пресеты", "error"); }
     finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
 
   const active = presets.find(p => p.id === activeId) || presets.find(p => p.id === "default");
-
-  const setActive = async (id: string) => {
-    setActiveId(id);
-    try {
-      const cfg = await fetch("/api/ai/config").then(r => r.json());
-      const r = await fetch("/api/ai/config", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...cfg, active_preset_id: id }),
-      });
-      if (!r.ok) throw new Error();
-      toast("Активный пресет обновлён", "success");
-    } catch { toast("Не удалось сохранить выбор", "error"); }
-  };
 
   const fork = async (id: string) => {
     try { await fetch(`/api/ai/prompts/${id}/fork`, { method: "POST" }); await load(); toast("Форк создан", "success"); }
@@ -76,7 +66,7 @@ export function PromptPresets() {
       <span className="text-sm font-semibold text-[var(--t-hi)]">Инструкции (системный промпт)</span>
       <label className="flex flex-col gap-1">
         <span className="micro">Активный пресет</span>
-        <select className="input" value={activeId || "default"} onChange={e => setActive(e.target.value)}>
+        <select className="input" value={activeId || "default"} onChange={e => onPickActive(e.target.value)}>
           {presets.map(p => (
             <option key={p.id} value={p.id} disabled={p.unavailable}>
               {p.name}{p.builtin ? " · встроенный" : ""}{p.unavailable ? " (недоступен)" : ""}

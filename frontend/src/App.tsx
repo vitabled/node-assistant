@@ -21,7 +21,7 @@ import { ConfigTemplates }                  from "./components/configs/ConfigTem
 import { Library }                          from "./components/Library";
 import { RuleBuilder }                      from "./components/automation/RuleBuilder";
 import { Notifications }                    from "./components/automation/Notifications";
-import { AiChat }                           from "./components/settings/AiChat";
+import { AiChat }                           from "./components/automation/AiChat";
 import { Migration }                        from "./components/rw/Migration";
 import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
