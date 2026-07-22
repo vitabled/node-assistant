@@ -39,15 +39,18 @@ export function AiSettingsTab() {
       .catch(() => setLoadErr(true));
   }, []);
 
-  // Каталог моделей. Ключ эффекта включает base_url: смена адреса шлюза должна
-  // перезапрашивать список, иначе селектор показывает модели прошлого адреса.
-  useEffect(() => {
-    if (!cfg) return;
+  // Каталог моделей. Бэкенд решает сам (Волна 6, План C Ф2: гейт по gateway
+  // снят), пустой список = «вводите вручную».
+  const loadModels = () =>
     fetch("/api/ai/models")
       .then(r => (r.ok ? r.json() : { models: [] }))
       .then(d => setModels(d.models || []))
       .catch(() => setModels([]));
-  }, [cfg?.gateway, cfg?.base_url]);
+
+  // Ключи эффекта — то, от чего реально зависит ответ сервера. `has_key` тут
+  // обязателен: без ключа сервер отдаёт [], и после первого сохранения ключа
+  // список должен появиться сам.
+  useEffect(() => { if (cfg) loadModels(); }, [cfg?.base_url, cfg?.provider, cfg?.has_key]);
 
   const patchCfg = (p: Partial<AiConfig>) => setCfg(c => (c ? { ...c, ...p } : c));
 
@@ -64,6 +67,9 @@ export function AiSettingsTab() {
       if (!r.ok) throw new Error("save failed");
       setCfg(data);
       setKeyInput("");
+      // Явный рефетч: если ключи эффекта не изменились (например сохранили тот
+      // же base_url), сам он не перезапустится, и каталог остался бы прежним.
+      await loadModels();
       toast("Настройки ИИ сохранены", "success");
     } catch { toast("Не удалось сохранить настройки ИИ", "error"); }
     finally { setSaving(false); }
@@ -102,7 +108,13 @@ export function AiSettingsTab() {
             </select>
           </label>
           <label className="flex flex-col gap-1 sm:col-span-2">
-            <span className="micro">Модель{models.length === 0 && " (список пуст — введите вручную)"}</span>
+            <span className="micro flex items-center gap-2">
+              Модель{models.length === 0 && " (список пуст — введите вручную)"}
+              <button type="button" onClick={loadModels} disabled={saving}
+                className="normal-case tracking-normal font-normal text-[var(--accent-hi)] hover:underline">
+                Обновить список
+              </button>
+            </span>
             {models.length > 0 ? (
               <select className="selectbox" value={cfg.model} disabled={saving}
                 onChange={e => patchCfg({ model: e.target.value })}>

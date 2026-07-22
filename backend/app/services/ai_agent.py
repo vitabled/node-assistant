@@ -216,16 +216,32 @@ def _check_base_url(config: AiConfig) -> None:
 
 
 async def list_models(config: AiConfig, key: str) -> list[str]:
-    """Fetch available model ids from an OpenAI-format {base_url}/models endpoint
-    (CLIProxyAPI). Never raises — returns [] on any failure."""
+    """Fetch available model ids from a {base_url}/models endpoint. Works for any
+    provider, not just the CLIProxyAPI gateway: both OpenAI-compatible endpoints
+    and Anthropic expose the same `{"data":[{"id":…}]}` shape.
+
+    Never raises — returns [] on any failure, so the UI falls back to free-text.
+    """
+    # Без ключа сети быть не должно: свежий аккаунт открывает вкладку настроек,
+    # и запрос всё равно вернул бы 401. Ранний выход держит эндпоинт бесплатным
+    # и оставляет тесты сетенезависимыми.
+    if not key:
+        return []
     try:
         _check_base_url(config)
     except AgentError:
         return []
     url = f"{config.base_url.rstrip('/')}/models"
+    # Anthropic не понимает Bearer — у него свой заголовок и обязательная версия
+    # API (та же пара, что в `_anthropic_turn`).
+    headers = (
+        {"x-api-key": key, "anthropic-version": "2023-06-01"}
+        if config.provider == "anthropic"
+        else {"Authorization": f"Bearer {key}"}
+    )
     try:
         async with httpx.AsyncClient(timeout=20.0) as c:
-            r = await c.get(url, headers={"Authorization": f"Bearer {key}"})
+            r = await c.get(url, headers=headers)
         if r.status_code >= 400:
             return []
         data = r.json()
