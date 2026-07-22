@@ -1,6 +1,12 @@
 
-# Playwright screenshot artifacts
-tests/e2e/shots/
+# Playwright screenshot artifacts. Каталог исключается ПОФАЙЛОВО, а не целиком:
+# git не умеет re-include внутри исключённой директории, а база измерений
+# производительности (perf/baseline.json) обязана быть в репозитории — без неё
+# фазы Плана F не с чем сравнивать «стало».
+tests/e2e/shots/*
+!tests/e2e/shots/perf
+tests/e2e/shots/perf/*
+!tests/e2e/shots/perf/baseline.json
 
 # Vendored js-yaml for the embedded Mihomo configurator (copied from node_modules
 # at build by scripts/vendor-mihomo.mjs — do not commit the generated blob).
