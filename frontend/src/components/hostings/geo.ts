@@ -40,6 +40,45 @@ export const CONTINENT: Record<string, ContinentKey> = {
   TH: "AS", TR: "EU", TW: "AS", UA: "EU", US: "NA", UZ: "AS", VN: "AS", ZA: "AF",
 };
 
+// ── Map geometry ↔ our alpha-2 codes (Wave-7 Plan D Ф3) ────────
+//
+// `world-atlas` features carry an ISO 3166-1 NUMERIC id ("528") and an English
+// name, not alpha-2 — so a click on a shape needs this table. Matching on
+// `properties.name` instead would be fragile (Czechia/Czech Republic,
+// United States/United States of America).
+//
+// Generated from the bundled `countries-110m` by matching CountrySelect's
+// English names, then frozen here: 62 of our 64 countries resolved.
+//
+// ⚠️ NOT PRESENT in 110m: Singapore and Hong Kong — the low-resolution dataset
+// drops city-states. Their MARKERS still render (they are plotted from lat/lng,
+// independent of the polygons), and the country panel opens from a marker click
+// too, so nothing is unreachable. Switching to `countries-50m` would add them at
+// the cost of ~634 KB of geometry — measured, and rejected against the 1.43 MB
+// JS budget Wave 6 recorded. If it ever becomes worth it, only this table and
+// the import need to change.
+// Three shapes (N. Cyprus, Somaliland, Kosovo) have no id at all; none of them
+// are countries we offer, so they stay inert.
+export const NUMERIC_TO_ALPHA2: Record<string, string> = {
+  "008": "AL", "031": "AZ", "032": "AR", "036": "AU", "040": "AT", "051": "AM",
+  "056": "BE", "076": "BR", "100": "BG", "112": "BY", "124": "CA", "152": "CL",
+  "156": "CN", "158": "TW", "191": "HR", "196": "CY", "203": "CZ", "208": "DK",
+  "233": "EE", "246": "FI", "250": "FR", "268": "GE", "276": "DE", "300": "GR",
+  "348": "HU", "352": "IS", "356": "IN", "360": "ID", "364": "IR", "372": "IE",
+  "376": "IL", "380": "IT", "392": "JP", "398": "KZ", "428": "LV", "440": "LT",
+  "442": "LU", "458": "MY", "484": "MX", "498": "MD", "528": "NL", "554": "NZ",
+  "578": "NO", "616": "PL", "620": "PT", "642": "RO", "643": "RU", "682": "SA",
+  "688": "RS", "703": "SK", "704": "VN", "705": "SI", "710": "ZA", "724": "ES",
+  "752": "SE", "756": "CH", "764": "TH", "792": "TR", "804": "UA", "826": "GB",
+  "840": "US", "860": "UZ",
+};
+
+/** alpha-2 for a react-simple-maps geography, or "" when we don't track it. */
+export function alpha2OfGeo(geo: { id?: string | number }): string {
+  const id = geo?.id == null ? "" : String(geo.id).padStart(3, "0");
+  return NUMERIC_TO_ALPHA2[id] ?? "";
+}
+
 // One representative point per country (capital / major DC hub) so a marker can
 // appear from the country alone when no city coords are available. [lng, lat].
 export const COUNTRY_CENTROID: Record<string, [number, number]> = {

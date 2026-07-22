@@ -26,6 +26,7 @@ export function HostingsCatalog() {
   const [rows, setRows] = useState<Hosting[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<null | { edit?: Hosting }>(null);
+  const [details, setDetails] = useState<Hosting | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,21 +59,27 @@ export function HostingsCatalog() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {rows.map(h => {
             const mt = minTariff(h);
+            // The card itself opens the full view; the icon buttons keep their
+            // own actions and must stopPropagation so they don't also trigger it.
             return (
-              <div key={h.id} className="card p-4 flex flex-col gap-2.5">
+              <div key={h.id} className="card p-4 flex flex-col gap-2.5 cursor-pointer"
+                onClick={() => setDetails(h)} role="button" tabIndex={0}
+                onKeyDown={e => { if (e.key === "Enter") setDetails(h); }}
+                title="Открыть полные данные">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <span className="text-sm font-medium text-[var(--t-hi)] truncate block">{h.name}</span>
                     {h.website && (
                       <a href={h.website} target="_blank" rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
                         className="text-[11px] text-[var(--t-low)] hover:text-[var(--accent-hi)] flex items-center gap-1 truncate">
                         <ExternalLink size={10} /> {h.website.replace(/^https?:\/\//, "")}
                       </a>
                     )}
                   </div>
                   <div className="flex shrink-0">
-                    <button onClick={() => setModal({ edit: h })} className="p-1 text-[var(--t-low)] hover:text-[var(--accent-hi)]"><Pencil size={12} /></button>
-                    <button onClick={() => del(h)} className="p-1 text-[var(--t-low)] hover:text-[var(--err)]"><Trash2 size={12} /></button>
+                    <button title="Изменить" onClick={e => { e.stopPropagation(); setModal({ edit: h }); }} className="p-1 text-[var(--t-low)] hover:text-[var(--accent-hi)]"><Pencil size={12} /></button>
+                    <button title="Удалить" onClick={e => { e.stopPropagation(); del(h); }} className="p-1 text-[var(--t-low)] hover:text-[var(--err)]"><Trash2 size={12} /></button>
                   </div>
                 </div>
 
@@ -102,11 +109,87 @@ export function HostingsCatalog() {
       )}
 
       {modal && <HostingModal edit={modal.edit} onClose={() => setModal(null)} onSaved={() => { setModal(null); load(); }} />}
+      {details && (
+        <HostingDetails h={details} onClose={() => setDetails(null)}
+          onEdit={() => { setModal({ edit: details }); setDetails(null); }} />
+      )}
     </Page>
   );
 }
 
-const emptyTariff = (): Tariff => ({ name: "", specs: "", price: 0, currency: "USD", period: "mo" });
+/** Read-only full view of one hosting: every tariff (with channel width) and
+ *  every location. Editing stays in `HostingModal`. */
+function HostingDetails({ h, onClose, onEdit }: { h: Hosting; onClose: () => void; onEdit: () => void }) {
+  return (
+    <Modal title={h.name} onClose={onClose} wide
+      footer={<>
+        <button onClick={onClose} className="px-3 py-1.5 rounded-md text-sm text-[var(--t-mid)] hover:text-[var(--t-hi)]">Закрыть</button>
+        <button onClick={onEdit} className="flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)]">
+          <Pencil size={12} /> Изменить
+        </button>
+      </>}>
+      <div className="flex flex-col gap-4">
+        {h.website && (
+          <a href={h.website} target="_blank" rel="noopener noreferrer"
+            className="text-xs text-[var(--accent-hi)] flex items-center gap-1 truncate">
+            <ExternalLink size={11} /> {h.website}
+          </a>
+        )}
+        {h.features && <p className="text-xs text-[var(--t-mid)] whitespace-pre-wrap">{h.features}</p>}
+        {h.notes && <p className="text-xs text-[var(--t-low)] whitespace-pre-wrap">{h.notes}</p>}
+
+        <div>
+          <p className="label mb-1 flex items-center gap-1"><Tag size={12} /> Тарифы</p>
+          {h.tariffs.length === 0 ? (
+            <p className="text-xs text-[var(--t-faint)]">Тарифов нет.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="tbl text-xs w-full">
+                <thead>
+                  <tr><th>Тариф</th><th>Характеристики</th><th>Канал</th><th className="text-right">Цена</th></tr>
+                </thead>
+                <tbody>
+                  {h.tariffs.map((t, i) => (
+                    <tr key={i}>
+                      <td className="text-[var(--t-hi)]">{t.name || "—"}</td>
+                      <td className="text-[var(--t-low)]">{t.specs || "—"}</td>
+                      <td className="text-[var(--t-low)]">{t.bandwidth || "—"}</td>
+                      <td className="text-right tabular-nums whitespace-nowrap">
+                        {t.price > 0
+                          ? <>{fmtNum(t.price, t.currency)}<span className="text-[var(--t-faint)]">{periodLabel(t.period)}</span></>
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <p className="label mb-1 flex items-center gap-1"><MapPin size={12} /> Локации</p>
+          {h.locations.length === 0 ? (
+            <p className="text-xs text-[var(--t-faint)]">Локаций нет.</p>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {h.locations.map((l, i) => (
+                <p key={i} className="text-xs text-[var(--t-mid)] flex items-center gap-1.5">
+                  <Flag code={l.country_code} size={14} />
+                  {l.city || l.country_code || "без страны"}
+                  {l.note && <span className="text-[11px] text-[var(--t-faint)]">· {l.note}</span>}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+
+      </div>
+    </Modal>
+  );
+}
+
+const emptyTariff = (): Tariff => ({ name: "", specs: "", bandwidth: "", price: 0, currency: "USD", period: "mo" });
 const emptyLoc = (): HostingLocation => ({ city: "", country_code: "", lat: 0, lng: 0, note: "" });
 
 function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () => void; onSaved: () => void }) {
@@ -134,7 +217,10 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
   const submit = async () => {
     if (!name.trim()) { toast("Укажите название хостинга", "error"); return; }
     // Drop fully-empty tariff/location rows.
-    const cleanTariffs = tariffs.filter(t => t.name.trim() || t.specs.trim() || t.price > 0);
+    // `bandwidth` counts as content too — otherwise a tariff that only records a
+    // channel width would be silently discarded on save.
+    const cleanTariffs = tariffs.filter(
+      t => t.name.trim() || t.specs.trim() || (t.bandwidth || "").trim() || t.price > 0);
     const cleanLocs = locations.filter(l => l.country_code || l.city.trim());
     const body: HostingBody = {
       name: name.trim(), website: website.trim(), features: features.trim(), notes: notes.trim(),
@@ -178,6 +264,8 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
             </div>
             <input value={t.specs} onChange={e => setTariff(i, { specs: e.target.value })}
               placeholder="2 vCPU / 4 GB / 40 GB NVMe" spellCheck={false} className="input" />
+            <input value={t.bandwidth ?? ""} onChange={e => setTariff(i, { bandwidth: e.target.value })}
+              placeholder="Канал: 1 Гбит/с, 20 ТБ" spellCheck={false} className="input" />
             <div className="flex items-center gap-2">
               <input type="number" min={0} step="0.01" value={t.price || ""} onChange={e => setTariff(i, { price: parseFloat(e.target.value) || 0 })}
                 placeholder="Цена" className="input w-24" />

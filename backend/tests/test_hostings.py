@@ -60,3 +60,26 @@ def test_validation():
 def test_update_missing_404():
     a = _auth()
     assert client.put("/api/hostings/nope", headers=a, json={"name": "X"}).status_code == 404
+
+
+# ── Wave-7 Plan D Ф1: network channel width on a tariff ────────
+def test_tariff_bandwidth_roundtrip():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Hetzner",
+        "tariffs": [{"name": "CX22", "bandwidth": "1 Гбит/с, 20 ТБ", "price": 5.5}],
+    })
+    assert r.status_code == 201
+    assert r.json()["tariffs"][0]["bandwidth"] == "1 Гбит/с, 20 ТБ"
+    assert client.get("/api/hostings", headers=a).json()[0]["tariffs"][0]["bandwidth"] == "1 Гбит/с, 20 ТБ"
+
+
+def test_tariff_without_bandwidth_still_reads():
+    """Documents already stored before Ф1 have no `bandwidth` key — they must
+    keep loading, with the field defaulting to empty rather than 422-ing."""
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Old", "tariffs": [{"name": "legacy", "specs": "2 vCPU", "price": 3}],
+    })
+    assert r.status_code == 201
+    assert r.json()["tariffs"][0]["bandwidth"] == ""

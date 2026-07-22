@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 class Tariff(BaseModel):
     name: str = ""
     specs: str = ""          # free-text spec summary (CPU/RAM/disk/…)
+    # Network channel width. Free text, not a number: providers quote a port
+    # speed, a guarantee and a traffic cap together ("1 Гбит/с, 20 ТБ",
+    # "10G unmetered") — there is no single numeric semantic to store.
+    bandwidth: str = ""
     price: float = Field(default=0, ge=0)
     currency: str = "USD"
     period: str = "mo"       # mo | yr | hr | once (free-text label)
