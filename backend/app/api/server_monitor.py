@@ -16,10 +16,14 @@ import re
 import sys
 from typing import Any, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.services import accounts
+from app.services import net_guard
+from app.services import storage
+from app.services import subscription_import
 from app.services import worker_lease
 from app.services import server_monitor_store as store
 
@@ -80,6 +84,13 @@ class DeployedServer(BaseModel):
     port: int = 443
 
 
+class SubscriptionImport(BaseModel):
+    """Import nodes from one of the account's subscriptions, or a one-off URL."""
+    subscription_id: str = ""
+    url: str = ""
+    dry_run: bool = True
+
+
 # ── server registry (CRUD) ─────────────────────────────────────
 
 @router.get("/servers")
@@ -122,6 +133,104 @@ async def sync_deployed(body: list[DeployedServer]) -> dict[str, Any]:
     items = [b.model_dump() for b in body if _valid_ipv4(b.ip)]
     count = await store.sync_deployed(items)
     return {"ok": True, "synced": count}
+
+
+# ── import from a subscription (Wave-7 Plan B) ─────────────────
+
+_FETCH_TIMEOUT = 15
+_MAX_SUB_BYTES = 4 * 1024 * 1024   # same cap the aggregator uses
+_RESOLVE_LIMIT = 16                # concurrent DNS lookups
+
+
+async def _fetch_subscription(url: str) -> str:
+    if not net_guard.is_safe_url(url):
+        raise HTTPException(400, "URL подписки не разрешён: нужен http(s) с публичным хостом")
+    try:
+        async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=False) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            return r.content[:_MAX_SUB_BYTES].decode("utf-8", "replace")
+    except HTTPException:
+        raise
+    except Exception:
+        # Never echo the URL — it is the subscription secret.
+        raise HTTPException(502, "Не удалось загрузить подписку")
+
+
+async def _resolve(host: str, sem: asyncio.Semaphore) -> str:
+    """host → IPv4, or "" when it doesn't resolve."""
+    async with sem:
+        try:
+            loop = asyncio.get_event_loop()
+            infos = await loop.getaddrinfo(host, None, family=2)  # AF_INET
+            return infos[0][4][0] if infos else ""
+        except Exception:
+            return ""
+
+
+@router.post("/import/subscription")
+async def import_from_subscription(body: SubscriptionImport) -> dict[str, Any]:
+    """Preview (`dry_run`) or import a subscription's nodes as monitored servers.
+
+    Links are fetched and parsed SERVER-side: they carry credentials, and a
+    browser fetch would hit CORS anyway. Hosts are resolved to IPv4 here because
+    `servers.ip` is an address — the original hostname is kept in `note` so the
+    operator can see where a row came from.
+    """
+    url = (body.url or "").strip()
+    if not url:
+        subs = storage.load_subscriptions()
+        sub = next((s for s in subs if s.get("id") == body.subscription_id), None)
+        if sub is None:
+            raise HTTPException(404, "Подписка не найдена")
+        url = (sub.get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "У подписки нет URL")
+
+    links = subscription_import.decode_subscription(await _fetch_subscription(url))
+    candidates = [c for c in (subscription_import.link_to_candidate(l) for l in links) if c]
+
+    # Dedup within the subscription first: one host usually appears several times
+    # with different transports, and monitoring probes a host, not an inbound.
+    seen: set[tuple[str, int]] = set()
+    uniq = []
+    for c in candidates:
+        key = (c["host"], c["port"])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(c)
+
+    sem = asyncio.Semaphore(_RESOLVE_LIMIT)
+    ips = await asyncio.gather(*(_resolve(c["host"], sem) for c in uniq))
+
+    existing = {(s["ip"], int(s.get("port") or 0)) for s in await store.list_servers()}
+    rows: list[dict[str, Any]] = []
+    for c, ip in zip(uniq, ips):
+        if not ip:
+            status = "unresolved"
+        elif (ip, c["port"]) in existing:
+            status = "duplicate"
+        else:
+            status = "new"
+        rows.append({**c, "ip": ip, "status": status})
+
+    imported = 0
+    if not body.dry_run:
+        for r in rows:
+            if r["status"] != "new":
+                continue
+            # source='manual': a dedicated source would be un-editable and
+            # un-deletable (update_server is manual-only, and only 'deployed'
+            # rows are re-synced) — the very dead end Wave 6 had to work around.
+            await store.add_server(r["name"], r["country"], r["ip"], r["port"],
+                                   f"из подписки · {r['host']}", "manual")
+            imported += 1
+
+    return {
+        "total": len(links), "candidates": rows, "imported": imported,
+        "dry_run": body.dry_run,
+    }
 
 
 # ── status page (same shape as /api/checker/statuspage) ─────────

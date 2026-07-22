@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Activity, Zap, RefreshCw, Loader2, ChevronDown, CheckCircle2,
   AlertTriangle, XCircle, Clock,
-  Check, Plus, Trash2, Pencil, X, Save, Server, Radio, Eye, EyeOff,
+  Check, Plus, Trash2, Pencil, X, Save, Server, Radio, Eye, EyeOff, Download,
 } from "lucide-react";
 import { FlagChip } from "./common/FlagChip";
+import { ImportFromSubscription } from "./ImportFromSubscription";
 import { resolveCountryCode, splitFlagEmoji } from "../utils/countryAliases";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
@@ -345,6 +346,7 @@ function ServerUptime() {
   const [ticks, setTicks]       = useState(30);
   const [loading, setLoading]   = useState(true);
   const [modal, setModal]       = useState<{ editing?: Node } | null>(null);
+  const [importing, setImporting] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async (n: number) => {
@@ -437,6 +439,9 @@ function ServerUptime() {
           <button onClick={() => load(ticks)} className="iconbtn" title="Обновить">
             <RefreshCw size={13} />
           </button>
+          <button onClick={() => setImporting(true)} className="btn btn-soft" title="Импорт из подписки">
+            <Download size={13} /> Из подписки
+          </button>
           <button onClick={() => setModal({})} className="btn btn-primary">
             <Plus size={13} /> Добавить сервер
           </button>
@@ -516,6 +521,13 @@ function ServerUptime() {
       )}
 
       <IncidentLog incidents={incidents} />
+
+      {importing && (
+        <ImportFromSubscription
+          onClose={() => setImporting(false)}
+          onImported={() => load(ticks)}
+        />
+      )}
 
       {modal !== null && (
         <ServerModal
