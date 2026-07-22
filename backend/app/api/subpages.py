@@ -13,11 +13,17 @@ into the `remnawave/subscription-page` container. Session-gated per-account
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
-from pydantic import BaseModel
+import re
+import tempfile
+from pathlib import Path
 
-from app.services import subpage_store
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi.responses import Response
+from pydantic import BaseModel, Field, field_validator
+
+from app.services import subpage_baseline, subpage_store
+from app.services.ssh_manager import SSHSession
+from app.services.task_store import TaskStatus, task_store
 
 router = APIRouter(prefix="/api/subpages")
 
@@ -111,6 +117,119 @@ class OverlayCreate(BaseModel):
     name: str
     base_image: str = ""
     base_digest: str = ""
+
+
+# ── Baseline of the vendor frontend (Wave-7 Plan G Ф4) ────────
+#
+# Literal paths, declared ABOVE the `/{page_id}`-shaped routes below on purpose.
+
+_IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,180}$")
+
+_BASELINE_STEPS = ["Подключение", "Извлечение из образа", "Скачивание и распаковка"]
+
+
+class BaselinePull(BaseModel):
+    ip: str
+    ssh_user: str = "root"
+    ssh_password: str = ""
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    image: str = "remnawave/subscription-page:7.2.6"
+
+    @field_validator("image")
+    @classmethod
+    def _image(cls, v: str) -> str:
+        v = (v or "").strip()
+        # The image name is interpolated into a root shell on the node. It is
+        # shlex-quoted there too, but a charset gate here keeps a typo from
+        # becoming a support ticket instead of a 422.
+        if not _IMAGE_RE.match(v):
+            raise ValueError("Недопустимое имя образа")
+        return v
+
+
+@router.get("/baselines")
+async def list_baselines() -> dict:
+    return {"baselines": subpage_baseline.list_baselines()}
+
+
+@router.get("/baselines/{digest}/files")
+async def baseline_files(digest: str) -> dict:
+    meta = subpage_baseline.get_manifest(digest)
+    if not meta:
+        raise HTTPException(404, "База не найдена")
+    return {"digest": meta["digest"], "image": meta.get("image", ""),
+            "files": meta.get("files", [])}
+
+
+@router.get("/baselines/{digest}/files/{relpath:path}")
+async def baseline_file(digest: str, relpath: str) -> Response:
+    data = subpage_baseline.read_file(digest, relpath)
+    if data is None:
+        raise HTTPException(404, "Файл не найден")
+    # Same reasoning as overlay members: vendor assets are never rendered here.
+    return Response(
+        content=data, media_type="application/octet-stream", headers=_MEMBER_HEADERS,
+    )
+
+
+@router.post("/baselines/pull")
+async def pull_baseline(body: BaselinePull, background_tasks: BackgroundTasks) -> dict:
+    """SSH into a node, copy the frontend out of the image, cache it by digest.
+
+    SSH creds are per-request and never persisted (project rule); `account_id` is
+    captured HERE rather than read from the ContextVar in the background task —
+    the ContextVar's survival across BackgroundTask is version-dependent and the
+    pinned fastapi differs from the one it was measured on."""
+    task = task_store.create(total_steps=len(_BASELINE_STEPS))
+    background_tasks.add_task(_pull_baseline, body, task.task_id)
+    return {"task_id": task.task_id, "task_type": "subpage-baseline"}
+
+
+async def _pull_baseline(req: BaselinePull, task_id: str) -> None:
+    task = task_store.get(task_id)
+    if not task:
+        return
+    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    tmp = tempfile.TemporaryDirectory(prefix="na-baseline-")
+    try:
+        task.set_step(1, TaskStatus.RUNNING)
+        task.add_log(f"Подключение к {req.ip}:{req.ssh_port}...")
+        await ssh.connect()
+        task.add_log("Подключено.")
+
+        task.set_step(2, TaskStatus.RUNNING)
+        task.add_log(f"Извлечение {subpage_baseline.IMAGE_PATH} из {req.image}...")
+        out = await ssh.get_script_output(
+            subpage_baseline.extract_tree_script(req.image), timeout=600,
+        )
+        probe = subpage_baseline.parse_probe(out)
+        digest = probe.get("DIGEST", "")
+        if not digest:
+            raise RuntimeError("Не удалось определить digest образа")
+        task.add_log(f"digest: {digest} ({probe.get('BYTES', '?')} байт архива)")
+
+        task.set_step(3, TaskStatus.RUNNING)
+        if subpage_baseline.has_baseline(digest):
+            task.add_log("Эта база уже скачана — пропускаем.")
+        else:
+            local = Path(tmp.name) / "frontend.tgz"
+            await ssh.download_file(f"{subpage_baseline._REMOTE_DIR}/frontend.tgz",
+                                    str(local))
+            meta = subpage_baseline.save_baseline(digest, req.image, local)
+            task.add_log(f"Сохранено файлов: {meta['files_count']} "
+                         f"({meta['bytes']} байт).")
+        task.finish(TaskStatus.SUCCESS)
+    except Exception as exc:
+        task.add_log(f"Ошибка: {exc}")
+        task.finish(TaskStatus.FAILED)
+    finally:
+        # Always try to clear the node's temp dir, even on failure.
+        try:
+            await ssh.get_output(subpage_baseline.cleanup_script())
+        except Exception:
+            pass
+        await ssh.close()
+        tmp.cleanup()
 
 
 @router.post("/overlay", status_code=201)
