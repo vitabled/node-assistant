@@ -13,18 +13,21 @@ from pydantic import BaseModel
 from app.models.config_templates import (
     ConfigTemplateBody, KIND_TO_ENUM, ENUM_TO_KIND, YAML_KINDS,
 )
-from app.models.settings import AppSettings
-from app.services import config_templates_store as store, storage
+from app.services import config_templates_store as store
+from app.services import panel_registry
 from app.services.remnawave_client import RemnavaveClient, RemnavaveError
 
 router = APIRouter(prefix="/api/config-templates")
 
 
-def _client() -> RemnavaveClient:
-    cfg = AppSettings(**storage.load_settings()).remnawave
-    if not cfg.panel_url or not cfg.api_token:
+def _client(panel_id: str = "") -> RemnavaveClient:
+    """Empty `panel_id` keeps the pre-Wave-7 behaviour (the active panel)."""
+    try:
+        return panel_registry.client_for(panel_id)
+    except panel_registry.PanelNotFound:
+        raise HTTPException(404, "Панель не найдена")
+    except panel_registry.PanelNotConfigured:
         raise HTTPException(400, "Remnawave не настроен")
-    return RemnavaveClient(cfg.panel_url, cfg.api_token)
 
 
 class ReorderBody(BaseModel):
@@ -66,12 +69,12 @@ async def reorder(body: ReorderBody):
 
 # ── Remnawave export/import (optional; needs a configured panel) ──
 @router.post("/{template_id}/export")
-async def export_to_panel(template_id: str):
+async def export_to_panel(template_id: str, panel_id: str = ""):
     tpl = store.get_template(template_id)
     if not tpl:
         raise HTTPException(404, "Шаблон не найден")
     kind = tpl.get("kind")
-    client = _client()
+    client = _client(panel_id)
     try:
         created = await client.create_subscription_template(tpl["name"], KIND_TO_ENUM[kind])
         uuid = created.get("uuid")
@@ -86,17 +89,22 @@ async def export_to_panel(template_id: str):
 
 
 @router.get("/import/panel")
-async def list_panel_templates():
-    client = _client()
+async def list_panel_templates(panel_id: str = ""):
+    client = _client(panel_id)
     try:
-        return await client.list_subscription_templates()
+        data = await client.list_subscription_templates()
     except RemnavaveError as e:
         raise HTTPException(502, f"Remnawave: {e}")
+    # Echo which panel answered so the UI never has to guess whose list it shows.
+    resolved = panel_registry.resolve(panel_id).id
+    if isinstance(data, dict):
+        return {**data, "panel_id": resolved}
+    return {"templates": data, "panel_id": resolved}
 
 
 @router.post("/import/panel/{uuid}", status_code=201)
-async def import_from_panel(uuid: str):
-    client = _client()
+async def import_from_panel(uuid: str, panel_id: str = ""):
+    client = _client(panel_id)
     try:
         tpl = await client.get_subscription_template(uuid)
     except RemnavaveError as e:
