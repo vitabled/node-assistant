@@ -4,8 +4,8 @@ import {
   AlertTriangle, XCircle, Clock,
   Check, Plus, Trash2, Pencil, X, Save, Server, Radio, Eye, EyeOff,
 } from "lucide-react";
-import { COUNTRIES } from "./CountrySelect";
-import { getFlagEmoji } from "../utils/format";
+import { FlagChip } from "./common/FlagChip";
+import { resolveCountryCode, splitFlagEmoji } from "../utils/countryAliases";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
 type TickStatus = "up" | "slow" | "down";
@@ -34,27 +34,12 @@ interface Incident {
 }
 
 // ── Helpers ───────────────────────────────────────────────────
-function extractFlag(s: string): string | null {
-  const arr = Array.from(s);
-  for (let i = 0; i < arr.length - 1; i++) {
-    const a = arr[i].codePointAt(0)!, b = arr[i + 1].codePointAt(0)!;
-    if (a >= 0x1F1E6 && a <= 0x1F1FF && b >= 0x1F1E6 && b <= 0x1F1FF) return arr[i] + arr[i + 1];
-  }
-  return null;
-}
-// Resolve a flag from a node's location group. xray-checker gives a free-form
-// groupName (a 2-letter code, a country name, or a string with an embedded
-// flag), so we try each and always route the final code through getFlagEmoji.
-function flagFor(group: string): string {
-  const embedded = extractFlag(group);          // already-a-flag emoji
-  if (embedded) return embedded;
-  const g = group.trim();
-  if (/^[A-Za-z]{2}$/.test(g)) return getFlagEmoji(g);   // raw ISO code, e.g. "US"
-  const gl = g.toLowerCase();
-  const match = COUNTRIES.find(c =>
-    c.code !== "XX" && (c.name.toLowerCase() === gl || gl.includes(c.name.toLowerCase())));
-  return match ? getFlagEmoji(match.code) : "🌐";
-}
+// Resolve an alpha-2 code from a node's location group. xray-checker gives a
+// free-form groupName (a 2-letter code, an English or Russian country name, or a
+// string with an embedded flag emoji) — `resolveCountryCode` tries each. We keep
+// the CODE, not an emoji: flags render as `FlagChip` SVGs, because a
+// regional-indicator pair shows up as two bare letters on several Windows builds.
+const flagFor = resolveCountryCode;
 function fmtDuration(sec: number): string {
   if (sec < 60) return `${sec} сек`;
   const m = Math.floor(sec / 60), s = sec % 60;
@@ -174,14 +159,14 @@ function CountryGroup({ country, nodes, ticks, defaultOpen = true }: {
   country: string; nodes: Node[]; ticks: number; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const flag = flagFor(country);
+  const cc = flagFor(country);
   const anyDown = nodes.some(n => !n.online);
   const label = country || "Прочее";
   return (
     <div className="rounded-xl border border-[var(--line-soft)] overflow-hidden">
       <button onClick={() => setOpen(o => !o)}
         className="w-full flex items-center gap-2.5 px-4 py-2.5 bg-[var(--bg2)] hover:bg-[var(--bg3)] transition-colors">
-        <span className="text-lg leading-none">{flag}</span>
+        <FlagChip code={cc} size={20} />
         <span className="text-sm font-medium text-[var(--t-hi)]">{label}</span>
         <span className="text-[11px] text-[var(--t-faint)]">Нод: {nodes.length}</span>
         {anyDown && <span className="w-1.5 h-1.5 rounded-full bg-[var(--err)]" />}
@@ -189,7 +174,7 @@ function CountryGroup({ country, nodes, ticks, defaultOpen = true }: {
       </button>
       {open && (
         <div className="divide-y divide-[var(--line-soft)]">
-          {nodes.map(n => <NodeRow key={n.stableId} node={n} flag={flag} ticks={ticks} />)}
+          {nodes.map(n => <NodeRow key={n.stableId} node={n} cc={cc} ticks={ticks} />)}
         </div>
       )}
     </div>
@@ -473,17 +458,17 @@ function ServerUptime() {
       ) : (
         <div className="flex flex-col gap-3">
           {groups.map(([country, nodes]) => {
-            const flag = flagFor(country);
+            const cc = flagFor(country);
             return (
               <div key={country} className="rounded-xl border border-[var(--line-soft)] overflow-hidden">
                 <div className="flex items-center gap-2.5 px-4 py-2.5 bg-[var(--bg2)]">
-                  <span className="text-lg leading-none">{flag}</span>
+                  <FlagChip code={cc} size={20} />
                   <span className="text-sm font-medium text-[var(--t-hi)]">{country || "Прочее"}</span>
                   <span className="text-[11px] text-[var(--t-faint)]">Серверов: {nodes.length}</span>
                 </div>
                 <div className="divide-y divide-[var(--line-soft)]">
                   {nodes.map(n => (
-                    <NodeRow key={n.stableId} node={n} flag={flag} ticks={ticks}
+                    <NodeRow key={n.stableId} node={n} cc={cc} ticks={ticks}
                       trailing={
                         <div className="flex items-center gap-1 shrink-0">
                           {n.source !== "manual" && (
@@ -745,18 +730,24 @@ function SubscriptionSelector() {
 }
 
 // ── Node row (compact status strip) ───────────────────────────
-function NodeRow({ node, flag, ticks, trailing }: {
-  node: Node; flag: string; ticks: number; trailing?: React.ReactNode;
+function NodeRow({ node, cc, ticks, trailing }: {
+  node: Node; cc: string; ticks: number; trailing?: React.ReactNode;
 }) {
   // Right-align bars: pad the left with "no-data" slots.
   const pad = Math.max(0, ticks - node.bars.length);
+  // Subscription remarks often carry their own flag emoji ("🇳🇱 Амстердам").
+  // Pull it out: it's more specific than the group's flag, and left inline it
+  // would render as two bare letters on Windows.
+  const own = splitFlagEmoji(node.name);
   return (
     <div className="ni-noderow flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--row-hover)]">
       {/* name + protocol */}
       <div className="ni-node-name flex items-center gap-2 min-w-0 w-52 shrink-0">
-        <span className="text-base leading-none">{flag}</span>
+        <FlagChip code={own.code || cc} size={18} />
         <div className="min-w-0">
-          <p className="text-sm text-[var(--t-hi)] truncate">{node.name}</p>
+          {/* A remark that is ONLY a flag leaves nothing behind — fall back to the
+              code so the row keeps a label instead of going blank. */}
+          <p className="text-sm text-[var(--t-hi)] truncate">{own.rest || own.code || node.name}</p>
           {node.protocol && (
             <span className="inline-block text-[10px] uppercase tracking-wide text-[var(--t-low)]
                              bg-[var(--bg3)] rounded px-1.5 py-0.5 mt-0.5">{node.protocol}</span>
