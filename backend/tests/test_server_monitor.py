@@ -151,3 +151,68 @@ def test_sync_deployed_route():
     assert r.status_code == 200 and r.json()["synced"] == 1
     servers = client.get("/api/server-monitor/servers", headers=h).json()
     assert servers[0]["source"] == "deployed" and servers[0]["ip"] == "7.7.7.7"
+
+
+# ── Волна 6, План B Ф4: скрытие вместо невозможного удаления ──
+
+def _sync_one(h, ip="10.9.9.9", name="auto-1"):
+    client.post("/api/server-monitor/servers/sync-deployed", headers=h,
+                json=[{"name": name, "country": "DE", "ip": ip, "port": 443}])
+    return next(s for s in client.get("/api/server-monitor/servers", headers=h).json() if s["ip"] == ip)
+
+
+def test_hidden_defaults_to_false():
+    h = _auth()
+    s = client.post("/api/server-monitor/servers", headers=h,
+                    json={"name": "m", "ip": "10.1.1.1"}).json()
+    assert s["hidden"] is False
+
+
+def test_deployed_row_can_be_hidden_although_it_cannot_be_edited():
+    """Ключевой смысл фазы: deployed-строку иначе не убрать с глаз вообще."""
+    h = _auth()
+    srv = _sync_one(h)
+    assert srv["source"] == "deployed"
+    # обычное поле у deployed не меняется (ограничение source='manual')
+    r = client.patch(f"/api/server-monitor/servers/{srv['id']}", headers=h, json={"name": "нельзя"})
+    assert r.status_code == 200 and r.json()["name"] == "auto-1"
+    # а скрытие — работает
+    r = client.patch(f"/api/server-monitor/servers/{srv['id']}", headers=h, json={"hidden": True})
+    assert r.status_code == 200 and r.json()["hidden"] is True
+
+
+def test_hidden_survives_a_re_sync():
+    """Ре-синк из deploy_jobs апсертит name/country/port и не должен сбрасывать флаг."""
+    h = _auth()
+    srv = _sync_one(h)
+    client.patch(f"/api/server-monitor/servers/{srv['id']}", headers=h, json={"hidden": True})
+    _sync_one(h)  # тот же IP приходит снова
+    again = next(s for s in client.get("/api/server-monitor/servers", headers=h).json() if s["ip"] == "10.9.9.9")
+    assert again["hidden"] is True
+
+
+def test_statuspage_excludes_hidden_from_counters_but_still_returns_them():
+    h = _auth()
+    a = client.post("/api/server-monitor/servers", headers=h, json={"name": "a", "ip": "10.2.2.1"}).json()
+    client.post("/api/server-monitor/servers", headers=h, json={"name": "b", "ip": "10.2.2.2"})
+    sp = client.get("/api/server-monitor/statuspage", headers=h).json()
+    assert sp["global"]["total"] == 2
+    client.patch(f"/api/server-monitor/servers/{a['id']}", headers=h, json={"hidden": True})
+    sp = client.get("/api/server-monitor/statuspage", headers=h).json()
+    assert sp["global"]["total"] == 1           # счётчики — только по видимым
+    assert len(sp["nodes"]) == 2                # но узел отдан, с флагом
+    assert [n["hidden"] for n in sp["nodes"] if n["stableId"] == a["id"]] == [True]
+
+
+def test_unhiding_restores_it_to_the_counters():
+    h = _auth()
+    s = client.post("/api/server-monitor/servers", headers=h, json={"name": "a", "ip": "10.3.3.1"}).json()
+    client.patch(f"/api/server-monitor/servers/{s['id']}", headers=h, json={"hidden": True})
+    assert client.get("/api/server-monitor/statuspage", headers=h).json()["global"]["total"] == 0
+    client.patch(f"/api/server-monitor/servers/{s['id']}", headers=h, json={"hidden": False})
+    assert client.get("/api/server-monitor/statuspage", headers=h).json()["global"]["total"] == 1
+
+
+def test_patch_on_unknown_server_still_404s():
+    h = _auth()
+    assert client.patch("/api/server-monitor/servers/nope", headers=h, json={"hidden": True}).status_code == 404

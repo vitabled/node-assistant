@@ -14,6 +14,9 @@ const validBoth: PanelFormData = {
   ...validPanel,
   target: "both",
   sub_domain: "sub.example.com",
+  // Волна 6: обязателен для target subpage/both — без него контейнер страницы
+  // подписок падает на старте.
+  subpage_api_token: "tok",
 };
 
 describe("validatePanelForm", () => {
@@ -34,10 +37,14 @@ describe("validatePanelForm", () => {
     // panel
     expect(validatePanelForm({ ...validPanel, panel_domain: "" }).panel_domain).toBeTruthy();
     // subpage: sub_domain required, panel_domain NOT
-    const sub = { ...PANEL_FORM_DEFAULT, target: "subpage" as const, ip: "1.2.3.4", ssh_password: "pw" };
+    const sub = { ...PANEL_FORM_DEFAULT, target: "subpage" as const, ip: "1.2.3.4",
+                  ssh_password: "pw", subpage_api_token: "tok" };
     expect(validatePanelForm(sub).sub_domain).toBeTruthy();
     expect(validatePanelForm(sub).panel_domain).toBeUndefined();
     expect(validatePanelForm({ ...sub, sub_domain: "sub.example.com" })).toEqual({});
+    // без токена — ошибка на его собственном поле
+    expect(validatePanelForm({ ...sub, sub_domain: "sub.example.com", subpage_api_token: "" })
+      .subpage_api_token).toBeTruthy();
     // both: both required
     const both = { ...PANEL_FORM_DEFAULT, target: "both" as const, ip: "1.2.3.4", ssh_password: "pw" };
     expect(validatePanelForm(both).panel_domain).toBeTruthy();
@@ -50,7 +57,7 @@ describe("validatePanelForm", () => {
     // target=subpage: panel_domain isn't rendered, so a stale bad value must not
     // silently block submit (regression: format check wasn't gated by wantPanel).
     const sub = { ...PANEL_FORM_DEFAULT, target: "subpage" as const, ip: "1.2.3.4", ssh_password: "pw",
-      sub_domain: "sub.example.com", panel_domain: "leftover-bad" };
+      sub_domain: "sub.example.com", panel_domain: "leftover-bad", subpage_api_token: "tok" };
     expect(validatePanelForm(sub).panel_domain).toBeUndefined();
     expect(validatePanelForm(sub)).toEqual({});
   });

@@ -1,6 +1,10 @@
 import { useState, useEffect, type ReactNode } from "react";
-import { Pencil, Plus, Trash2, ChevronUp, ChevronDown, Columns2 } from "lucide-react";
-import { useStatWidgets, WIDGET_KINDS, type WidgetKind } from "./statWidgetsStore";
+import { Pencil, Plus, Trash2, ChevronUp, ChevronDown, Columns2, EyeOff } from "lucide-react";
+import {
+  useStatWidgets, WIDGET_KINDS, type WidgetKind,
+  filterNodeLoad, filterMigrations, filterCheckerNodes, hiddenCount,
+} from "./statWidgetsStore";
+import { HiddenServers } from "./HiddenServers";
 import { TrendingUp, BarChart3, Users, ArrowRightLeft, ShieldCheck, Zap } from "lucide-react";
 import { WidgetSettings } from "./WidgetSettings";
 
@@ -62,10 +66,13 @@ function Card({ title, Icon, settings, children }:
   );
 }
 
-function State({ loading, err, empty, children }:
-  { loading: boolean; err: boolean; empty: boolean; children: ReactNode }) {
+function State({ loading, err, empty, allHidden, children }:
+  { loading: boolean; err: boolean; empty: boolean; allHidden?: boolean; children: ReactNode }) {
   if (loading) return <p style={{ fontSize: 12, color: "var(--t-faint)" }}>Загрузка…</p>;
   if (err) return <p style={{ fontSize: 12, color: "var(--err)" }}>Не удалось загрузить данные</p>;
+  // «Данных нет» и «всё скрыто вручную» — разные состояния: во втором случае
+  // пользователь иначе решит, что статистика сломалась.
+  if (empty && allHidden) return <p style={{ fontSize: 12, color: "var(--t-faint)" }}>Все серверы скрыты</p>;
   if (empty) return <p style={{ fontSize: 12, color: "var(--t-faint)" }}>Данных пока нет</p>;
   return <>{children}</>;
 }
@@ -227,11 +234,13 @@ function NodeLoadChart({ nodes }: { nodes: NodeLoad[] }) {
 function WNodeLoad() {
   const [hours, setHours] = useState(168);
   const { data, err, loading } = useFetch<{ nodes: NodeLoad[] }>(`/api/stats/users/node-load?hours=${hours}`);
-  const nodes = data?.nodes ?? [];
+  const hidden = useStatWidgets(s => s.hidden);
+  const raw = data?.nodes ?? [];
+  const nodes = filterNodeLoad(hidden, raw);
   return (
     <Card title="Загрузка нод во времени" Icon={TrendingUp}
       settings={<WidgetSettings><WindowSelect value={hours} onChange={setHours} /></WidgetSettings>}>
-      <State loading={loading} err={err} empty={nodes.length === 0}>
+      <State loading={loading} err={err} empty={nodes.length === 0} allHidden={raw.length > 0}>
         <NodeLoadChart nodes={nodes} />
       </State>
     </Card>
@@ -241,12 +250,15 @@ function WNodeLoad() {
 function WAvgPerNode() {
   const [hours, setHours] = useState(168);
   const { data, err, loading } = useFetch<{ nodes: NodeLoad[] }>(`/api/stats/users/node-load?hours=${hours}`);
-  const nodes = (data?.nodes ?? []).slice(0, 8);
+  const hidden = useStatWidgets(s => s.hidden);
+  const raw = data?.nodes ?? [];
+  // Фильтруем ДО среза top-N, иначе скрытая нода занимала бы место видимой.
+  const nodes = filterNodeLoad(hidden, raw).slice(0, 8);
   const max = Math.max(1, ...nodes.map(n => n.avg_online));
   return (
     <Card title="Среднее юзеров на ноду · самые загруженные" Icon={BarChart3}
       settings={<WidgetSettings><WindowSelect value={hours} onChange={setHours} /></WidgetSettings>}>
-      <State loading={loading} err={err} empty={nodes.length === 0}>
+      <State loading={loading} err={err} empty={nodes.length === 0} allHidden={raw.length > 0}>
         <div>
           {nodes.map(n => (
             <Bar key={n.node_uuid} label={n.node_name || n.node_uuid.slice(0, 8)}
@@ -283,7 +295,9 @@ function WMigrations({ nameMap }: { nameMap: Record<string, string> }) {
   const [hours, setHours] = useState(168);
   const { data, err, loading } = useFetch<{ migrations: { from_node: string; to_node: string; count: number }[] }>(
     `/api/stats/users/migrations?hours=${hours}`);
-  const migs = data?.migrations ?? [];
+  const hidden = useStatWidgets(s => s.hidden);
+  const rawMigs = data?.migrations ?? [];
+  const migs = filterMigrations(hidden, rawMigs);
   const nm = (id: string) => nameMap[id] || id.slice(0, 8);
   return (
     <Card title="Миграции пользователей" Icon={ArrowRightLeft}
@@ -292,7 +306,7 @@ function WMigrations({ nameMap }: { nameMap: Record<string, string> }) {
         <span className="chip" style={{ fontSize: 10, padding: "1px 7px" }}>оценка</span>
         <span style={{ fontSize: 10, color: "var(--t-faint)", marginLeft: 6 }}>приближённо, по нагрузке topUsers</span>
       </div>
-      <State loading={loading} err={err} empty={migs.length === 0}>
+      <State loading={loading} err={err} empty={migs.length === 0} allHidden={rawMigs.length > 0}>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {migs.slice(0, 10).map((m, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
@@ -318,13 +332,15 @@ function _statusUrl(cid: string): string {
 function WStableNodes({ instances }: { instances: Instance[] }) {
   const [cid, setCid] = useState("local");
   const { data, err, loading } = useFetch<{ nodes: CheckerNode[] }>(_statusUrl(cid));
-  const nodes = [...(data?.nodes ?? [])]
+  const hidden = useStatWidgets(s => s.hidden);
+  const raw = data?.nodes ?? [];
+  const nodes = filterCheckerNodes(hidden, cid, raw)
     .filter(n => n.uptime30d != null)
     .sort((a, b) => (b.uptime30d ?? 0) - (a.uptime30d ?? 0)).slice(0, 8);
   return (
     <Card title="Самые стабильные ноды" Icon={ShieldCheck}
       settings={<WidgetSettings><CheckerSelect value={cid} onChange={setCid} instances={instances} /></WidgetSettings>}>
-      <State loading={loading} err={err} empty={nodes.length === 0}>
+      <State loading={loading} err={err} empty={nodes.length === 0} allHidden={raw.length > 0}>
         <div>
           {nodes.map(n => (
             <Bar key={n.stableId} label={n.name} value={n.uptime30d ?? 0} max={100}
@@ -339,13 +355,15 @@ function WStableNodes({ instances }: { instances: Instance[] }) {
 function WFastNodes({ instances }: { instances: Instance[] }) {
   const [cid, setCid] = useState("local");
   const { data, err, loading } = useFetch<{ nodes: CheckerNode[] }>(_statusUrl(cid));
-  const online = (data?.nodes ?? []).filter(n => n.online && n.latencyMs >= 0);
+  const hidden = useStatWidgets(s => s.hidden);
+  const raw = data?.nodes ?? [];
+  const online = filterCheckerNodes(hidden, cid, raw).filter(n => n.online && n.latencyMs >= 0);
   const nodes = [...online].sort((a, b) => a.latencyMs - b.latencyMs).slice(0, 8);
   const max = Math.max(1, ...nodes.map(n => n.latencyMs));
   return (
     <Card title="Самые быстрые ноды" Icon={Zap}
       settings={<WidgetSettings><CheckerSelect value={cid} onChange={setCid} instances={instances} /></WidgetSettings>}>
-      <State loading={loading} err={err} empty={nodes.length === 0}>
+      <State loading={loading} err={err} empty={nodes.length === 0} allHidden={raw.length > 0}>
         <div>
           {nodes.map(n => (
             <Bar key={n.stableId} label={n.name} value={max - n.latencyMs + 1} max={max}
@@ -371,8 +389,9 @@ const WIDGETS: Record<WidgetKind, { title: string; render: (c: WidgetCtx) => Rea
 export function UsersStats() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [nameMap, setNameMap] = useState<Record<string, string>>({});
-  const { layout, editing, hydrate, setEditing, add, remove, resize, move } = useStatWidgets();
+  const { layout, hidden, editing, hydrate, setEditing, add, remove, resize, move } = useStatWidgets();
   const [palette, setPalette] = useState(false);
+  const [pickServers, setPickServers] = useState(false);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
@@ -386,6 +405,9 @@ export function UsersStats() {
 
   return (
     <div className="ni-pagebody" style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+      {pickServers && (
+        <HiddenServers nameMap={nameMap} instances={instances} onClose={() => setPickServers(false)} />
+      )}
       <div className="ni-pagehead" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
         <Users size={18} style={{ color: "var(--accent)" }} />
         <div style={{ flex: 1 }}>
@@ -407,6 +429,12 @@ export function UsersStats() {
               )}
             </div>
           )}
+          <button className="btn btn-sm" onClick={() => setPickServers(true)}>
+            <EyeOff size={13} /> Серверы
+            {hiddenCount(hidden) > 0 && (
+              <span className="chip" style={{ marginLeft: 6, fontSize: 10, padding: "0 6px" }}>{hiddenCount(hidden)}</span>
+            )}
+          </button>
           <button className={`btn btn-sm ${editing ? "btn-primary" : ""}`} onClick={() => setEditing(!editing)}>
             <Pencil size={13} /> {editing ? "Готово" : "Редактировать"}
           </button>

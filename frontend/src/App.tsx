@@ -21,7 +21,7 @@ import { ConfigTemplates }                  from "./components/configs/ConfigTem
 import { Library }                          from "./components/Library";
 import { RuleBuilder }                      from "./components/automation/RuleBuilder";
 import { Notifications }                    from "./components/automation/Notifications";
-import { AiChat }                           from "./components/settings/AiChat";
+import { AiChat }                           from "./components/automation/AiChat";
 import { Migration }                        from "./components/rw/Migration";
 import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
@@ -73,7 +73,9 @@ const INITIAL_CERT_STATUS: StatusFrame = {
 };
 
 // Breadcrumb labels per tab.
-const CRUMB: Record<Tab, [string, string]> = {
+// Экспортируется ради теста: связь «группа в сайдбаре ↔ первый элемент крошки»
+// рукописная, TypeScript её не проверяет (обе стороны — обычные строки).
+export const CRUMB: Record<Tab, [string, string]> = {
   "dashboard":       ["Node Installer", "Дешборд"],
   "deploy":          ["Node Installer", "Деплой ноды"],
   "certs":           ["Node Installer", "Управление SSL"],
@@ -91,9 +93,9 @@ const CRUMB: Record<Tab, [string, string]> = {
   "rw-variables":    ["Remnawave", "Переменные"],
   "rw-backup":       ["Remnawave", "Резервное копирование"],
   "rw-migration":    ["Remnawave", "Миграция"],
-  "rw-profiles":     ["Node Installer", "Профили"],
-  "mihomo":          ["Node Installer", "Mihomo"],
-  "configs":         ["Node Installer", "Пользовательские конфиги"],
+  "rw-profiles":     ["Remnawave", "Профили"],
+  "mihomo":          ["Remnawave", "Mihomo"],
+  "configs":         ["Remnawave", "Пользовательские конфиги"],
   "hostings-map":    ["Справка", "Карта хостингов"],
   "hostings-list":   ["Справка", "Хостинги"],
   "library":         ["Справка", "Библиотека"],

@@ -101,11 +101,13 @@ async def save_config(body: AiConfigBody) -> dict:
 
 @router.get("/models")
 async def list_models() -> dict:
-    """Model ids from the configured CLIProxyAPI gateway (Plan J). Only meaningful
-    when gateway=cliproxy; otherwise []. Never errors (graceful empty)."""
+    """Model ids from the configured endpoint — ЛЮБОГО провайдера, не только
+    шлюза CLIProxyAPI: и OpenAI-совместимые, и Anthropic отдают один и тот же
+    `{"data":[{"id":…}]}`. Гейт по gateway снят (Волна 6, План C Ф2), иначе
+    каталог не подгружался бы у тех, кто ходит к провайдеру напрямую.
+
+    Никогда не ошибается: пустой список = «вводите модель вручную»."""
     cfg = ai_agent._cfg()
-    if cfg.gateway != "cliproxy":
-        return {"models": []}
     key = ai_agent.decrypt_key(cfg.api_key_enc)
     return {"models": await ai_agent.list_models(cfg, key or "")}
 

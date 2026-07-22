@@ -1,0 +1,22 @@
+{
+  "A": {
+    "wsInstances": 6,
+    "framesDelivered": 12006,
+    "longTaskTotalMs": 1032,
+    "longTaskMaxMs": 343,
+    "msToSettled": 692
+  },
+  "B": {
+    "attrWrites": 9023,
+    "framesSampled": 92,
+    "jankFrames": 3,
+    "jankPct": 3,
+    "longTaskTotalMs": 6650
+  },
+  "C": {
+    "assetCount": 144,
+    "jsBytes": 1465182,
+    "cssBytes": 468743
+  },
+  "at": "2026-07-22T11:59:42.667Z"
+}

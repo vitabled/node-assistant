@@ -70,19 +70,70 @@ class WidgetInstance(BaseModel):
         return v
 
 
+_MAX_HIDDEN_NODES = 200
+_MAX_CHECKERS = 20
+_MAX_NAME = 64
+
+
+class HiddenSet(BaseModel):
+    """Серверы, скрытые пользователем в виджетах статистики.
+
+    ДВЕ оси, потому что идентичность сервера в виджетах не едина: node-load /
+    avg-per-node / migrations ключуются на Remnawave `node_uuid`, а stable-nodes /
+    fast-nodes — на `stableId`, чей namespace принадлежит КОНКРЕТНОМУ чекеру
+    (`checker_id`), а не глобален. Один плоский набор id смешал бы разные
+    пространства имён.
+
+    Значение — последнее известное ИМЯ: скрытый сервер может исчезнуть из
+    выдачи, и без имени пикер показывал бы голый uuid.
+    """
+    nodes: dict[str, str] = Field(default_factory=dict)                # node_uuid -> name
+    checker: dict[str, dict[str, str]] = Field(default_factory=dict)   # checker_id -> {stableId -> name}
+
+    @field_validator("nodes")
+    @classmethod
+    def _nodes(cls, v: dict[str, str]) -> dict[str, str]:
+        if len(v) > _MAX_HIDDEN_NODES:
+            raise ValueError(f"слишком много скрытых узлов (>{_MAX_HIDDEN_NODES})")
+        # Длинное имя — не ошибка пользователя, просто режем; 422 только на
+        # количественные лимиты.
+        return {k: str(name)[:_MAX_NAME] for k, name in v.items()}
+
+    @field_validator("checker")
+    @classmethod
+    def _checker(cls, v: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+        if len(v) > _MAX_CHECKERS:
+            raise ValueError(f"слишком много чекеров (>{_MAX_CHECKERS})")
+        out: dict[str, dict[str, str]] = {}
+        for cid, inner in v.items():
+            if len(inner) > _MAX_HIDDEN_NODES:
+                raise ValueError(f"слишком много скрытых узлов у чекера {cid} (>{_MAX_HIDDEN_NODES})")
+            out[cid] = {k: str(name)[:_MAX_NAME] for k, name in inner.items()}
+        return out
+
+
 class WidgetLayout(BaseModel):
     layout: list[WidgetInstance] = Field(default_factory=list, max_length=_MAX_WIDGETS)
+    hidden: HiddenSet = Field(default_factory=HiddenSet)
 
 
 @router.get("/widgets")
 async def get_widgets() -> dict:
-    """The account's stats-widget layout ({layout: []} → frontend seeds default 6)."""
-    return {"layout": storage.load_stat_widgets().get("layout", [])}
+    """The account's stats-widget layout ({layout: []} → frontend seeds default 6)
+    плюс набор скрытых серверов. Документ, записанный до Волны 6, не имеет ключа
+    `hidden` — отдаём пустой набор, а не падаем."""
+    doc = storage.load_stat_widgets()
+    return {
+        "layout": doc.get("layout", []),
+        "hidden": doc.get("hidden") or {"nodes": {}, "checker": {}},
+    }
 
 
 @router.put("/widgets")
 async def put_widgets(body: WidgetLayout) -> dict:
-    data = {"layout": [w.model_dump() for w in body.layout]}
+    # FULL-REPLACE: тело без `hidden` обнуляет набор. Это контракт, а не ошибка —
+    # фронт обязан слать документ целиком (см. persist() в statWidgetsStore).
+    data = {"layout": [w.model_dump() for w in body.layout], "hidden": body.hidden.model_dump()}
     storage.save_stat_widgets(data)
     return data
 

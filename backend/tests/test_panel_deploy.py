@@ -43,6 +43,9 @@ def _req(**over) -> PanelDeployRequest:
         ssh_password="pw",
         panel_domain="panel.example.com",
         sub_domain="sub.example.com",
+        # Обязателен для target ∈ {subpage, both} (Волна 6, План E Ф1):
+        # без него контейнер страницы подписок падает на старте.
+        subpage_api_token="tok",
         email="a@b.co",
     )
     base.update(over)
@@ -171,7 +174,8 @@ def test_target_subpage_requires_sub_domain():
         PanelDeployRequest(target="subpage", ip="1.2.3.4", ssh_password="pw")
     # sub_domain present → ok
     PanelDeployRequest(
-        target="subpage", ip="1.2.3.4", ssh_password="pw", sub_domain="s.example.com"
+        target="subpage", ip="1.2.3.4", ssh_password="pw", sub_domain="s.example.com",
+        subpage_api_token="tok",
     )
 
 
@@ -513,6 +517,7 @@ def test_step_reinstall_all_components(monkeypatch, component):
         headers=_auth(),
         json={
             "target": "both",
+            "subpage_api_token": "tok",
             "ip": "1.2.3.4",
             "ssh_password": "pw",
             "panel_domain": "panel.example.com",
@@ -535,6 +540,7 @@ def test_step_uninstall_subpage(monkeypatch):
         headers=_auth(),
         json={
             "target": "both",
+            "subpage_api_token": "tok",
             "ip": "1.2.3.4",
             "ssh_password": "pw",
             "panel_domain": "panel.example.com",
@@ -641,3 +647,42 @@ def test_env_secrets_never_logged():
         assert all(secret not in ln for ln in captured["logs"]), (
             "secret leaked into a log line"
         )
+
+
+# ── Волна 6, План E Ф1: починка сломанного деплоя страницы подписок ──
+# Оба факта ПРОВЕРЕНЫ на живом образе remnawave/subscription-page:7.2.6:
+#   * /opt/app/frontend/ — собранная SPA (160 файлов), index.html — EJS-шаблон
+#     с `<%- panelData %>`, `<%= metaTitle %>`, `<%= metaDescription %>`;
+#   * с пустым REMNAWAVE_API_TOKEN контейнер завершается кодом 1.
+
+def test_subpage_target_requires_an_api_token():
+    with pytest.raises(ValidationError):
+        PanelDeployRequest(target="subpage", ip="1.2.3.4", ssh_password="pw",
+                           sub_domain="s.example.com")
+    # с токеном — ок
+    PanelDeployRequest(target="subpage", ip="1.2.3.4", ssh_password="pw",
+                       sub_domain="s.example.com", subpage_api_token="tok")
+
+
+def test_token_reaches_the_subpage_env():
+    req = _req(target="subpage", panel_domain="", sub_domain="s.example.com",
+               subpage_api_token="secret-tok")
+    assert "REMNAWAVE_API_TOKEN=secret-tok" in panel_pipeline._subpage_env(req)
+
+
+def test_subpage_html_without_paneldata_is_rejected():
+    """Шаблон без `<%- panelData %>` даёт визуально рабочую, но пустую страницу —
+    молчаливый отказ, который мы теперь ловим на входе."""
+    with pytest.raises(ValidationError):
+        _req(target="subpage", panel_domain="", sub_domain="s.example.com",
+             subpage_html="<html><body>без данных</body></html>")
+    # EJS-совместимый шаблон проходит
+    _req(target="subpage", panel_domain="", sub_domain="s.example.com",
+         subpage_html="<html><body><%- panelData %></body></html>")
+
+
+def test_subpage_image_is_pinned_not_latest():
+    req = _req(target="subpage", panel_domain="", sub_domain="s.example.com")
+    compose = panel_pipeline._subpage_compose(req)
+    assert "subscription-page:7.2.6" in compose
+    assert ":latest" not in compose
