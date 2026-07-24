@@ -115,7 +115,9 @@ class AiConfig(BaseModel):
     cliproxy_image: str = "eceasy/cli-proxy-api:v7.2.50"
     cliproxy_master_key_enc: str = ""   # client key our backend presents on /v1
     cliproxy_mgmt_key_enc: str = ""     # Management API key — NEVER to a browser
-    cliproxy_owner_account_id: str = ""  # shared container: who configured it
+    # NOTE: the shared container's owner is tracked GLOBALLY in
+    # DATA_DIR/cliproxy_owner.json (cliproxy_server._OWNER_FILE), NOT here — a
+    # per-account field made every non-owner look like the owner (Wave-7 review).
 
 
 class AppearanceConfig(BaseModel):

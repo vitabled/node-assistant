@@ -117,15 +117,30 @@ class McpSession:
 # The container itself can run in REMNAWAVE_READONLY mode, but that is a global
 # switch owned by whoever enabled MCP. The assistant makes its own decision per
 # tool, so a read-only assistant stays read-only even against a writable server.
-_MUTATING_HINTS = (
-    "create", "update", "delete", "remove", "add", "set", "enable", "disable",
-    "restart", "reset", "bulk", "reorder", "clone", "revoke", "assign", "action",
+#
+# ⚠️ ALLOWLIST, not a denylist. A substring denylist of mutating verbs is a hole
+# against an evolving vendored contract: the Wave-7 review found live mutating
+# tools that carry no listed verb — `ip_control_drop_connections`,
+# `node_plugins_execute`, `node_plugins_torrent_truncate`, `metadata_*_upsert`
+# ("upsert" is not "set"). A read tool has a small, stable set of leading verbs;
+# anything else is treated as a write. Default-deny.
+_READ_PREFIXES = (
+    "get", "list", "stats", "status", "info", "health", "resolve", "metrics",
+    "count", "search", "find", "show", "fetch", "read", "describe", "view",
+    "download", "export",
 )
 
 
 def is_read_only(tool_name: str) -> bool:
-    n = (tool_name or "").lower()
-    return not any(h in n for h in _MUTATING_HINTS)
+    """True only when the tool's name STARTS with a known read verb.
+
+    Names are usually `<domain>_<verb>[_...]` (nodes_get_all) — so we test the
+    verb after the first underscore too, not just the whole-name prefix."""
+    n = (tool_name or "").lower().lstrip("_")
+    if any(n.startswith(p) for p in _READ_PREFIXES):
+        return True
+    _, _, rest = n.partition("_")
+    return bool(rest) and any(rest.startswith(p) for p in _READ_PREFIXES)
 
 
 def internal_base_url() -> str:

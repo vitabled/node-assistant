@@ -43,16 +43,23 @@ class BaselineError(Exception):
     pass
 
 
-def _root() -> Path:
-    d = accounts.DATA_DIR / "subpage_baselines"
+def _root(account_id: Optional[str] = None) -> Path:
+    # PER-ACCOUNT, not global. A shared cache leaked a private image's NAME to
+    # other accounts and let one account seed a baseline another would read
+    # (Wave-7 review, subpages:175). The duplicate caching of the same vendor
+    # build across accounts is an acceptable cost for a cache.
+    aid = account_id or accounts.current_account.get()
+    if not aid:
+        raise BaselineError("No active account in context")
+    d = accounts.data_dir(aid) / "subpage_baselines"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def digest_dir(digest: str) -> Path:
+def digest_dir(digest: str, account_id: Optional[str] = None) -> Path:
     """Directory for one digest. `digest` is never interpolated raw — it is
     reduced to a filesystem-safe token first."""
-    return _root() / safe_digest(digest)
+    return _root(account_id) / safe_digest(digest)
 
 
 def safe_digest(digest: str) -> str:
@@ -185,16 +192,18 @@ def extract_archive(archive: Path, dest: Path) -> list[dict[str, Any]]:
 
 # ── local cache ───────────────────────────────────────────────
 
-def _manifest_path(digest: str) -> Path:
-    return digest_dir(digest) / "manifest.json"
+def _manifest_path(digest: str, account_id: Optional[str] = None) -> Path:
+    return digest_dir(digest, account_id) / "manifest.json"
 
 
-def has_baseline(digest: str) -> bool:
-    return _manifest_path(digest).exists()
+def has_baseline(digest: str, account_id: Optional[str] = None) -> bool:
+    return _manifest_path(digest, account_id).exists()
 
 
-def save_baseline(digest: str, image: str, archive: Path) -> dict[str, Any]:
-    d = digest_dir(digest)
+def save_baseline(
+    digest: str, image: str, archive: Path, account_id: Optional[str] = None
+) -> dict[str, Any]:
+    d = digest_dir(digest, account_id)
     files = extract_archive(archive, d / "files")
     meta = {
         "digest": digest,
@@ -204,38 +213,41 @@ def save_baseline(digest: str, image: str, archive: Path) -> dict[str, Any]:
         "pulled_at": int(time.time()),
         "files": files,
     }
-    _manifest_path(digest).write_text(
+    _manifest_path(digest, account_id).write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8",
     )
     return meta
 
 
-def get_manifest(digest: str) -> Optional[dict[str, Any]]:
+def get_manifest(digest: str, account_id: Optional[str] = None) -> Optional[dict[str, Any]]:
     try:
-        return json.loads(_manifest_path(digest).read_text(encoding="utf-8"))
+        return json.loads(_manifest_path(digest, account_id).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
 
-def list_baselines() -> list[dict[str, Any]]:
+def list_baselines(account_id: Optional[str] = None) -> list[dict[str, Any]]:
+    root = _root(account_id)
     out = []
-    for d in sorted(_root().iterdir()) if _root().exists() else []:
-        meta = get_manifest(d.name)
+    for d in sorted(root.iterdir()) if root.exists() else []:
+        meta = get_manifest(d.name, account_id)
         if meta:
             out.append({k: v for k, v in meta.items() if k != "files"})
     return out
 
 
-def read_file(digest: str, relpath: str) -> Optional[bytes]:
+def read_file(
+    digest: str, relpath: str, account_id: Optional[str] = None
+) -> Optional[bytes]:
     """One baseline member. Gated on the manifest, then re-checked with resolve()
     — the same two-step guard the overlay store uses."""
-    meta = get_manifest(digest)
+    meta = get_manifest(digest, account_id)
     if not meta:
         return None
     rel = (relpath or "").strip()
     if not any(f["path"] == rel for f in meta.get("files", [])):
         return None
-    root = (digest_dir(digest) / "files").resolve()
+    root = (digest_dir(digest, account_id) / "files").resolve()
     target = (root / rel).resolve()
     if root not in target.parents and root != target:
         return None

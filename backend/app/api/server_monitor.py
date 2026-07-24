@@ -140,16 +140,25 @@ async def sync_deployed(body: list[DeployedServer]) -> dict[str, Any]:
 _FETCH_TIMEOUT = 15
 _MAX_SUB_BYTES = 4 * 1024 * 1024   # same cap the aggregator uses
 _RESOLVE_LIMIT = 16                # concurrent DNS lookups
+_RESOLVE_TIMEOUT = 3               # per-host DNS resolve cap
 
 
 async def _fetch_subscription(url: str) -> str:
     if not net_guard.is_safe_url(url):
         raise HTTPException(400, "URL подписки не разрешён: нужен http(s) с публичным хостом")
     try:
+        # STREAM with a hard cap: `c.get()` buffers the whole body into RAM before
+        # any slice, so a multi-GB response OOMs the shared backend. Read chunks,
+        # stop the moment we exceed the cap. (Wave-7 review, server_monitor:152.)
         async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=False) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            return r.content[:_MAX_SUB_BYTES].decode("utf-8", "replace")
+            async with c.stream("GET", url) as r:
+                r.raise_for_status()
+                buf = bytearray()
+                async for chunk in r.aiter_bytes():
+                    buf += chunk
+                    if len(buf) > _MAX_SUB_BYTES:
+                        raise HTTPException(413, "Подписка превышает лимит размера")
+                return bytes(buf).decode("utf-8", "replace")
     except HTTPException:
         raise
     except Exception:
@@ -158,11 +167,19 @@ async def _fetch_subscription(url: str) -> str:
 
 
 async def _resolve(host: str, sem: asyncio.Semaphore) -> str:
-    """host → IPv4, or "" when it doesn't resolve."""
+    """host → IPv4, or "" when it doesn't resolve.
+
+    ⚠️ `getaddrinfo` runs on the default ThreadPoolExecutor shared with every
+    `asyncio.to_thread` in the app; a blackhole-DNS host would pin a thread until
+    the system resolver times out. Bound it so a hostile subscription can't
+    starve the pool. (Wave-7 review, server_monitor:165.)"""
     async with sem:
         try:
             loop = asyncio.get_event_loop()
-            infos = await loop.getaddrinfo(host, None, family=2)  # AF_INET
+            infos = await asyncio.wait_for(
+                loop.getaddrinfo(host, None, family=2),  # AF_INET
+                timeout=_RESOLVE_TIMEOUT,
+            )
             return infos[0][4][0] if infos else ""
         except Exception:
             return ""

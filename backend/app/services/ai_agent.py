@@ -249,17 +249,31 @@ def _tool_specs_anthropic(extra: Optional[list[dict]] = None) -> list[dict]:
     return specs
 
 
-async def _run_tool(name: str, args: dict, account_id: str) -> tuple[bool, Any]:
+async def _run_tool(
+    name: str, args: dict, account_id: str, config: Optional[AiConfig] = None
+) -> tuple[bool, Any]:
     if name.startswith(MCP_PREFIX):
-        try:
-            from app.services import mcp_client, mcp_server
+        # ⚠️ Enforce the gate HERE, at execution — not only when the tool list is
+        # offered. The model can emit a tool name we never offered (a hallucination
+        # from the mcp__ namespace, or one smuggled in via a tool_result), so the
+        # offer-time filter in `_mcp_tools` is not an authorization boundary. Without
+        # this, a read-only assistant against a writable container could mutate.
+        # (Wave-7 review, ai_agent:253.)
+        from app.services import mcp_client, mcp_server
 
+        bare = name[len(MCP_PREFIX):]
+        if config is not None and not getattr(config, "use_mcp", False):
+            return False, "Инструменты MCP выключены"
+        if config is not None and getattr(config, "readonly", True) \
+                and not mcp_client.is_read_only(bare):
+            return False, f"Изменяющее действие '{bare}' запрещено (ассистент только для чтения)"
+        try:
             token = mcp_server.read_auth_token()
             if not token:
                 return False, "MCP недоступен"
             result = await mcp_client.McpSession(
                 mcp_client.internal_base_url(), token,
-            ).call_tool(name[len(MCP_PREFIX):], args or {})
+            ).call_tool(bare, args or {})
             return True, result
         except Exception as exc:  # noqa: BLE001
             return False, redact(str(exc))
@@ -576,7 +590,7 @@ async def run_agent(
                 "name": tc["name"],
                 "args": tc["args"],
             }
-            ok, out = await _run_tool(tc["name"], tc["args"], account_id)
+            ok, out = await _run_tool(tc["name"], tc["args"], account_id, config)
             preview = json.dumps(out, ensure_ascii=False)
             yield {
                 "type": "tool_result",

@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import secrets
 from typing import Any, Optional
@@ -44,6 +45,34 @@ DEFAULT_IMAGE = "eceasy/cli-proxy-api:v7.2.50"
 PORT = 8317
 _NETWORK = "node-assistant-net"
 _NO_DOCKER = "__no_docker__"
+
+# GLOBAL owner marker of the shared single container (mirrors mcp_server). It
+# MUST NOT live in per-account settings: a second account that never touched the
+# gateway would read its own empty owner, see owner_is_me=True, and be free to
+# reconfigure the shared container — pulling in its own creds and exposing the
+# first account's OAuth logins in the shared volume. (Wave-7 review, cliproxy:237.)
+_OWNER_FILE = accounts.DATA_DIR / "cliproxy_owner.json"
+
+
+def _set_owner(account_id: str) -> None:
+    try:
+        _OWNER_FILE.write_text(json.dumps({"account_id": account_id}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _get_owner() -> str:
+    try:
+        return json.loads(_OWNER_FILE.read_text(encoding="utf-8")).get("account_id") or ""
+    except (OSError, ValueError):
+        return ""
+
+
+def _owner_is(account_id: str) -> bool:
+    """True when the gateway is unowned (nobody started it) or this account owns
+    it. An unowned gateway may be claimed by whoever enables it first."""
+    owner = _get_owner()
+    return (not owner) or owner == account_id
 
 
 class CliProxyError(Exception):
@@ -213,28 +242,30 @@ async def start(account_id: Optional[str] = None) -> None:
     if rc != 0:
         raise CliProxyError(f"Не удалось запустить шлюз: {out.strip()[:400]}")
 
-    raw = storage.load_settings(aid)
-    s = AppSettings(**raw)
-    s.ai.cliproxy_owner_account_id = aid or ""
-    raw["ai"] = s.ai.model_dump()
-    storage.save_settings(raw, aid)
+    _set_owner(aid or "")  # GLOBAL — this account now owns the shared container
 
 
-async def stop() -> None:
+async def stop(account_id: Optional[str] = None) -> None:
+    """Tear down the container. Guarded on ownership so a non-owner's «disable»
+    cannot kill the owner's running gateway (Wave-7 review, cliproxy:237)."""
+    aid = account_id or accounts.current_account.get()
+    if not _owner_is(aid or ""):
+        raise CliProxyError("Шлюз настроен другим аккаунтом")
     rc, out = await _docker("rm", "-f", CONTAINER_NAME, timeout=30)
     _require_docker(rc, out)
+    _set_owner("")  # released — the next enabler may claim it
 
 
 async def status(account_id: Optional[str] = None) -> dict[str, Any]:
     aid = account_id or accounts.current_account.get()
     cfg = _cfg(aid)
     state = await container_state()
-    owner = cfg.cliproxy_owner_account_id
     return {
         "enabled": cfg.cliproxy_enabled,
         "image": cfg.cliproxy_image or DEFAULT_IMAGE,
         "container": state,
-        "owner_is_me": (not owner) or owner == aid,
+        # Read the GLOBAL owner, not per-account settings.
+        "owner_is_me": _owner_is(aid or ""),
         "base_url": internal_base_url(),
         "has_keys": bool(cfg.cliproxy_master_key_enc),
     }

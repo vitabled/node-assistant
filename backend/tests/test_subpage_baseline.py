@@ -132,22 +132,27 @@ def test_rejects_too_many_members(tmp_path, monkeypatch):
         bl.extract_archive(arc, tmp_path / "out")
 
 
-# ── cache ─────────────────────────────────────────────────────
+# ── cache (per-account: an explicit account_id, since the store is scoped) ──
+_ACC = "acct-baseline-test"
+
+
 def test_save_and_read_baseline(tmp_path):
     arc = _tar(tmp_path, [("index.html", b"<%- panelData %>")])
-    meta = bl.save_baseline("sha256:deadbeef", "img:1", arc)
+    meta = bl.save_baseline("sha256:deadbeef", "img:1", arc, _ACC)
     assert meta["files_count"] == 1 and meta["bytes"] == 16
-    assert bl.has_baseline("sha256:deadbeef")
-    assert bl.read_file("sha256:deadbeef", "index.html") == b"<%- panelData %>"
-    assert bl.read_file("sha256:deadbeef", "nope.html") is None
-    assert bl.read_file("sha256:missing", "index.html") is None
+    assert bl.has_baseline("sha256:deadbeef", _ACC)
+    assert bl.read_file("sha256:deadbeef", "index.html", _ACC) == b"<%- panelData %>"
+    assert bl.read_file("sha256:deadbeef", "nope.html", _ACC) is None
+    assert bl.read_file("sha256:missing", "index.html", _ACC) is None
+    # Another account shares nothing — the cache is per-account.
+    assert bl.has_baseline("sha256:deadbeef", "other-acct") is False
 
 
 def test_read_file_refuses_a_path_outside_the_manifest(tmp_path):
     arc = _tar(tmp_path, [("index.html", b"x")])
-    bl.save_baseline("sha256:guard", "img:1", arc)
+    bl.save_baseline("sha256:guard", "img:1", arc, _ACC)
     # Not in the manifest → refused before the filesystem is touched.
-    assert bl.read_file("sha256:guard", "../../../etc/passwd") is None
+    assert bl.read_file("sha256:guard", "../../../etc/passwd", _ACC) is None
 
 
 # ── routes ────────────────────────────────────────────────────

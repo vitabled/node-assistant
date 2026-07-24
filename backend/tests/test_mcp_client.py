@@ -34,6 +34,11 @@ def test_read_tools_are_read_only(name):
 @pytest.mark.parametrize("name", [
     "nodes_create", "users_delete", "hosts_bulk_disable", "nodes_restart",
     "sub_page_configs_reorder", "users_update", "nodes_actions_enable",
+    # Wave-7 review: real mutating tools a substring denylist misclassified as
+    # read-only. The allowlist must treat all of these as writes.
+    "ip_control_drop_connections", "node_plugins_execute",
+    "node_plugins_torrent_truncate", "metadata_node_upsert",
+    "metadata_user_upsert", "hosts_action_apply",
 ])
 def test_mutating_tools_are_detected(name):
     assert not mcp_client.is_read_only(name)
@@ -150,3 +155,50 @@ def test_tools_status_requires_auth():
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+# ── Wave-7 review fixes: execution-time authorization ─────────
+@pytest.mark.anyio
+async def test_readonly_assistant_refuses_a_write_at_execution(monkeypatch):
+    """The offer-time filter is not an authorization boundary — the model can
+    emit a name we never offered. _run_tool must refuse a write when the
+    assistant is read-only, even against a writable container."""
+    called = {"n": 0}
+
+    async def must_not_call(self, name, args):
+        called["n"] += 1
+        return {}
+    monkeypatch.setattr(mcp_client.McpSession, "call_tool", must_not_call)
+    monkeypatch.setattr("app.services.mcp_server.read_auth_token", lambda *a, **k: "tok")
+
+    ok, msg = await ai_agent._run_tool(
+        "mcp__users_delete", {}, "acc", AiConfig(use_mcp=True, readonly=True),
+    )
+    assert ok is False and "запрещено" in msg
+    assert called["n"] == 0   # never reached the container
+
+
+@pytest.mark.anyio
+async def test_use_mcp_off_refuses_a_smuggled_mcp_call(monkeypatch):
+    async def must_not_call(self, name, args):
+        raise AssertionError("must not reach the container")
+    monkeypatch.setattr(mcp_client.McpSession, "call_tool", must_not_call)
+    monkeypatch.setattr("app.services.mcp_server.read_auth_token", lambda *a, **k: "tok")
+
+    ok, msg = await ai_agent._run_tool(
+        "mcp__nodes_get_all", {}, "acc", AiConfig(use_mcp=False),
+    )
+    assert ok is False
+
+
+@pytest.mark.anyio
+async def test_readonly_assistant_allows_a_read(monkeypatch):
+    async def ok_call(self, name, args):
+        return {"data": name}
+    monkeypatch.setattr(mcp_client.McpSession, "call_tool", ok_call)
+    monkeypatch.setattr("app.services.mcp_server.read_auth_token", lambda *a, **k: "tok")
+
+    ok, out = await ai_agent._run_tool(
+        "mcp__nodes_get_all", {}, "acc", AiConfig(use_mcp=True, readonly=True),
+    )
+    assert ok is True and out == {"data": "nodes_get_all"}

@@ -223,3 +223,42 @@ def test_oauth_callback_needs_a_code_or_redirect_url():
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+# ── Wave-7 review: shared-container owner isolation ───────────
+@pytest.mark.anyio
+async def test_owner_is_global_not_per_account(monkeypatch, tmp_path):
+    """A second account that never touched the gateway must NOT read owner_is_me
+    True — the owner lives in a global file, not per-account settings."""
+    monkeypatch.setattr(srv, "_OWNER_FILE", tmp_path / "cliproxy_owner.json")
+
+    async def running():
+        return "running"
+    monkeypatch.setattr(srv, "container_state", running)
+
+    # Nobody owns it yet → any account may claim it.
+    assert (await srv.status("A"))["owner_is_me"] is True
+    # A claims it.
+    srv._set_owner("A")
+    assert (await srv.status("A"))["owner_is_me"] is True
+    # B, who never touched it, is NOT the owner (the bug: per-account settings
+    # made B look like the owner).
+    assert (await srv.status("B"))["owner_is_me"] is False
+
+
+@pytest.mark.anyio
+async def test_non_owner_cannot_stop_the_gateway(monkeypatch, tmp_path):
+    monkeypatch.setattr(srv, "_OWNER_FILE", tmp_path / "cliproxy_owner.json")
+    srv._set_owner("A")
+
+    killed = {"n": 0}
+
+    async def fake_docker(*a, **k):
+        killed["n"] += 1
+        return 0, ""
+    monkeypatch.setattr(srv, "_docker", fake_docker)
+
+    # B tries to stop A's gateway → refused, docker never touched.
+    with pytest.raises(srv.CliProxyError):
+        await srv.stop("B")
+    assert killed["n"] == 0

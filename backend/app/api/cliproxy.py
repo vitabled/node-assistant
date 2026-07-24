@@ -108,7 +108,7 @@ async def set_config(body: ConfigBody) -> dict[str, Any]:
             warning = str(e)
     else:
         try:
-            await srv.stop()
+            await srv.stop(aid)
         except srv.CliProxyError as e:
             warning = str(e)
     return {"ok": True, "warning": warning}
@@ -133,7 +133,7 @@ async def start_gateway() -> dict[str, Any]:
 async def stop_gateway() -> dict[str, Any]:
     await _require_owner()
     try:
-        await srv.stop()
+        await srv.stop(_me())
     except srv.CliProxyError as e:
         return {"ok": False, "warning": str(e)}
     return {"ok": True}

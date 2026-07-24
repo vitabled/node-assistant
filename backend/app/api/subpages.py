@@ -21,7 +21,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
-from app.services import subpage_baseline, subpage_store
+from app.services import accounts, subpage_baseline, subpage_store
 from app.services.ssh_manager import SSHSession
 from app.services.task_store import TaskStatus, task_store
 
@@ -181,11 +181,14 @@ async def pull_baseline(body: BaselinePull, background_tasks: BackgroundTasks) -
     the ContextVar's survival across BackgroundTask is version-dependent and the
     pinned fastapi differs from the one it was measured on."""
     task = task_store.create(total_steps=len(_BASELINE_STEPS))
-    background_tasks.add_task(_pull_baseline, body, task.task_id)
+    # Captured HERE (request context). The background task can't read the
+    # ContextVar, and the baseline cache is now per-account.
+    account_id = accounts.current_account.get() or ""
+    background_tasks.add_task(_pull_baseline, body, task.task_id, account_id)
     return {"task_id": task.task_id, "task_type": "subpage-baseline"}
 
 
-async def _pull_baseline(req: BaselinePull, task_id: str) -> None:
+async def _pull_baseline(req: BaselinePull, task_id: str, account_id: str = "") -> None:
     task = task_store.get(task_id)
     if not task:
         return
@@ -209,13 +212,13 @@ async def _pull_baseline(req: BaselinePull, task_id: str) -> None:
         task.add_log(f"digest: {digest} ({probe.get('BYTES', '?')} байт архива)")
 
         task.set_step(3, TaskStatus.RUNNING)
-        if subpage_baseline.has_baseline(digest):
+        if subpage_baseline.has_baseline(digest, account_id):
             task.add_log("Эта база уже скачана — пропускаем.")
         else:
             local = Path(tmp.name) / "frontend.tgz"
             await ssh.download_file(f"{subpage_baseline._REMOTE_DIR}/frontend.tgz",
                                     str(local))
-            meta = subpage_baseline.save_baseline(digest, req.image, local)
+            meta = subpage_baseline.save_baseline(digest, req.image, local, account_id)
             task.add_log(f"Сохранено файлов: {meta['files_count']} "
                          f"({meta['bytes']} байт).")
         task.finish(TaskStatus.SUCCESS)
