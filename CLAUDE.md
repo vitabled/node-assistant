@@ -649,3 +649,44 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - **Пре-существующие падения** (не связаны с Волной 7, воспроизводятся на чистом `main`):
   `rw/PanelManageModal.test.tsx` «Статистика» (ждёт `/api/stats/node`, получает `/api/panel/metrics`) и
   `theme/tweaks.test.ts` «exactly the two skin options» (скинов три). Не приписывать их своим правкам.
+
+### 11h. Страница подписок — редактор (План G, отгружено 2026-07-23/24)
+> Все ЧЕТЫРЕ блокирующих неизвестных сняты на живой панели 2.x (`scripts/probe_subpage_config.py`) +
+> bind-mount-эксперименте. Бэкенд Плана G отгружен ЦЕЛИКОМ (Ф2/Ф4/Ф5/Ф6). Осталось только фронт-редактор
+> поля `config` и селектор варианта в форме деплоя.
+
+- **Ф2 — каталог оформления ПАНЕЛИ** (`api/subpage_configs.py`, `/api/subpage-configs`; клиентские методы в
+  `remnawave_client.py`). Прокси, локального стора нет. ⚠️ **Листинг панели отдаёт `config: null` у ВСЕХ
+  записей** — `config` приходит только в детали `GET /{uuid}`. Редактор ОБЯЗАН тянуть деталь per-config.
+  ⚠️ Имя 2..30 (`^[A-Za-z0-9_\s-]+$`), НЕ [:255] как у templates. Обновление — PATCH на КОЛЛЕКЦИЮ с uuid в
+  теле (PATCH/{uuid} нет). Реордер — `{items:[{uuid,viewPosition}]}` (не `{uuids}` как в MCP-форке). Клон —
+  `POST /actions/clone {cloneFromUuid}` (НЕ `/{uuid}/clone`).
+- **Форма поля `config` (снята с живой панели):** структурированный объект `{baseSettings, baseTranslations,
+  brandingSettings, locales, platforms, svgLibrary, uiConfig, version}`; `platforms.{ios,…}.apps[].blocks[]`
+  с локализованными title/description/buttons. **PATCH — MERGE** (name-only PATCH оформление НЕ трогает →
+  переименование безопасно). Привязка config→юзер идёт через **внешний сквад** (`subpageConfigUuid`), поэтому
+  контейнеру **`SUBPAGE_CONFIG_UUID` в .env НЕ нужен**.
+- **Ф5 — overlay-стор** (`services/subpage_store.py`): `kind: html|overlay`. Legacy html не тронут. Дерево
+  `accounts/<id>/subpages/<page_id>/files/<relpath>`, отдельный `manifest.json`. ⚠️ overlay-запись несёт
+  числовой `size` (каталог рисует `fmtSize(p.size)`, undefined→«NaN КиБ»). `normalize_relpath` — свой гард на
+  relpath (`\` НЕ нормализуется в `/`, а отвергается). Члены отдаются **непрозрачной загрузкой** (octet-stream
+  + attachment + nosniff), НИКОГДА не рендерятся на нашем origin. Роуты `/api/subpages/overlay|{id}/files|
+  {id}/download`.
+- **Ф4 — baseline из образа** (`services/subpage_baseline.py`, `/api/subpages/baselines/*`): docker create+cp
+  дерева `/opt/app/frontend`, кэш по digest (глобальный — только вендорская сборка). ⚠️ **`docker create` ДО
+  `inspect`** (create авто-пуллит, inspect — нет). tar-slip гард полный и ДО записи (абсолютные/`..`/симлинки/
+  бюджет). ⚠️ `_tar_name` снимает ровно один ведущий `./`, НЕ `lstrip("./")` (тот съел бы `/etc`→`etc`,
+  `../evil`→`evil`).
+- **Ф6 — деплой overlay на ноду** (`panel_pipeline.py` + `models/panel_deploy.py:subpage_variant_id` +
+  `api/panel_deploy.py` прокидывает `account_id`). `_subpage_compose`: overlay → маунт КАТАЛОГА
+  `./frontend:/opt/app/frontend`, legacy → файл. `_deploy_subpage_overlay`: digest-warn → материализация из
+  образа → SFTP zip → unzip. ⚠️ **`find <dir> -mindepth 1 -delete`, НЕ `rm -rf <dir>`** — под живым bind-mount
+  `rm -rf` точки монтирования даёт rc=1 (обрывает `set -e`) и оставляет контейнер без файлов; проверено на
+  Docker. Контейнер НЕ останавливается; финал `up -d --force-recreate` перезапускает приложение (на ФС файлы
+  видны сразу, Node/EJS кэширует шаблон — нужен рестарт).
+- **Фронтенд Ф3+часть Ф7** (отгружено фоновой сессией 2026-07-23, `rw/SubPages.tsx` — две вкладки). Детали в
+  памяти [[wave7-plans]]. **НЕ сделано:** редактор поля `config` (форма известна, но SubPages.tsx правился
+  параллельно — не коллизили) и селектор варианта в `PanelDeployForm` (textarea→`<select>`).
+- **`scripts/probe_subpage_config.py`** — самодостаточный (без jq, сам находит запись, PATCH-тест на КЛОНЕ →
+  оригинал не тронут) снималка формы/семантики с живой панели. `PANEL=… TOKEN=… python scripts/…`. Windows:
+  `sys.stdout.reconfigure(utf-8)` внутри, иначе cp1251 роняет кириллицу.
