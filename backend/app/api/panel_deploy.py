@@ -31,7 +31,7 @@ from app.models.panel_deploy import (
     SubServer,
     _valid_ipv4,
 )
-from app.services import panel_pipeline
+from app.services import accounts, panel_pipeline
 from app.services.ssh_manager import SSHSession
 from app.services.task_store import TaskStatus, task_store
 
@@ -50,7 +50,10 @@ async def panel_deploy(
     """Kick off the panel / subpage install as a background Task; the browser
     subscribes to the log stream via /ws/logs/{task_id}."""
     task = task_store.create(total_steps=panel_pipeline.PANEL_TOTAL)
-    background_tasks.add_task(panel_pipeline.run_panel_pipeline, req, task)
+    # Capture account_id HERE (request context) — the background task can't read
+    # the ContextVar, and the overlay variant lives in this account's store.
+    account_id = accounts.current_account.get() or ""
+    background_tasks.add_task(panel_pipeline.run_panel_pipeline, req, task, account_id)
     return {"task_id": task.task_id, "task_type": "panel"}
 
 
@@ -215,7 +218,8 @@ _UNINSTALL_SCRIPTS: dict[str, str] = {
 @router.post("/step")
 async def panel_step(req: PanelOpRequest, background_tasks: BackgroundTasks) -> dict:
     task = task_store.create(total_steps=1)
-    background_tasks.add_task(_run_panel_op, req, task.task_id)
+    account_id = accounts.current_account.get() or ""
+    background_tasks.add_task(_run_panel_op, req, task.task_id, account_id)
     return {"task_id": task.task_id, "task_type": "panel-op"}
 
 
@@ -231,7 +235,7 @@ def _op_target(req: PanelOpRequest) -> tuple[str, str, str, int]:
     return req.ip, req.ssh_user, req.ssh_password, req.ssh_port
 
 
-async def _run_panel_op(req: PanelOpRequest, task_id: str) -> None:
+async def _run_panel_op(req: PanelOpRequest, task_id: str, account_id: str = "") -> None:
     task = task_store.get(task_id)
     if not task:
         return
@@ -249,7 +253,7 @@ async def _run_panel_op(req: PanelOpRequest, task_id: str) -> None:
         if req.action == "uninstall":
             await _panel_uninstall(ssh, task, req)
         else:
-            await _panel_reinstall(ssh, task, req)
+            await _panel_reinstall(ssh, task, req, account_id)
 
         task.finish(TaskStatus.SUCCESS)
         task.add_log(f"\n\x1b[1;32m✓ {verb}: {label} — готово.\x1b[0m")
@@ -260,7 +264,7 @@ async def _run_panel_op(req: PanelOpRequest, task_id: str) -> None:
         await ssh.close()
 
 
-async def _panel_reinstall(ssh: SSHSession, task, req: PanelOpRequest) -> None:
+async def _panel_reinstall(ssh: SSHSession, task, req: PanelOpRequest, account_id: str = "") -> None:
     """Re-run the pipeline's own install helper for the component (idempotent —
     an existing .env is preserved so panel secrets are never regenerated)."""
     c = req.component
@@ -268,7 +272,8 @@ async def _panel_reinstall(ssh: SSHSession, task, req: PanelOpRequest) -> None:
         await panel_pipeline._install_panel(ssh, task, req)
     elif c == "subpage":
         await panel_pipeline._install_subpage(
-            ssh, task, req, separate=not panel_pipeline._subpage_bundled(req)
+            ssh, task, req, separate=not panel_pipeline._subpage_bundled(req),
+            account_id=account_id,
         )
     elif c == "docker":
         await panel_pipeline._install_docker(ssh, task)

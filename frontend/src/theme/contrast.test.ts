@@ -9,8 +9,8 @@
  * их измеренными числами. Он ловит НОВЫЕ регрессии, а Ф4/Ф5 вычёркивают строки
  * из списка. Пустой `KNOWN_FAILURES` = контрастная часть Плана F готова.
  */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { resolve, join, relative } from "node:path";
 import { describe, it, expect } from "vitest";
 import { ACCENTS } from "./tweaks";
 
@@ -168,5 +168,54 @@ describe("contrast: ink on accents", () => {
       const best = Math.max(ratio("#ffffff", a.base), ratio(a.ink, a.base));
       expect(`${name}:${best >= AA}`).toBe(`${name}:true`);
     }
+  });
+});
+
+// ── Хардкод цветов в компонентах (Волна 7, План A Ф3) ──────────
+//
+// Токены палитры можно измерить, а `text-white` — нельзя: он не участвует ни в
+// одном блоке index.css и просто игнорирует тему. Ровно так заголовок «Деплой
+// нод» оказался белым по белому в светлой теме. Поэтому — отдельный гейт на
+// исходники.
+describe("no hardcoded theme-blind colors in components", () => {
+  // AuthScreen — намеренно тёмный полноэкранный гейт ДО выбора темы: там нет
+  // ни аккаунта, ни его настроек оформления, поэтому токены неприменимы.
+  const ALLOW = ["auth/AuthScreen.tsx"];
+
+  // ⚠️ ИЗМЕРЕНО (Ф3) — правило ýже, чем казалось при планировании. Первая,
+  // широкая версия регулярки дала 11 «нарушений», из которых настоящим было
+  // ОДНО (`bg-blue-600/20 text-blue-300` на аватарке аккаунта). Остальные —
+  // два корректных идиома, не зависящих от темы:
+  //   • `bg-white` (9 мест) — БЕЛЫЙ КРУЖОК тумблера на цветной дорожке. Он белый
+  //     и в светлой, и в тёмной теме, ровно как в iOS; токен тут был бы ошибкой.
+  //   • `bg-black/75` — затемняющая подложка модалки (infra/ui.tsx:60).
+  // Поэтому white/black пропускаем, а любой ИМЕНОВАННЫЙ ОТТЕНОК палитры
+  // Tailwind ловим: он игнорирует и тему, и выбранный акцент.
+  const BAD = new RegExp(
+    "\\b(?:text|border|from|to|via)-(?:white|black)\\b" +           // текст/рамка белым-чёрным
+    "|\\b(?:text|bg|border|from|to|via)-" +                          // любой оттенок палитры
+      "(?:gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|" +
+      "cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\\d{2,3}\\b",
+    "g",
+  );
+
+  it("finds none outside the allow-list", () => {
+    const root = resolve(process.cwd(), "src");
+    const hits: string[] = [];
+
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) { walk(p); continue; }
+        if (!e.name.endsWith(".tsx") || e.name.endsWith(".test.tsx")) continue;
+        const rel = relative(root, p).replace(/\\/g, "/");
+        if (ALLOW.some(a => rel.endsWith(a))) continue;
+        const found = readFileSync(p, "utf8").match(BAD);
+        if (found) hits.push(`${rel}: ${[...new Set(found)].join(", ")}`);
+      }
+    };
+    walk(root);
+
+    expect(hits).toEqual([]);
   });
 });

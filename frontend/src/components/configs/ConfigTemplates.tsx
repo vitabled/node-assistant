@@ -3,6 +3,7 @@ import { Loader2, Plus, Pencil, Trash2, Upload, FileJson, FileCode2 } from "luci
 import { toast } from "../infra/Toast";
 import { JsonEditor } from "../profiles/JsonEditor";
 import { configApi, KINDS, coreOf, labelOf, type ConfigTemplate, type TemplateKind } from "./api";
+import { PanelPicker, usePanels } from "../common/PanelPicker";
 
 // The type→editor framework: JSON cores open in our schema-validated JsonEditor
 // (the Xray-JSON binding — stateless, never touches the global xray_profile store);
@@ -32,6 +33,10 @@ export function ConfigTemplates() {
   const [edit, setEdit] = useState<Editing | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  // Which panel to sync with. "" = the one marked as main. Kept in page state
+  // ONLY: picking a sync source must not silently re-point the main panel.
+  const [panelId, setPanelId] = useState("");
+  const { panels, activeId } = usePanels();
 
   const load = async () => {
     try { setItems(await configApi.list()); }
@@ -87,7 +92,11 @@ export function ConfigTemplates() {
   };
 
   const exportToPanel = async (id: string) => {
-    try { await configApi.exportToPanel(id); toast("Отправлено в панель Remnawave", "success"); }
+    const target = panels.find(p => p.id === (panelId || activeId));
+    try {
+      await configApi.exportToPanel(id, panelId);
+      toast(`Отправлено в панель ${target?.name || "Remnawave"}`, "success");
+    }
     catch (e) { toast(e instanceof Error ? e.message : "Не удалось (панель не настроена?)", "error"); }
   };
 
@@ -98,7 +107,9 @@ export function ConfigTemplates() {
           <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--t-hi)" }}>Пользовательские конфиги</h2>
           <p className="hint">Шаблоны конфигов по типам клиента (как subscription-templates Remnawave).</p>
         </div>
-        <div className="ni-pagehead-actions" style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div className="ni-pagehead-actions" style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <PanelPicker value={panelId} onChange={setPanelId} panels={panels} activeId={activeId}
+            label="Синхронизация с" />
           {KINDS.map(k => (
             <button key={k.key} className="btn btn-sm" onClick={() => openNew(k.key)}>
               <Plus size={13} /> {k.label}

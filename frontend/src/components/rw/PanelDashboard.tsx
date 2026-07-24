@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { SyncGroupPanel } from "./SyncGroupPanel";
+import { PanelRegistry } from "../common/PanelRegistry";
 import { Plus, ServerCog, X } from "lucide-react";
 import { PanelWidget } from "./PanelWidget";
 import { PanelManageModal } from "./PanelManageModal";
@@ -39,6 +40,16 @@ export function PanelDashboard() {
   const [jobs,      setJobs]      = useState<PanelJobSummary[]>(loadJobs);
   const [showForm,  setShowForm]  = useState(false);
   const [manageJob, setManageJob] = useState<PanelJobSummary | null>(null);
+
+  // Most recent successfully deployed panel — used to prefill a registry entry.
+  // `panel_jobs` stays client-only (it holds SSH creds); only the URL crosses over.
+  // `target: "subpage"` deploys no panel at all, hence the panel_domain check.
+  const deployed = useMemo(() => {
+    const ok = jobs.filter(j => j.finalStatus === "success" && j.savedForm?.panel_domain);
+    return ok.length ? ok[ok.length - 1] : null;
+  }, [jobs]);
+  const deployedUrl = deployed ? `https://${deployed.savedForm.panel_domain}` : "";
+  const deployedName = deployed?.savedForm.panel_domain || "";
 
   const submit = async (payload: PanelDeployPayload): Promise<string> => {
     const res = await fetch("/api/panel/deploy", {
@@ -129,6 +140,19 @@ export function PanelDashboard() {
               <Plus size={13} /> Установить панель
             </button>
           </div>
+        </div>
+
+        {/* The SAME registry the settings screen edits — «сделать главной» here
+            and there hit one endpoint, so the two screens cannot disagree.
+            `prefill` seeds a new entry from the last successfully deployed panel;
+            the API token is left blank on purpose (it is issued in the panel
+            itself and we never persist the deploy-time one). */}
+        <div className="mb-5">
+          <PanelRegistry
+            addLabel={deployedUrl ? "+ Из развёрнутой" : "+ Панель"}
+            prefill={deployedUrl ? { name: deployedName, panel_url: deployedUrl } : undefined}
+            hint="Главная панель общая с «Настройками»: её используют деплой нод, конфиги и ассистент."
+          />
         </div>
 
         {jobs.length === 0 ? (

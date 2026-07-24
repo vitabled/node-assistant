@@ -200,6 +200,89 @@ class RemnavaveClient:
     async def delete_subscription_template(self, uuid: str) -> dict:
         return _unwrap(await self._req("DELETE", f"/api/subscription-templates/{uuid}"))
 
+    # ── Subscription page configs (Wave-7 Plan G Ф2) ───────────
+    #
+    # Verified against api-1.json (Remnawave v2.8.0) — see the recon section of
+    # docs/superpowers/plans/2026-07-21-wave6-e-subscription-page-frontend.md.
+    # Shape differences from the templates block above that are easy to get wrong:
+    #   • update is PATCH on the COLLECTION with uuid in the BODY — there is no
+    #     PATCH /{uuid} and no PUT;
+    #   • create accepts ONLY {name}, so writing a config takes two calls;
+    #   • name is 2..30 (templates allow 255) with ^[A-Za-z0-9_\s-]+$.
+
+    _PAGE_CONFIGS = "/api/subscription-page-configs"
+
+    @staticmethod
+    def _safe_page_config_name(name: str) -> str:
+        """Coerce into the panel's ^[A-Za-z0-9_\\s-]+$ / 2..30 window.
+
+        ⚠️ The 255-char slice of `create_subscription_template` must NOT be
+        copied here — the panel rejects anything past 30 with a 400."""
+        import re as _re
+
+        safe = _re.sub(r"[^A-Za-z0-9_\s\-]", "_", name or "")[:30].strip() or "config"
+        if len(safe) < 2:
+            safe = f"c_{safe}"[:30]
+        return safe
+
+    async def list_subscription_page_configs(self) -> dict:
+        """GET → {total, configs:[{uuid, viewPosition, name, config}]}."""
+        payload = _unwrap(await self._req("GET", self._PAGE_CONFIGS))
+        if isinstance(payload, dict):
+            return {"total": payload.get("total", 0), "configs": payload.get("configs", [])}
+        return {"total": len(payload or []), "configs": payload or []}
+
+    async def get_subscription_page_config(self, uuid: str) -> dict:
+        return _unwrap(await self._req("GET", f"{self._PAGE_CONFIGS}/{uuid}"))
+
+    async def create_subscription_page_config(self, name: str) -> dict:
+        """POST {name} — the body accepts nothing else, so a config with content
+        needs a follow-up `update_subscription_page_config`."""
+        return _unwrap(await self._req(
+            "POST", self._PAGE_CONFIGS, json={"name": self._safe_page_config_name(name)},
+        ))
+
+    async def update_subscription_page_config(
+        self, uuid: str, *, name=None, config=None
+    ) -> dict:
+        """PATCH on the collection; `uuid` travels in the body.
+
+        Only the fields the caller passed are sent. ⚠️ Whether the panel MERGES
+        or REPLACES `config` is not knowable from the spec (it is an untyped
+        field), so never send `config=None` "just in case" — an omitted key is
+        the only shape we can be sure does not wipe the design."""
+        body: dict = {"uuid": uuid}
+        if name is not None:
+            body["name"] = self._safe_page_config_name(name)
+        if config is not None:
+            body["config"] = config
+        return _unwrap(await self._req("PATCH", self._PAGE_CONFIGS, json=body))
+
+    async def delete_subscription_page_config(self, uuid: str) -> dict:
+        """DELETE /{uuid} → {isDeleted: bool}."""
+        return _unwrap(await self._req("DELETE", f"{self._PAGE_CONFIGS}/{uuid}"))
+
+    async def clone_subscription_page_config(self, uuid: str) -> dict:
+        return _unwrap(await self._req(
+            "POST", f"{self._PAGE_CONFIGS}/actions/clone", json={"cloneFromUuid": uuid},
+        ))
+
+    async def reorder_subscription_page_configs(self, items: list[dict]) -> dict:
+        """POST /actions/reorder {items:[{uuid, viewPosition}]} → the full listing.
+
+        ⚠️ Do NOT copy the signature from our MCP fork
+        (`mcp/src/tools/subscription-page-configs.ts`): it takes `{uuids: [...]}`,
+        which the API does not accept."""
+        payload = _unwrap(await self._req(
+            "POST", f"{self._PAGE_CONFIGS}/actions/reorder",
+            json={"items": [
+                {"uuid": i["uuid"], "viewPosition": int(i["viewPosition"])} for i in items
+            ]},
+        ))
+        if isinstance(payload, dict):
+            return {"total": payload.get("total", 0), "configs": payload.get("configs", [])}
+        return {"total": len(payload or []), "configs": payload or []}
+
     # ── Nodes ──────────────────────────────────────────────────
 
     async def create_node(

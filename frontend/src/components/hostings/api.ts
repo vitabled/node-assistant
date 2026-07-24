@@ -15,7 +15,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export interface Tariff {
-  name: string; specs: string; price: number; currency: string; period: string;
+  name: string; specs: string; bandwidth: string;
+  price: number; currency: string; period: string;
 }
 export interface HostingLocation {
   city: string; country_code: string; lat: number; lng: number; note: string;

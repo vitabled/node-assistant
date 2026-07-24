@@ -3,12 +3,15 @@ import { ComposableMap, Geographies, Geography, ZoomableGroup, Marker } from "re
 import { feature } from "topojson-client";
 import worldTopo from "world-atlas/countries-110m.json";
 import { motion, AnimatePresence } from "motion/react";
-import { Map as MapIcon, Plus, Minus, Globe, Loader2, X, MapPin, Crosshair } from "lucide-react";
-import { hostingsApi, periodLabel } from "./api";
+import { Map as MapIcon, Plus, Minus, Globe, Loader2, X, MapPin, Search } from "lucide-react";
+import { hostingsApi, periodLabel, type Hosting } from "./api";
 import {
-  CONTINENTS, CONTINENT_VIEW, WORLD_VIEW, continentOf, resolveCoords,
+  CONTINENTS, CONTINENT_VIEW, WORLD_VIEW, continentOf, resolveCoords, alpha2OfGeo,
   type ContinentKey,
 } from "./geo";
+import { matchHosting, matchedCountries } from "./search";
+import { CountryPanel, hostingsInCountry } from "./CountryPanel";
+import { FlagChip } from "../common/FlagChip";
 import { Page, PageHeader, fmtNum } from "../infra/ui";
 import { toast } from "../infra/Toast";
 
@@ -29,15 +32,18 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
 
 export function HostingsMap() {
   const [markers, setMarkers] = useState<MarkerPt[]>([]);
+  const [hostings, setHostings] = useState<Hosting[]>([]);
   const [loading, setLoading] = useState(true);
-  const [enabled, setEnabled] = useState<Set<ContinentKey>>(() => new Set(CONTINENTS.map(c => c.key)));
+  const [query, setQuery] = useState("");
   const [view, setView] = useState<{ center: [number, number]; zoom: number }>(WORLD_VIEW);
   const [sel, setSel] = useState<MarkerPt | null>(null);
+  const [country, setCountry] = useState("");   // alpha-2 of the open country panel
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const hostings = await hostingsApi.list();
+      setHostings(hostings);
       const pts: MarkerPt[] = [];
       for (const h of hostings) {
         const priced = (h.tariffs || []).filter(t => t.price > 0).sort((a, b) => a.price - b.price)[0];
@@ -60,22 +66,31 @@ export function HostingsMap() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Names of the hostings that match — markers are filtered by membership, so a
+  // hosting matched on price or tariff still shows all of its points.
+  const matching = useMemo(
+    () => new Set(hostings.filter(h => matchHosting(h, query)).map(h => h.name)),
+    [hostings, query],
+  );
   const visible = useMemo(
-    () => markers.filter(m => !m.continent || enabled.has(m.continent)),
-    [markers, enabled],
+    () => (query ? markers.filter(m => matching.has(m.hosting)) : markers),
+    [markers, matching, query],
+  );
+  // Precomputed set, not a lookup inside each of the 177 shape renders.
+  const highlight = useMemo(
+    () => (query ? matchedCountries(hostings, query) : new Set<string>()),
+    [hostings, query],
   );
 
-  const toggle = (k: ContinentKey) => setEnabled(s => {
-    const n = new Set(s);
-    n.has(k) ? n.delete(k) : n.add(k);
-    return n;
-  });
-  const focus = (k: ContinentKey) => {
-    setEnabled(s => new Set(s).add(k));
-    setView(CONTINENT_VIEW[k]);
-  };
+  const focus = (k: ContinentKey) => setView(CONTINENT_VIEW[k]);
   const zoomBy = (f: number) => setView(v => ({ ...v, zoom: clamp(v.zoom * f, 1, 8) }));
-  const reset = () => { setView(WORLD_VIEW); setSel(null); };
+  const reset = () => { setView(WORLD_VIEW); setSel(null); setCountry(""); };
+
+  // Opening a country that has no hostings would show an empty box — clicking
+  // the ocean or an unused country simply does nothing.
+  const openCountry = (cc: string) => {
+    if (cc && hostingsInCountry(hostings, cc).length) { setCountry(cc); setSel(null); }
+  };
 
   return (
     <Page>
@@ -87,25 +102,25 @@ export function HostingsMap() {
           </button>
         } />
 
-      {/* Continent toggles */}
-      <div className="flex flex-wrap gap-2 mb-3">
-        {CONTINENTS.map(c => {
-          const on = enabled.has(c.key);
-          return (
-            <div key={c.key}
-              className="flex items-center rounded-full border text-xs overflow-hidden"
-              style={{
-                borderColor: on ? "var(--accent)" : "var(--line)",
-                background: on ? "var(--accent-dim)" : "var(--bg2)",
-                color: on ? "var(--accent-hi)" : "var(--t-faint)",
-              }}>
-              <button onClick={() => toggle(c.key)} className="px-2.5 py-1" title="Показать/скрыть регион">{c.label}</button>
-              <button onClick={() => focus(c.key)} className="pl-1 pr-2 py-1 opacity-70 hover:opacity-100" title="Приблизить к региону">
-                <Crosshair size={11} />
-              </button>
-            </div>
-          );
-        })}
+      {/* Search (replaced the continent toggles) + region zoom presets */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--t-faint)]" />
+          <input value={query} onChange={e => setQuery(e.target.value)}
+            className="input" style={{ paddingLeft: 28 }} spellCheck={false}
+            placeholder="Страна, город, хостинг, тариф, канал или цена (<20, 5-30)" />
+          {query && (
+            <button onClick={() => setQuery("")} title="Очистить"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--t-low)] hover:text-[var(--t-hi)]">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        <select className="selectbox" style={{ width: "auto" }} value=""
+          onChange={e => { const k = e.target.value as ContinentKey; if (k) focus(k); }}>
+          <option value="">Приблизить к региону…</option>
+          {CONTINENTS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+        </select>
       </div>
 
       {/* Map */}
@@ -116,15 +131,26 @@ export function HostingsMap() {
           <ZoomableGroup center={view.center} zoom={view.zoom} minZoom={1} maxZoom={8}
             onMoveEnd={(p: any) => setView({ center: p.coordinates, zoom: p.zoom })}>
             <Geographies geography={GEO}>
-              {({ geographies }: any) => geographies.map((geo: any) => (
-                <Geography key={geo.rsmKey} geography={geo}
-                  fill="var(--bg3)" stroke="var(--line-soft)" strokeWidth={0.4}
-                  style={{
-                    default: { outline: "none" },
-                    hover: { fill: "var(--accent-dim)", outline: "none" },
-                    pressed: { outline: "none" },
-                  }} />
-              ))}
+              {({ geographies }: any) => geographies.map((geo: any) => {
+                const cc = alpha2OfGeo(geo);
+                const on = cc && (cc === country || highlight.has(cc));
+                return (
+                  <Geography key={geo.rsmKey} geography={geo}
+                    onClick={() => openCountry(cc)}
+                    fill={on ? "var(--accent-dim)" : "var(--bg3)"}
+                    stroke={on ? "var(--accent)" : "var(--line)"}
+                    strokeWidth={0.6}
+                    // Keep borders crisp: without this the stroke is scaled by
+                    // ZoomableGroup, so it is invisible at world view and thick
+                    // when zoomed in.
+                    vectorEffect="non-scaling-stroke"
+                    style={{
+                      default: { outline: "none" },
+                      hover: { fill: "var(--accent-dim)", outline: "none" },
+                      pressed: { outline: "none" },
+                    }} />
+                );
+              })}
             </Geographies>
 
             {visible.map(m => {
@@ -176,18 +202,28 @@ export function HostingsMap() {
                 <button onClick={() => setSel(null)} className="text-[var(--t-low)] hover:text-[var(--t-hi)]"><X size={13} /></button>
               </div>
               <p className="text-xs text-[var(--t-mid)] flex items-center gap-1.5 mt-1">
-                {sel.cc && sel.cc.toLowerCase() !== "xx"
-                  ? <span className={`fi fi-${sel.cc.toLowerCase()}`} style={{ width: 15, height: 11, borderRadius: 2 }} />
-                  : <Globe size={12} />}
+                <FlagChip code={sel.cc} size={15} />
                 {sel.city}
               </p>
               {sel.price !== null && (
                 <p className="text-xs text-[var(--t-low)] mt-1">от <span className="text-[var(--t-hi)] tabular-nums">{fmtNum(sel.price, sel.currency)}</span>{periodLabel(sel.period)}</p>
               )}
               {sel.note && <p className="text-[11px] text-[var(--t-faint)] mt-1.5">{sel.note}</p>}
+              {/* Also the only way into the country panel for Singapore and Hong
+                  Kong — the 110m geometry has no polygon for either. */}
+              {sel.cc && hostingsInCountry(hostings, sel.cc).length > 0 && (
+                <button onClick={() => openCountry(sel.cc)}
+                  className="mt-2 text-[11px] text-[var(--accent-hi)] hover:underline">
+                  Все хостинги страны →
+                </button>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
+
+        {country && (
+          <CountryPanel cc={country} hostings={hostings} onClose={() => setCountry("")} />
+        )}
       </div>
     </Page>
   );

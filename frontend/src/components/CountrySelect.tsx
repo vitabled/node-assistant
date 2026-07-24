@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { ChevronDown, Search, Globe } from "lucide-react";
+import { ChevronDown, Search } from "lucide-react";
+import { FlagChip } from "./common/FlagChip";
 
 // ISO 3166-1 alpha-2 → { name }. Mirrors the country picker in the Remnawave
 // panel. "XX" is the panel's "unknown" sentinel. Flags render via the
@@ -71,22 +72,6 @@ export const COUNTRIES: { code: string; name: string }[] = [
   { code: "VN", name: "Vietnam" },
   { code: "ZA", name: "South Africa" },
 ];
-
-// Fixed-size SVG flag chip from the flag-icons set; Globe fallback for XX/unknown.
-function FlagChip({ code, size = 18 }: { code: string; size?: number }) {
-  const cc = (code || "").toLowerCase();
-  if (!cc || cc === "xx") return <Globe size={size - 4} style={{ color: "var(--t-low)", flex: "none" }} />;
-  return (
-    <span
-      className={`fi fi-${cc}`}
-      style={{
-        width: size, height: Math.round(size * 0.72), borderRadius: 2, flex: "none",
-        backgroundSize: "cover", backgroundPosition: "center",
-        boxShadow: "0 0 0 1px rgba(0,0,0,.12)",
-      }}
-    />
-  );
-}
 
 interface Props {
   label:        string;

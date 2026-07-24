@@ -36,6 +36,7 @@ class AiConfigBody(BaseModel):
     readonly: bool = True
     active_preset_id: str = Field("", max_length=64)  # Plan I; "" = default preset
     gateway: str = "none"  # Plan J; none | cliproxy
+    use_mcp: bool = False  # Wave-7 Plan E Ф2: borrow the MCP server's tools
 
     @field_validator("provider")
     @classmethod
@@ -67,6 +68,7 @@ def _public(account_id: str | None = None) -> dict:
         "readonly": cfg.readonly,
         "active_preset_id": cfg.active_preset_id,
         "gateway": cfg.gateway,
+        "use_mcp": cfg.use_mcp,
         "has_key": bool(cfg.api_key_enc),  # never the key itself
     }
 
@@ -90,6 +92,7 @@ async def save_config(body: AiConfigBody) -> dict:
         "readonly": body.readonly,
         "active_preset_id": body.active_preset_id.strip(),
         "gateway": body.gateway,
+        "use_mcp": body.use_mcp,
     }
     # Only overwrite the key when a fresh non-blank one is supplied.
     if body.api_key and body.api_key.strip():
@@ -125,3 +128,37 @@ async def chat(body: ChatBody) -> StreamingResponse:
             yield json.dumps(event, ensure_ascii=False) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+@router.get("/tools")
+async def tools_status() -> dict:
+    """What the assistant can actually reach right now.
+
+    The UI shows this ABOVE the composer so the user knows the boundaries before
+    asking, rather than learning them from a refusal. Three honest states:
+    built-in only / built-in + Remnawave / built-in only because MCP belongs to
+    another account.
+    """
+    from app.services import ai_agent, mcp_server
+
+    cfg = ai_agent._cfg()
+    builtin = len(ai_agent.TOOLS)
+    if not cfg.use_mcp:
+        return {"builtin": builtin, "mcp": 0, "reason": "off"}
+    try:
+        status = await mcp_server.status()
+    except Exception:
+        return {"builtin": builtin, "mcp": 0, "reason": "unavailable"}
+    state = status.get("container")
+    if state == "foreign":
+        return {"builtin": builtin, "mcp": 0, "reason": "foreign"}
+    if state != "running" or not status.get("reachable"):
+        return {"builtin": builtin, "mcp": 0, "reason": "unavailable"}
+    mcp = await ai_agent._mcp_tools(cfg)
+    return {
+        "builtin": builtin,
+        "mcp": len(mcp),
+        "capped": len(mcp) >= ai_agent.MAX_MCP_TOOLS,
+        "writes": not cfg.readonly,
+        "reason": "ok" if mcp else "unavailable",
+    }

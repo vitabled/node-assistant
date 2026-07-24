@@ -41,6 +41,14 @@ export const configApi = {
     fetch(`/api/config-templates/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) }).then(j),
   remove: (id: string): Promise<null> =>
     fetch(`/api/config-templates/${id}`, { method: "DELETE" }).then(j),
-  exportToPanel: (id: string): Promise<{ uuid: string }> =>
-    fetch(`/api/config-templates/${id}/export`, { method: "POST" }).then(j),
+  // `panelId` empty → the panel marked as main (server-side default), so the
+  // pre-Wave-7 call shape keeps working unchanged.
+  exportToPanel: (id: string, panelId = ""): Promise<{ uuid: string }> =>
+    fetch(`/api/config-templates/${id}/export${qs(panelId)}`, { method: "POST" }).then(j),
+  listPanelTemplates: (panelId = ""): Promise<any> =>
+    fetch(`/api/config-templates/import/panel${qs(panelId)}`).then(j),
+  importFromPanel: (uuid: string, panelId = ""): Promise<ConfigTemplate> =>
+    fetch(`/api/config-templates/import/panel/${uuid}${qs(panelId)}`, { method: "POST" }).then(j),
 };
+
+const qs = (panelId: string) => (panelId ? `?panel_id=${encodeURIComponent(panelId)}` : "");

@@ -24,7 +24,7 @@ export function AccountMenu() {
   if (!active) return null;
 
   const avatar = (login: string, size = 22) => (
-    <span className="rounded-full bg-blue-600/20 text-blue-300 grid place-items-center font-semibold flex-none"
+    <span className="rounded-full bg-[var(--accent-dim)] text-[var(--accent-hi)] grid place-items-center font-semibold flex-none"
       style={{ width: size, height: size, fontSize: size * 0.45 }}>
       {login.slice(0, 1).toUpperCase()}
     </span>

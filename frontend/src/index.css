@@ -159,6 +159,14 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .seg button.on{background:var(--bg3);color:var(--t-hi);box-shadow:inset 0 0 0 1px var(--line)}
 .seg.accent button.on{background:var(--accent);color:var(--accent-ink);box-shadow:none}
 .seg.mini button{padding:3px 10px;font-size:11.5px}
+/* Многорядный вариант (Волна 7, План E Ф1): у настроек 11 вкладок, в один ряд
+   они не влезают ни на одном реальном экране. Скругления сегментного контрола
+   рассчитаны на единственный ряд (первый/последний элемент), поэтому при
+   переносе переходим на отдельные «пилюли» с зазором — иначе середина ряда
+   получила бы прямые углы. Модификатор, а не правка .seg: базовый класс
+   используется ещё в полудюжине мест. */
+.seg-wrap{flex-wrap:wrap;width:auto;gap:4px}
+.seg-wrap button{flex:0 0 auto;border-radius:var(--r-sm)}
 
 /* ── toggle switch ── */
 .switch{position:relative;width:34px;height:19px;border-radius:99px;background:var(--bg3);

@@ -111,7 +111,9 @@ def _script_provider(monkeypatch, turns):
     """Make _provider_turn return successive scripted turns."""
     state = {"i": 0}
 
-    async def fake(config, key, messages, with_tools=True, system=""):
+    # **kw so a new optional argument on _provider_turn (e.g. Wave-7's `mcp`
+    # tool list) doesn't break every chat test with a TypeError.
+    async def fake(config, key, messages, with_tools=True, system="", **kw):
         t = turns[min(state["i"], len(turns) - 1)]
         state["i"] += 1
         return t
@@ -164,7 +166,7 @@ def test_chat_provider_error_surfaces_cleanly(monkeypatch):
     h, _ = _auth()
     _configure(h)
 
-    async def boom(config, key, messages, with_tools=True, system=""):
+    async def boom(config, key, messages, with_tools=True, system="", **kw):
         raise ai_agent.AgentError(
             "Провайдер отклонил ключ (401/403) — проверьте API-ключ и модель."
         )

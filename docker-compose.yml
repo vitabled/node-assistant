@@ -73,6 +73,39 @@ services:
     networks:
       - app-net
 
+  # -- CLIProxyAPI gateway (Wave-7 Plan F) ------------------------
+  # LLM gateway reached with OAuth PROVIDER ACCOUNTS instead of API keys.
+  # The backend orchestrates it over docker.sock (like the xray-checker and the
+  # MCP container), so compose does NOT start it by default -- the profile is
+  # here so `docker compose pull` can prefetch the pinned image.
+  #
+  # Deliberate choices, each with a reason that cost someone a day upstream:
+  #   * the image lives on DOCKER HUB (not ghcr) and is PINNED;
+  #   * the whole conf DIR is mounted, never the config FILE -- bind-mounting a
+  #     not-yet-created file makes Docker invent a DIRECTORY in its place;
+  #   * no `ports:` -- reachable only on the internal network;
+  #   * healthcheck uses bash /dev/tcp because the image ships NO curl or wget;
+  #   * the seeded config always carries a client key: an empty `api-keys` list
+  #     turns the proxy into an OPEN relay.
+  cli-proxy:
+    image: eceasy/cli-proxy-api:v7.2.50
+    container_name: node-installer-cliproxy
+    profiles: ["cliproxy"]
+    restart: unless-stopped
+    command: ["./CLIProxyAPI", "--config", "/conf/config.yaml"]
+    volumes:
+      - cliproxy-conf:/conf
+    expose:
+      - "8317"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8317"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    networks:
+      - app-net
+
   # ── Optional service split (Plan M) ────────────────────────────
   # Both workers run the SAME image as the backend and serve NO HTTP; they take
   # over background duties via the lease table on the shared node-data volume
@@ -162,4 +195,6 @@ networks:
     driver: bridge
 
 volumes:
+  cliproxy-conf:
+    name: node-cliproxy-conf
   node-data:

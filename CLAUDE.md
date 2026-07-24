@@ -555,8 +555,141 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   ⚠️ **Первый вариант (одна `ROW_NUMBER()`-выборка) мерился 1.5–2.0 с** на 504k строк — на ручке, которую дашборд
   опрашивает раз в 10с. Итог: **дискавери нод по covering-индексу `idx_samples_cid_sid` (NEW) + отдельный
   `ORDER BY ts DESC LIMIT n` на ноду** по `idx_samples_sid_ts` → **111 мс** на тех же данных. Не возвращать
-  window-функцию: она ранжирует ВСЁ окно ретенции (35 дней) до фильтра `rn <= n`. Соседний `_uptime_30d` (907 мс,
-  не трогали) теперь дороже — это существовавшая до Плана M цена, кандидат на отдельную оптимизацию.
+  window-функцию: она ранжирует ВСЁ окно ретенции (35 дней) до фильтра `rn <= n`. Соседний `_uptime_30d` (был 907 мс)
+  оптимизирован в задаче ревью (Волна 7): один grouped-scan вместо двух (global выводится из per-node
+  сумм Σonline/Σcount, идентично старому AVG) + covering-индекс `idx_samples_cid_sid_ts_online`
+  `(checker_id, stable_id, ts, online)` → **925 мс → 291 мс на 504k строк** (index-only, GROUP BY без temp-sort;
+  измерено, EXPLAIN подтверждён; регрессия `test_metrics_store.py`).
 - `infra_billing_store` — все 23 публичные функции приняли `account_id: Optional[str] = None` (ContextVar остался
   дефолтом, вызовы роутов не тронуты). В `**f`-функциях `account_id` стоит ВТОРЫМ позиционным, чтобы его не съел
   kwargs-мешок.
+
+## 11. Волна 7 — отгруженные части (планы `docs/superpowers/plans/2026-07-22-wave7-*`)
+> Планы A–F + зонтичный индекс. Отгружены A, B, C, D и E Ф1. Не сделаны: **План G**
+> (= Волна 6, План E Ф2–Ф7, редактор страницы подписок), **E Ф2–Ф3** (единый ассистент),
+> **F** (CLIProxyAPI через OAuth).
+
+### 11a. Флаги стран — ТОЛЬКО SVG, никаких эмодзи (План A)
+- **`components/common/FlagChip.tsx`** — единственный способ показать страну. Вынесен из `CountrySelect`;
+  оттуда же его берут `Dashboard`, `HostingsMap`, `CountryPanel`, `ImportFromSubscription`.
+  ⚠️ **Не возвращать эмодзи-флаги в UI:** `getFlagEmoji` строит пару regional-indicator, а несколько сборок
+  Windows рисуют её двумя мелкими буквами. `getFlagEmoji` остался в `utils/format.ts` только ради
+  `infra/InfraProviders.tsx:78` (чужая фаза).
+- **`utils/countryAliases.ts`** — `resolveCountryCode(label) -> alpha-2` и `splitFlagEmoji(s)`. Порядок:
+  эмодзи-флаг → известный 2-буквенный код (целиком или первым токеном) → английское имя из `COUNTRIES` →
+  русский алиас. ⚠️ `COUNTRIES` (`CountrySelect.tsx`) — **англоязычный** (зеркало пикера панели), поэтому
+  русские `groupName` из подписок резолвятся только через `RU_ALIASES`. Тест требует алиас для КАЖДОГО кода
+  из `COUNTRIES` — при расширении списка правится и таблица.
+- `Dashboard.NodeRow` вырезает эмодзи-флаг из имени узла и рисует его чипом; имя из одного лишь флага
+  откатывается на код, чтобы строка не осталась без подписи.
+
+### 11b. Гейт хардкод-цветов (План A Ф3)
+- `theme/contrast.test.ts` дополнен обходом `src/**/*.tsx`. **ИЗМЕРЕНО:** широкая регулярка дала 11
+  «нарушений», настоящим было ОДНО (`bg-blue-600/20 text-blue-300` на аватарке аккаунта). Остальные —
+  два корректных идиома: `bg-white` (9 мест) — белый кружок тумблера на цветной дорожке (белый в обеих
+  темах, как в iOS), `bg-black/75` — затемнение под модалкой. Поэтому правило: **white/black как ФОН —
+  можно; любой именованный оттенок палитры Tailwind — нельзя** (игнорирует и тему, и акцент).
+  Allow-list: `auth/AuthScreen.tsx` (намеренно тёмный гейт до выбора темы).
+
+### 11c. Реестр панелей стал общим (План C)
+- **`services/panel_registry.py`** — единственный резолвер `panel_id → PanelEntry | RemnavaveClient`.
+  Пустой `panel_id` = активная панель (все прежние вызовы не изменились). ⚠️ **Неизвестный id бросает
+  `PanelNotFound` (→404), а НЕ откатывается на активную** — тихая подмена записала бы конфиг в чужую панель.
+- `api/config_templates.py` — `panel_id` у export/import; `GET /import/panel` эхом отдаёт `panel_id`.
+- **`components/common/PanelPicker.tsx`** (контролируемый; прячется при одной панели) и
+  **`components/common/PanelRegistry.tsx`** — список панелей вынесен из `Settings.tsx` и подключён ещё в
+  «Установку» (`rw/PanelDashboard.tsx`). ⚠️ Второго списка над `active_panel_id` заводить нельзя.
+  Выбор панели-источника синка живёт в состоянии страницы и НЕ пишет `active_panel_id`.
+  `panel_jobs` (SSH-креды) остаётся клиентским: в реестр переносится только URL, токен вводится вручную.
+
+### 11d. Хостинги (План D)
+- `models/hostings.py::Tariff.bandwidth: str` — ширина канала свободным текстом (порт+гарантия+лимит одним
+  куском). Учтён в фильтре «пустых» тарифов на клиенте, иначе тариф с одним каналом молча пропадал.
+- `hostings/geo.ts::NUMERIC_TO_ALPHA2` + `alpha2OfGeo` — фичи `world-atlas` несут **числовой** ISO-id
+  («528»), не alpha-2. Таблица сгенерирована из бандла, 62 из 64 стран.
+  ⚠️ **Сингапура и Гонконга в `countries-110m` НЕТ** (датасет выбрасывает города-государства; в `50m` они
+  есть — 702 и 344, но это +634 КБ против 1.43 МБ JS из перф-базы Волны 6). Поэтому панель страны
+  открывается **и по клику на маркер** — маркеры рисуются по lat/lng и от полигонов не зависят.
+  Три территории без `id` (Сев. Кипр, Сомалиленд, Косово) инертны.
+- Границы: `stroke=var(--line)`, `0.6`, **`vectorEffect="non-scaling-stroke"`** — иначе `ZoomableGroup`
+  масштабирует обводку (невидима на обзоре, жирная на зуме).
+- `hostings/search.ts` — чистые `matchHosting`/`matchedCountries`/`parsePriceQuery` (`<20`, `>5`, `10-30`).
+  Заменили тоглы континентов; «приблизить к региону» переехало в выпадашку. Подсветка стран считается
+  один раз в `useMemo`, а не поиском внутри рендера каждой из 177 фигур.
+- `HostingsCatalog` — клик по карточке открывает полный просмотр; иконки получили `stopPropagation`.
+
+### 11e. Импорт серверов из подписки (План B)
+- **`services/subscription_import.py`** — `decode_subscription` (base64 и plain-text) + `link_to_candidate`
+  (через существующий `parse_xray_link`, второго парсера не заводим) + `country_of`.
+  ⚠️ Ссылки несут секреты (у trojan пароль — это сама ссылка): ошибки не эхают вход, есть тест.
+- **`POST /api/server-monitor/import/subscription`** — фетч и разбор на бэкенде (CORS + секреты),
+  SSRF-гард, `follow_redirects=False`, лимит 4 МиБ. `dry_run=true` по умолчанию.
+  Дедуп по `(host, port)`; статусы `new | duplicate | unresolved`.
+  ⚠️ **Домен резолвится в IPv4 при импорте**, оригинал кладётся в `note`: `servers.ip` — адрес. Цена —
+  узел за round-robin DNS пинится к одной A-записи. Альтернатива (хранить домен, резолвить при пробе)
+  дешёвая — `_probe` и так принимает hostname, — но меняет смысл поля и `_valid_ipv4` в `sync_deployed`.
+  ⚠️ `source='manual'`, а НЕ новый `'subscription'`: `update_server` ограничен manual, ре-синк трогает
+  только `deployed` → отдельный source сделал бы строки нередактируемыми (тупик Волны 6).
+- Frontend `components/ImportFromSubscription.tsx` (кнопка «Из подписки» на вкладке «Доступность серверов»).
+
+### 11f. Настройки: вкладки в несколько рядов (План E Ф1)
+- `.seg-wrap` в `index.css` — **модификатор**, базовый `.seg` не трогать (используется ещё в ~6 местах).
+  Многорядный вариант рисует отдельные «пилюли»: скругления сегментного контрола рассчитаны на один ряд.
+
+### 11g. Верификация фронтенда — квирк окружения
+- Node на машине разработки нет; всё гоняется в Docker (`ni-frontend-test` из builder-стадии
+  `frontend/Dockerfile`, Playwright — `mcr.microsoft.com/playwright:v1.61.1-jammy`). В Git Bash монтировать
+  с `MSYS_NO_PATHCONV=1` и **абсолютным** путём (относительный `$(pwd -W)/frontend` ломается, если shell уже
+  внутри `frontend/` → «No test files found»).
+- ⚠️ **vitest в контейнере теряет файлы: `Failed to start worker` / `Timeout waiting for worker to respond`**
+  (ровно 60 с, `transform 0ms`). Это НЕ падение теста — воркер вообще не стартовал, и файл просто **не попадает
+  в итог**, из-за чего «N passed» выглядит зелёным, покрывая лишь часть набора. Всегда сверять число файлов.
+  **Измерено (оба прогона под конкурирующей нагрузкой):** без ограничений — 26 файлов из 37 не стартовали
+  (в итог попало 11 файлов / 89 тестов); с `--maxWorkers=2` — **12** не стартовали (25 файлов / 150 тестов).
+  Ограничение помогает вдвое, но **не лечит**: `--minWorkers` в vitest 4 не существует (падает `CACError`).
+  Практика: `--maxWorkers=2`, не запускать параллельно с другой тяжёлой задачей, «упавший» файл перезапустить
+  по одному прежде, чем чинить. В `vitest.config.ts` лимит НЕ прописан: это ограничение машины, не проекта.
+- **Пре-существующие падения** (не связаны с Волной 7, воспроизводятся на чистом `main`):
+  `rw/PanelManageModal.test.tsx` «Статистика» (ждёт `/api/stats/node`, получает `/api/panel/metrics`) и
+  `theme/tweaks.test.ts` «exactly the two skin options» (скинов три). Не приписывать их своим правкам.
+
+### 11h. Страница подписок — редактор (План G, отгружено 2026-07-23/24)
+> Все ЧЕТЫРЕ блокирующих неизвестных сняты на живой панели 2.x (`scripts/probe_subpage_config.py`) +
+> bind-mount-эксперименте. Бэкенд Плана G отгружен ЦЕЛИКОМ (Ф2/Ф4/Ф5/Ф6). Осталось только фронт-редактор
+> поля `config` и селектор варианта в форме деплоя.
+
+- **Ф2 — каталог оформления ПАНЕЛИ** (`api/subpage_configs.py`, `/api/subpage-configs`; клиентские методы в
+  `remnawave_client.py`). Прокси, локального стора нет. ⚠️ **Листинг панели отдаёт `config: null` у ВСЕХ
+  записей** — `config` приходит только в детали `GET /{uuid}`. Редактор ОБЯЗАН тянуть деталь per-config.
+  ⚠️ Имя 2..30 (`^[A-Za-z0-9_\s-]+$`), НЕ [:255] как у templates. Обновление — PATCH на КОЛЛЕКЦИЮ с uuid в
+  теле (PATCH/{uuid} нет). Реордер — `{items:[{uuid,viewPosition}]}` (не `{uuids}` как в MCP-форке). Клон —
+  `POST /actions/clone {cloneFromUuid}` (НЕ `/{uuid}/clone`).
+- **Форма поля `config` (снята с живой панели):** структурированный объект `{baseSettings, baseTranslations,
+  brandingSettings, locales, platforms, svgLibrary, uiConfig, version}`; `platforms.{ios,…}.apps[].blocks[]`
+  с локализованными title/description/buttons. **PATCH — MERGE** (name-only PATCH оформление НЕ трогает →
+  переименование безопасно). Привязка config→юзер идёт через **внешний сквад** (`subpageConfigUuid`), поэтому
+  контейнеру **`SUBPAGE_CONFIG_UUID` в .env НЕ нужен**.
+- **Ф5 — overlay-стор** (`services/subpage_store.py`): `kind: html|overlay`. Legacy html не тронут. Дерево
+  `accounts/<id>/subpages/<page_id>/files/<relpath>`, отдельный `manifest.json`. ⚠️ overlay-запись несёт
+  числовой `size` (каталог рисует `fmtSize(p.size)`, undefined→«NaN КиБ»). `normalize_relpath` — свой гард на
+  relpath (`\` НЕ нормализуется в `/`, а отвергается). Члены отдаются **непрозрачной загрузкой** (octet-stream
+  + attachment + nosniff), НИКОГДА не рендерятся на нашем origin. Роуты `/api/subpages/overlay|{id}/files|
+  {id}/download`.
+- **Ф4 — baseline из образа** (`services/subpage_baseline.py`, `/api/subpages/baselines/*`): docker create+cp
+  дерева `/opt/app/frontend`, кэш по digest (глобальный — только вендорская сборка). ⚠️ **`docker create` ДО
+  `inspect`** (create авто-пуллит, inspect — нет). tar-slip гард полный и ДО записи (абсолютные/`..`/симлинки/
+  бюджет). ⚠️ `_tar_name` снимает ровно один ведущий `./`, НЕ `lstrip("./")` (тот съел бы `/etc`→`etc`,
+  `../evil`→`evil`).
+- **Ф6 — деплой overlay на ноду** (`panel_pipeline.py` + `models/panel_deploy.py:subpage_variant_id` +
+  `api/panel_deploy.py` прокидывает `account_id`). `_subpage_compose`: overlay → маунт КАТАЛОГА
+  `./frontend:/opt/app/frontend`, legacy → файл. `_deploy_subpage_overlay`: digest-warn → материализация из
+  образа → SFTP zip → unzip. ⚠️ **`find <dir> -mindepth 1 -delete`, НЕ `rm -rf <dir>`** — под живым bind-mount
+  `rm -rf` точки монтирования даёт rc=1 (обрывает `set -e`) и оставляет контейнер без файлов; проверено на
+  Docker. Контейнер НЕ останавливается; финал `up -d --force-recreate` перезапускает приложение (на ФС файлы
+  видны сразу, Node/EJS кэширует шаблон — нужен рестарт).
+- **Фронтенд Ф3+часть Ф7** (отгружено фоновой сессией 2026-07-23, `rw/SubPages.tsx` — две вкладки). Детали в
+  памяти [[wave7-plans]]. **НЕ сделано:** редактор поля `config` (форма известна, но SubPages.tsx правился
+  параллельно — не коллизили) и селектор варианта в `PanelDeployForm` (textarea→`<select>`).
+- **`scripts/probe_subpage_config.py`** — самодостаточный (без jq, сам находит запись, PATCH-тест на КЛОНЕ →
+  оригинал не тронут) снималка формы/семантики с живой панели. `PANEL=… TOKEN=… python scripts/…`. Windows:
+  `sys.stdout.reconfigure(utf-8)` внутри, иначе cp1251 роняет кириллицу.

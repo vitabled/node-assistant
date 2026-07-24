@@ -105,6 +105,19 @@ class AiConfig(BaseModel):
     active_preset_id: str = ""  # active system-prompt preset (Plan I; "" = default)
     gateway: str = "none"  # Plan J: none | cliproxy (route via CLIProxyAPI gateway)
     gateway_internal: bool = False  # gateway runs on our node-assistant-net → SSRF-exempt
+    # Wave-7 Plan E Ф2: borrow the MCP server's tools (the whole Remnawave
+    # contract). Off by default — it only works when the shared MCP container
+    # belongs to this account, and it makes every turn's prompt much larger.
+    use_mcp: bool = False
+    # Wave-7 Plan F: self-hosted CLIProxyAPI reached with OAuth provider accounts
+    # instead of API keys. Both secrets are Fernet ciphertext, never plaintext.
+    cliproxy_enabled: bool = False
+    cliproxy_image: str = "eceasy/cli-proxy-api:v7.2.50"
+    cliproxy_master_key_enc: str = ""   # client key our backend presents on /v1
+    cliproxy_mgmt_key_enc: str = ""     # Management API key — NEVER to a browser
+    # NOTE: the shared container's owner is tracked GLOBALLY in
+    # DATA_DIR/cliproxy_owner.json (cliproxy_server._OWNER_FILE), NOT here — a
+    # per-account field made every non-owner look like the owner (Wave-7 review).
 
 
 class AppearanceConfig(BaseModel):

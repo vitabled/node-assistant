@@ -129,8 +129,8 @@ export function DeployDashboard() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-base font-semibold text-white">Деплой нод</h1>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <h1 className="text-base font-semibold text-[var(--t-hi)]">Деплой нод</h1>
+            <p className="text-xs text-[var(--t-faint)] mt-0.5">
               {jobs.length > 0 ? `${jobs.length} задач` : "Нет задач деплоя"}
             </p>
           </div>
@@ -143,7 +143,7 @@ export function DeployDashboard() {
             </button>
             <button onClick={() => setShowForm(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-                         bg-blue-600 hover:bg-blue-500 text-white transition-colors">
+                         bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] transition-colors">
               <Plus size={13} /> Добавить сервер
             </button>
           </div>
