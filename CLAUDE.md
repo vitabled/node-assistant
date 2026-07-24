@@ -555,8 +555,11 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   ⚠️ **Первый вариант (одна `ROW_NUMBER()`-выборка) мерился 1.5–2.0 с** на 504k строк — на ручке, которую дашборд
   опрашивает раз в 10с. Итог: **дискавери нод по covering-индексу `idx_samples_cid_sid` (NEW) + отдельный
   `ORDER BY ts DESC LIMIT n` на ноду** по `idx_samples_sid_ts` → **111 мс** на тех же данных. Не возвращать
-  window-функцию: она ранжирует ВСЁ окно ретенции (35 дней) до фильтра `rn <= n`. Соседний `_uptime_30d` (907 мс,
-  не трогали) теперь дороже — это существовавшая до Плана M цена, кандидат на отдельную оптимизацию.
+  window-функцию: она ранжирует ВСЁ окно ретенции (35 дней) до фильтра `rn <= n`. Соседний `_uptime_30d` (был 907 мс)
+  оптимизирован в задаче ревью (Волна 7): один grouped-scan вместо двух (global выводится из per-node
+  сумм Σonline/Σcount, идентично старому AVG) + covering-индекс `idx_samples_cid_sid_ts_online`
+  `(checker_id, stable_id, ts, online)` → **925 мс → 291 мс на 504k строк** (index-only, GROUP BY без temp-sort;
+  измерено, EXPLAIN подтверждён; регрессия `test_metrics_store.py`).
 - `infra_billing_store` — все 23 публичные функции приняли `account_id: Optional[str] = None` (ContextVar остался
   дефолтом, вызовы роутов не тронуты). В `**f`-функциях `account_id` стоит ВТОРЫМ позиционным, чтобы его не съел
   kwargs-мешок.
