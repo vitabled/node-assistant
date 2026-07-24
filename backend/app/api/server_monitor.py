@@ -141,24 +141,43 @@ _FETCH_TIMEOUT = 15
 _MAX_SUB_BYTES = 4 * 1024 * 1024   # same cap the aggregator uses
 _RESOLVE_LIMIT = 16                # concurrent DNS lookups
 _RESOLVE_TIMEOUT = 3               # per-host DNS resolve cap
+_MAX_REDIRECTS = 5                 # subscription CDNs commonly redirect 1-2 hops
 
 
 async def _fetch_subscription(url: str) -> str:
     if not net_guard.is_safe_url(url):
         raise HTTPException(400, "URL подписки не разрешён: нужен http(s) с публичным хостом")
     try:
-        # STREAM with a hard cap: `c.get()` buffers the whole body into RAM before
-        # any slice, so a multi-GB response OOMs the shared backend. Read chunks,
-        # stop the moment we exceed the cap. (Wave-7 review, server_monitor:152.)
+        # Follow redirects MANUALLY, re-validating every hop with net_guard.
+        # Subscription URLs routinely 301 to a CDN (hardsub.digital → …dozavpn.com),
+        # so `follow_redirects=False` made `raise_for_status()` throw on the 301 —
+        # the "Не удалось загрузить подписку" bug. But blindly following redirects
+        # is an SSRF hole (a redirect could point at 169.254.169.254), so each hop
+        # is checked. This also closes the redirect-pivot noted in the Wave-7 review.
+        # We do NOT send a VPN-client User-Agent: some panels then return a JSON
+        # format our share-link parser can't read (verified on the reported URL).
         async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=False) as c:
-            async with c.stream("GET", url) as r:
-                r.raise_for_status()
-                buf = bytearray()
-                async for chunk in r.aiter_bytes():
-                    buf += chunk
-                    if len(buf) > _MAX_SUB_BYTES:
-                        raise HTTPException(413, "Подписка превышает лимит размера")
-                return bytes(buf).decode("utf-8", "replace")
+            current = url
+            for _hop in range(_MAX_REDIRECTS + 1):
+                # STREAM with a hard cap: a non-streaming get() buffers the whole
+                # body before any slice, so a multi-GB response OOMs the shared
+                # backend. (Wave-7 review, server_monitor:152.)
+                async with c.stream("GET", current) as r:
+                    if r.is_redirect:
+                        loc = r.headers.get("location", "")
+                        nxt = str(httpx.URL(current).join(loc)) if loc else ""
+                        if not nxt or not net_guard.is_safe_url(nxt):
+                            raise HTTPException(400, "Редирект подписки ведёт на недопустимый хост")
+                        current = nxt
+                        continue
+                    r.raise_for_status()
+                    buf = bytearray()
+                    async for chunk in r.aiter_bytes():
+                        buf += chunk
+                        if len(buf) > _MAX_SUB_BYTES:
+                            raise HTTPException(413, "Подписка превышает лимит размера")
+                    return bytes(buf).decode("utf-8", "replace")
+            raise HTTPException(502, "Слишком много редиректов подписки")
     except HTTPException:
         raise
     except Exception:
