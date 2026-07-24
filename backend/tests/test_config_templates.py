@@ -79,3 +79,26 @@ def test_kind_enum_mapper_and_base64_roundtrip():
     yaml = "proxies:\n  - name: a\n"
     enc = base64.b64encode(yaml.encode()).decode()
     assert base64.b64decode(enc).decode() == yaml
+
+
+def test_import_from_panel_at_cap_is_409_not_500(monkeypatch):
+    """The template-cap ValueError must map to 409 in import, just as it does in
+    create — not surface as an unhandled 500. (Wave-7 review, config_templates:125.)"""
+    from app.api import config_templates as ct
+    from app.services import config_templates_store as store
+
+    h = _auth()
+    # a configured panel so _client() passes
+    client.post("/api/settings/remnawave/panels", headers=h,
+                json={"name": "P", "panel_url": "https://p", "api_token": "t"})
+
+    class FakeClient:
+        async def get_subscription_template(self, uuid):
+            return {"name": "x", "templateType": "XRAY_JSON", "templateJson": {}}
+
+    monkeypatch.setattr(ct, "_client", lambda pid="": FakeClient())
+    monkeypatch.setattr(store, "add_template",
+                        lambda body: (_ for _ in ()).throw(ValueError("Достигнут лимит")))
+
+    r = client.post("/api/config-templates/import/panel/some-uuid", headers=h)
+    assert r.status_code == 409

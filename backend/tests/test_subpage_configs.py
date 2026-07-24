@@ -127,6 +127,26 @@ def test_empty_update_is_422_not_a_silent_noop(calls):
     assert client.put("/api/subpage-configs/u1", headers=h, json={}).status_code == 422
 
 
+def test_blank_name_only_is_422_not_a_silent_rename(calls):
+    """Clearing the name field ({"name": ""}) must not coerce to the fallback
+    "config" and silently rename the design. (Wave-7 review.)"""
+    h = _auth(); _panel(h)
+    r = client.put("/api/subpage-configs/u1", headers=h, json={"name": "   "})
+    assert r.status_code == 422
+    # the panel was never asked to rename
+    assert not any(m == "PATCH" for m, _, _ in calls)
+
+
+def test_blank_name_with_config_still_updates_config(calls):
+    """A blank name alongside a config is fine — the config updates, the name is
+    just dropped rather than overwritten with the fallback."""
+    h = _auth(); _panel(h)
+    r = client.put("/api/subpage-configs/u1", headers=h, json={"name": "", "config": {"x": 1}})
+    assert r.status_code == 200
+    _, _, body = calls[-1]
+    assert "name" not in body and body["config"] == {"x": 1}
+
+
 def test_reorder_sends_items_not_uuids(calls):
     """Our MCP fork exposes {uuids: [...]}; the API requires
     {items:[{uuid, viewPosition}]}."""
@@ -169,3 +189,16 @@ def test_panels_are_per_account(calls):
     h1, h2 = _auth(), _auth()
     _panel(h1)
     assert client.get("/api/subpage-configs", headers=h2).status_code == 400
+
+
+def test_unreachable_panel_is_502_not_500(monkeypatch):
+    """A network error to the panel (down/timeout/DNS) is a gateway problem →
+    502, not an unhandled 500. (Wave-7 review, subpage_configs:64.)"""
+    import httpx
+    h = _auth(); _panel(h)
+
+    async def boom(self, method, path, **kw):
+        raise httpx.ConnectError("panel down")
+    monkeypatch.setattr(RemnavaveClient, "_req", boom, raising=True)
+
+    assert client.get("/api/subpage-configs", headers=h).status_code == 502

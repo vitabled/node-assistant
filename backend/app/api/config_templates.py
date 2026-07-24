@@ -122,4 +122,9 @@ async def import_from_panel(uuid: str, panel_id: str = ""):
             body["content_yaml"] = ""
     else:
         body["content_json"] = tpl.get("templateJson") or {}
-    return store.add_template(body)
+    try:
+        return store.add_template(body)
+    except ValueError as e:
+        # Same store error as create_template — must be a 409, not an unhandled
+        # 500, when the template cap is hit. (Wave-7 review, config_templates:125.)
+        raise HTTPException(409, str(e))

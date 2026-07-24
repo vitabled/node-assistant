@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -63,6 +64,9 @@ async def _call(coro):
         return await coro
     except RemnavaveError as e:
         raise HTTPException(502, f"Remnawave: {e}")
+    except httpx.HTTPError:
+        # Panel unreachable / timeout / DNS — a gateway problem, not our 500.
+        raise HTTPException(502, "Панель Remnawave недоступна")
 
 
 @router.get("")
@@ -93,8 +97,13 @@ async def create_config(body: CreateBody, panel_id: str = "") -> dict[str, Any]:
 
 @router.put("/{uuid}")
 async def update_config(uuid: str, body: UpdateBody, panel_id: str = "") -> dict[str, Any]:
-    if body.name is None and body.config is None:
+    # An empty/whitespace name is "clear the field", NOT a rename to the coerced
+    # fallback "config" — treat it as absent so it can't silently overwrite the
+    # design's name. (Wave-7 review, subpage_configs:96.)
+    name = body.name.strip() if isinstance(body.name, str) else None
+    if not name and body.config is None:
         raise HTTPException(422, "Нечего обновлять: укажите name и/или config")
+    body.name = name or None
     return await _call(_client(panel_id).update_subscription_page_config(
         uuid, name=body.name, config=body.config,
     ))
