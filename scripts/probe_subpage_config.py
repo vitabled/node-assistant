@@ -21,6 +21,12 @@ import sys
 import urllib.error
 import urllib.request
 
+# Консоль Windows часто cp1251 — принудительно UTF-8, иначе кириллица/эмодзи роняют скрипт.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 PANEL = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PANEL", "")).rstrip("/")
 TOKEN = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("TOKEN", "")
 
@@ -78,27 +84,44 @@ if not configs:
 for c in configs:
     print(f"   - {c.get('uuid')} · name={c.get('name')!r} · viewPosition={c.get('viewPosition')} · config: {shape(c.get('config'))}")
 
-# Берём запись с НЕпустым config — на ней и проверяем PATCH.
-target = next((c for c in configs if c.get("config") not in (None, {}, [])), configs[0])
-uuid = target["uuid"]
-before = target.get("config")
+# Берём запись с НЕпустым config — как ИСТОЧНИК для клона.
+source = next((c for c in configs if c.get("config") not in (None, {}, [])), configs[0])
 print()
 print("=" * 70)
-print(f"2) ГЛАВНОЕ: PATCH только с name на {uuid} — переживёт ли config?")
-print(f"   config ДО: {shape(before)}")
-if before in (None, {}, []):
-    print("   !! У выбранной записи config пустой — тест нерепрезентативен.")
-    print("      Наполните оформление в UI и повторите.")
+print(f"2) ГЛАВНОЕ: PATCH только с name — переживёт ли config?")
+print("   ⚠️ ПРОВЕРКА РАЗРУШАЮЩАЯ, поэтому ведётся на КЛОНЕ, а не на вашей записи.")
+print(f"   источник для клона: {source['uuid']} · config: {shape(source.get('config'))}")
 
-st, _ = call("PATCH", "/api/subscription-page-configs",
-             {"uuid": uuid, "name": (target.get("name") or "cfg")})
-print(f"   PATCH HTTP {st}")
-st, data = call("GET", f"/api/subscription-page-configs/{uuid}")
-after = ((data or {}).get("response", data) or {}).get("config") if isinstance(data, dict) else None
-print(f"   config ПОСЛЕ: {shape(after)}")
-verdict = "СОХРАНИЛСЯ (merge — переименование безопасно)" if after not in (None, {}, []) \
-    else "ОБНУЛЁН (replace — переименование сотрёт оформление!)"
-print(f"   >>> ВЕРДИКТ: config после name-only PATCH {verdict}")
+if source.get("config") in (None, {}, []):
+    print("   !! У всех записей config пустой — тест нерепрезентативен.")
+    print("      Создайте в UI оформление с содержимым и повторите.")
+else:
+    st, data = call("POST", f"/api/subscription-page-configs/{source['uuid']}/clone",
+                    {"cloneFromUuid": source["uuid"]})
+    clone = (data or {}).get("response", data) if isinstance(data, dict) else {}
+    clone_uuid = (clone or {}).get("uuid")
+    print(f"   клон создан: HTTP {st} · uuid={clone_uuid} · config клона: {shape((clone or {}).get('config'))}")
+    if not clone_uuid:
+        print("   !! Клон не создался — прекращаю, вашу запись не трогаю. ответ:", str(data)[:300])
+    elif (clone or {}).get("config") in (None, {}, []):
+        print("   !! Клон пришёл с пустым config — clone не копирует оформление, тест PATCH невозможен.")
+        call("DELETE", f"/api/subscription-page-configs/{clone_uuid}")
+        print("   клон удалён.")
+    else:
+        st, _ = call("PATCH", "/api/subscription-page-configs",
+                     {"uuid": clone_uuid, "name": "probe-rename"})
+        print(f"   PATCH клона (только name) HTTP {st}")
+        st, data = call("GET", f"/api/subscription-page-configs/{clone_uuid}")
+        after = ((data or {}).get("response", data) or {}).get("config") if isinstance(data, dict) else None
+        print(f"   config клона ПОСЛЕ name-only PATCH: {shape(after)}")
+        verdict = "СОХРАНИЛСЯ (merge — переименование безопасно)" if after not in (None, {}, []) \
+            else "ОБНУЛЁН (replace — переименование сотрёт оформление!)"
+        print(f"   >>> ВЕРДИКТ: config после name-only PATCH {verdict}")
+        st, _ = call("DELETE", f"/api/subscription-page-configs/{clone_uuid}")
+        print(f"   клон удалён: HTTP {st}. Ваша запись не тронута.")
+
+# `target` для шага 4 (показ формы) — исходная запись, только чтение.
+target = source
 
 print()
 print("=" * 70)
