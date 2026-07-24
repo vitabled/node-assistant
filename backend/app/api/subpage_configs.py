@@ -67,6 +67,11 @@ async def _call(coro):
 
 @router.get("")
 async def list_configs(panel_id: str = "") -> dict[str, Any]:
+    # ⚠️ The panel's LIST returns `config: null` for EVERY entry (verified on a
+    # live 2.x panel) — only the DETAIL endpoint below returns the real `config`.
+    # An editor MUST fetch `GET /{uuid}` to get something to edit; the list is
+    # names + viewPosition only. We pass through faithfully rather than N+1 the
+    # detail on every list.
     data = await _call(_client(panel_id).list_subscription_page_configs())
     # Echo the panel that answered — the UI must never have to guess whose
     # designs it is showing (same contract as /api/config-templates/import/panel).
@@ -75,6 +80,7 @@ async def list_configs(panel_id: str = "") -> dict[str, Any]:
 
 @router.get("/{uuid}")
 async def get_config(uuid: str, panel_id: str = "") -> dict[str, Any]:
+    # This is the ONLY place `config` comes back populated (see list_configs).
     return await _call(_client(panel_id).get_subscription_page_config(uuid))
 
 

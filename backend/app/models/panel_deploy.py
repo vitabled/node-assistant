@@ -116,6 +116,12 @@ class PanelDeployRequest(BaseModel):
     # Не персистится у нас — уходит в .env на целевом боксе тихим каналом.
     subpage_api_token: str = ""
 
+    # Wave-7 Plan G Ф6: id of an OVERLAY variant (subpage_store) to lay over the
+    # baseline pulled from the image, instead of the legacy single-html mount.
+    # 12-hex or empty. When both this and a non-empty subpage_html are set,
+    # the variant wins (a warning is logged) — old savedForms must not break.
+    subpage_variant_id: str = ""
+
     install_test_tools: bool = True
 
     # ── field validators ──────────────────────────────────────

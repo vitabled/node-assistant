@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import os
 import secrets
+import shlex
+import tempfile
 from typing import Optional
 
 from app.models.panel_deploy import PanelDeployRequest
@@ -299,14 +303,27 @@ def _subpage_env(req: PanelDeployRequest) -> str:
     return "\n".join(f"{k}={v}" for k, v in pairs.items()) + "\n"
 
 
+def _subpage_uses_overlay(req: PanelDeployRequest) -> bool:
+    """An overlay variant beats a legacy html mount (both set → variant wins)."""
+    return bool((getattr(req, "subpage_variant_id", "") or "").strip())
+
+
 def _subpage_compose(req: PanelDeployRequest) -> str:
-    """Subscription-page docker-compose.yml. Mounts the custom index.html when
-    provided; joins the panel network (external) when bundled, else its own."""
-    vol = (
-        "    volumes:\n      - ./index.html:/opt/app/frontend/index.html\n"
-        if req.subpage_html.strip()
-        else ""
-    )
+    """Subscription-page docker-compose.yml.
+
+    Volume shape depends on the mode:
+      • overlay variant → mount the whole DIRECTORY (`./frontend:/opt/app/frontend`),
+        which is materialised on the box before `up` (baseline from the image +
+        the overlay unzipped on top);
+      • legacy html → the single-file mount (`./index.html:/opt/app/frontend/
+        index.html`) — kept so old savedForms deploy unchanged.
+    Joins the panel network (external) when bundled, else its own."""
+    if _subpage_uses_overlay(req):
+        vol = "    volumes:\n      - ./frontend:/opt/app/frontend\n"
+    elif req.subpage_html.strip():
+        vol = "    volumes:\n      - ./index.html:/opt/app/frontend/index.html\n"
+    else:
+        vol = ""
     if _subpage_bundled(req):
         net_ref = "    networks:\n      - remnawave-network\n"
         net_def = "networks:\n  remnawave-network:\n    external: true\n    name: remnawave-network\n"
@@ -384,6 +401,70 @@ def _write_html_script(path: str, html: str) -> str:
         f"base64 -d {path}.b64 > {path} && rm -f {path}.b64\n"
         f'echo "[write] {path} ({len(html)} bytes)"\n'
     )
+
+
+_SUBPAGE_FRONTEND_DIR = "/opt/remnawave-subpage/frontend"
+_IMAGE_FRONTEND_PATH = "/opt/app/frontend"
+
+
+def _materialize_frontend_script(image: str) -> str:
+    """Rebuild `/opt/remnawave-subpage/frontend` from scratch out of the image,
+    so a file removed from the overlay falls back to its baseline version.
+
+    ⚠️ `find -mindepth 1 -delete`, NOT `rm -rf <dir>`. The directory is the
+    bind-mount SOURCE of a possibly-running container; removing the mount point
+    itself returns rc=1 (aborting under `set -euo pipefail`) AND empties it under
+    the live container. Emptying only the CONTENTS keeps the mount point intact
+    and is seen live. (Verified on Docker — see the plan's Ф6 bind-mount note.)
+
+    ⚠️ `docker create` before `inspect`: create auto-pulls a missing image,
+    inspect does not (verified on Docker 29)."""
+    img = shlex.quote(image)
+    d = shlex.quote(_SUBPAGE_FRONTEND_DIR)
+    return f"""set -euo pipefail
+mkdir -p {d}
+find {d} -mindepth 1 -delete
+CID=$(docker create {img})
+trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+docker cp "$CID:{_IMAGE_FRONTEND_PATH}/." {d}/
+echo "[subpage] База фронтенда материализована из {image}."
+"""
+
+
+def _digest_check_script(image: str, expected_digest: str) -> str:
+    """Warn (never fail) when the image on the box differs from the digest the
+    overlay was built against — the overlay may not line up with a different
+    frontend build."""
+    img = shlex.quote(image)
+    exp = shlex.quote(expected_digest or "")
+    return f"""set -e
+ACTUAL=$(docker image inspect --format '{{{{index .RepoDigests 0}}}}' {img} 2>/dev/null || true)
+if [ -z "$ACTUAL" ]; then ACTUAL=$(docker image inspect --format '{{{{.Id}}}}' {img} 2>/dev/null || true); fi
+if [ -n {exp} ] && [ -n "$ACTUAL" ] && [ "$ACTUAL" != {exp} ]; then
+  echo "[subpage] ВНИМАНИЕ: digest образа на боксе ($ACTUAL) отличается от того, под который собран вариант ({expected_digest}). Overlay может не совпасть с этой сборкой фронтенда."
+fi
+"""
+
+
+def _unzip_overlay_script(remote_zip: str) -> str:
+    """Unpack the overlay zip over the materialised baseline.
+
+    Members are re-checked on the node even though it is OUR archive: the guard
+    is one line and the cost of a bad path here is a write outside the tree."""
+    d = shlex.quote(_SUBPAGE_FRONTEND_DIR)
+    z = shlex.quote(remote_zip)
+    return f"""set -euo pipefail
+if ! command -v unzip >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y unzip >/dev/null 2>&1 || true
+fi
+# Reject absolute / traversal members before extracting.
+if unzip -l {z} | awk 'NR>3 && ($4 ~ /^\\// || $4 ~ /\\.\\.\\// ) {{print; found=1}} END{{exit found?0:1}}' | grep -q .; then
+  echo "[subpage] Небезопасный путь в overlay-архиве — прерываю."; exit 1
+fi
+unzip -o {z} -d {d} >/dev/null
+rm -f {z}
+echo "[subpage] Overlay распакован поверх базы."
+"""
 
 
 def _caddy_install_script() -> str:
@@ -529,12 +610,63 @@ curl -fsS -o /dev/null http://127.0.0.1:3000 2>/dev/null \\
     task.add_log("\x1b[32m[panel] Панель Remnawave запущена.\x1b[0m")
 
 
+async def _deploy_subpage_overlay(
+    ssh: SSHSession, task: Task, req: PanelDeployRequest, account_id: str
+) -> None:
+    """Materialise the frontend tree on the box: image baseline + overlay on top.
+
+    Order matters — see `_materialize_frontend_script`. The container is NOT
+    stopped for the swap: the mount point survives `find -delete`, new files are
+    seen live at the FS level, and the final `up -d --force-recreate` restarts the
+    app so its cached EJS template / assets are re-read."""
+    from app.services import subpage_store
+
+    variant_id = (req.subpage_variant_id or "").strip()
+    zip_bytes = subpage_store.overlay_zip(variant_id, account_id)
+    if zip_bytes is None:
+        raise RuntimeError(
+            f"Overlay-вариант {variant_id} не найден для аккаунта — "
+            "деплой страницы подписок прерван."
+        )
+
+    # Warn (not fail) if the box's image differs from the variant's baseline.
+    base_digest = ""
+    entry = next(
+        (p for p in subpage_store.list_pages(account_id) if p.get("id") == variant_id),
+        None,
+    )
+    if entry:
+        base_digest = entry.get("base_digest") or ""
+    if base_digest:
+        await ssh.run_script(_digest_check_script(req.subpage_image, base_digest), task)
+
+    task.add_log("\x1b[36m[subpage] Материализация фронтенда из образа...\x1b[0m")
+    await ssh.run_script(_materialize_frontend_script(req.subpage_image), task, timeout=600)
+
+    # Ship the overlay zip over SFTP (never on argv/heredoc — it is binary).
+    tmp = tempfile.NamedTemporaryFile(prefix="na-overlay-", suffix=".zip", delete=False)
+    try:
+        tmp.write(zip_bytes)
+        tmp.close()
+        remote_zip = "/tmp/na-subpage-overlay.zip"
+        await ssh.upload_file(tmp.name, remote_zip)
+        await ssh.run_script(_unzip_overlay_script(remote_zip), task)
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp.name)
+
+
 async def _install_subpage(
-    ssh: SSHSession, task: Task, req: PanelDeployRequest, *, separate: bool
+    ssh: SSHSession, task: Task, req: PanelDeployRequest, *, separate: bool,
+    account_id: str = "",
 ) -> None:
     """Deploy the subscription-page container on `ssh`'s box. When `separate` the
     box also gets its own reverse-proxy for sub_domain (bundled subpages are
-    already covered by the panel box's proxy config)."""
+    already covered by the panel box's proxy config).
+
+    `account_id` is passed explicitly (not read from the ContextVar) because a
+    background task does not carry the request context — needed to resolve the
+    overlay variant from the caller's store."""
     await ssh.run_script(
         _write_file_script(
             "/opt/remnawave-subpage/docker-compose.yml",
@@ -549,7 +681,10 @@ async def _install_subpage(
         ),
         task,
     )
-    if req.subpage_html.strip():
+
+    if _subpage_uses_overlay(req):
+        await _deploy_subpage_overlay(ssh, task, req, account_id)
+    elif req.subpage_html.strip():
         await ssh.run_script(
             _write_html_script("/opt/remnawave-subpage/index.html", req.subpage_html),
             task,
@@ -569,9 +704,12 @@ async def _install_subpage(
             "через раздел «Переменные».\x1b[0m"
         )
 
+    # For an overlay, force-recreate so the app re-reads its (cached) EJS
+    # template and assets even when the compose file itself is unchanged.
+    up = "up -d --force-recreate" if _subpage_uses_overlay(req) else "up -d"
     await ssh.run_script(
         "cd /opt/remnawave-subpage\n"
-        "docker compose up -d 2>&1 || docker-compose up -d 2>&1\n"
+        f"docker compose {up} 2>&1 || docker-compose {up} 2>&1\n"
         "for i in $(seq 1 10); do\n"
         "    if docker ps --filter name=remnawave-subscription-page --filter status=running \\\n"
         "        --format '{{.Names}}' 2>/dev/null | grep -q remnawave-subscription-page; then break; fi\n"
@@ -632,7 +770,9 @@ async def _install_test_tools(
 # ──────────────────────────────────────────────────────────────
 
 
-async def run_panel_pipeline(req: PanelDeployRequest, task: Task) -> None:
+async def run_panel_pipeline(
+    req: PanelDeployRequest, task: Task, account_id: str = ""
+) -> None:
     """Install the Remnawave panel and/or subscription page. Mirrors
     run_pipeline: any exception → FAILED + re-raise."""
     want_panel = req.target in ("panel", "both")
@@ -689,11 +829,13 @@ async def run_panel_pipeline(req: PanelDeployRequest, task: Task) -> None:
                 await sub_ssh.connect()
                 await _install_docker(sub_ssh, task)
                 await _install_test_tools(sub_ssh, task, req)
-                await _install_subpage(sub_ssh, task, req, separate=True)
+                await _install_subpage(sub_ssh, task, req, separate=True, account_id=account_id)
             else:
                 # Bundled (same box) OR subpage-only (primary IS the subpage box).
                 separate = not _subpage_bundled(req)
-                await _install_subpage(primary_ssh, task, req, separate=separate)
+                await _install_subpage(
+                    primary_ssh, task, req, separate=separate, account_id=account_id
+                )
         else:
             _skip(task, 8, "Страница подписок не выбрана (target=panel).")
 
