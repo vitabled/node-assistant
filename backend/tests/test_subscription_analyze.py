@@ -69,6 +69,39 @@ def test_analyze_rejects_private_url():
         asyncio.run(sa.fetch_subscription("http://127.0.0.1/sub"))
 
 
+def test_fetch_sends_no_vpn_user_agent(monkeypatch):
+    """Regression: a VPN-client UA (v2rayNG/clash) makes some panels (hardsub.
+    digital) return a JSON/YAML config instead of the base64 share-link list our
+    parser reads — the "Серверы не найдены" bug. The subscription fetch must send
+    NO custom User-Agent (default httpx UA gets the standard list)."""
+    import asyncio
+    captured = {}
+
+    class _FakeStream:
+        def __init__(self, headers): self._h = headers
+        async def __aenter__(self):
+            captured["ua"] = (self._h or {}).get("User-Agent")
+            outer = self
+            class _R:
+                is_redirect = False
+                def raise_for_status(self): pass
+                async def aiter_bytes(self):
+                    yield b"dmxlc3M6Ly9hQGV4YW1wbGUuY29tOjEwMDA="  # base64 vless://…
+            return _R()
+        async def __aexit__(self, *a): pass
+
+    class _FakeClient:
+        def __init__(self, *a, **k): self._headers = k.get("headers")
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        def stream(self, method, url): return _FakeStream(self._headers)
+
+    monkeypatch.setattr(sa.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(sa.net_guard, "is_safe_url", lambda u: True)
+    asyncio.run(sa.fetch_subscription("https://panel.example.com/sub"))
+    assert captured["ua"] is None          # no custom (client) UA on the fetch
+
+
 # ── routes ─────────────────────────────────────────────────────
 def test_analyze_route_empty_input():
     a = _auth()

@@ -853,8 +853,11 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 
 ### 13c. Ф3 — «Анализ подписки» (§7)
 - **`services/subscription_analyze.py`** — вход url/домен/ip (`classify_input`). URL → `fetch_subscription`
-  (UA **`v2rayNG`** — как просил юзер, в ОТЛИЧИЕ от `server_monitor`, который VPN-UA НЕ шлёт; SSRF-гард
-  `net_guard.is_safe_url` + ручные редиректы per-hop + лимит 4 МиБ) → `decode_subscription`+`link_to_candidate`
+  (⚠️ **UA НЕ шлём** — дефолтный httpx-UA; SSRF-гард `net_guard.is_safe_url` + ручные редиректы per-hop + лимит
+  4 МиБ) → `decode_subscription`+`link_to_candidate`. **⚠️ БАГ-УРОК (исправлено):** сначала слали `v2rayNG`-UA
+  «как просил юзер» → `hardsub.digital` отдал 129 КБ `application/json` (xray-конфиг, НЕ share-ссылки) → 0 хостов
+  («Серверы не найдены»). Дефолтный UA даёт стандартный base64-список ссылок (12 хостов). Это ТОТ ЖЕ урок, что уже
+  записан у `server_monitor._fetch_subscription` (VPN-UA НЕ слать). Гео/RDAP-клиент шлёт нейтральный `node-assistant`
   (переиспользованы из `subscription_import`) → хосты. Хосты резолвятся в IPv4, дедуп по IP, **только публичные**
   (`_ip_is_public`). Per-IP: **факт. гео+ASN** = `ip-api.com/json` (fallback `ipwho.is`), **реестр. страна** =
   RDAP `rdap.org/ip`, **имя/сайт ASN** = RDAP `rdap.org/autnum` (кэш по ASN). Внешние API — ФИКСИРОВАННЫЕ

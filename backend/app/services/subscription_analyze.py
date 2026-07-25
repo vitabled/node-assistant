@@ -1,9 +1,17 @@
 """Wave-8 §7 — subscription / domain / IP → geo + ASN analysis.
 
-Input is a subscription URL, a bare domain, or an IP. For a URL we fetch it as a
-VPN client (UA `v2rayNG`) — SSRF-guarded, manual redirects, byte-capped — decode
-the share links and take each target host. Every host is resolved to IPv4, then
-per unique IP we look up:
+Input is a subscription URL, a bare domain, or an IP. For a URL we fetch it with
+the DEFAULT (non-client) User-Agent — SSRF-guarded, manual redirects, byte-capped
+— decode the share links and take each target host.
+
+⚠️ Do NOT send a VPN-client UA (v2rayNG/clash/…): panels serve DIFFERENT formats
+by UA, and several return a client-specific JSON/YAML config instead of the
+standard base64 share-link list our parser reads. Verified on hardsub.digital: the
+default UA yields a base64 list (parses cleanly), the v2rayNG UA yields a 129 KB
+JSON config (0 links). This mirrors the same lesson `server_monitor._fetch_
+subscription` already records — the base64 share-link list is the lingua franca.
+
+Every host is resolved to IPv4, then per unique IP we look up:
   - actual geo + ASN  → ip-api.com (fallback ipwho.is), no API key
   - registry country  → RDAP (rdap.org/ip)
   - ASN name/website  → RDAP autnum (rdap.org/autnum), cached per ASN
@@ -24,7 +32,10 @@ import httpx
 from app.services import net_guard
 from app.services.subscription_import import decode_subscription, link_to_candidate
 
-_UA = "v2rayNG/1.8.5"
+# Neutral UA for the geo/RDAP lookups only. The subscription fetch sends NO
+# client UA on purpose (see the module docstring) — the default httpx UA gets the
+# standard base64 share-link list; a VPN-client UA makes some panels return JSON.
+_API_UA = "node-assistant"
 _FETCH_TIMEOUT = 15
 _MAX_SUB_BYTES = 4 * 1024 * 1024
 _MAX_REDIRECTS = 5
@@ -59,9 +70,10 @@ def _ip_is_public(ip: str) -> bool:
 async def fetch_subscription(url: str) -> str:
     if not net_guard.is_safe_url(url):
         raise ValueError("URL подписки не разрешён: нужен http(s) с публичным хостом")
-    async with httpx.AsyncClient(
-        timeout=_FETCH_TIMEOUT, follow_redirects=False, headers={"User-Agent": _UA}
-    ) as c:
+    # No custom User-Agent — the default httpx UA gets the standard base64
+    # share-link list. A VPN-client UA breaks panels like hardsub.digital (they
+    # serve a client-specific JSON config the parser can't read).
+    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=False) as c:
         current = url
         for _hop in range(_MAX_REDIRECTS + 1):
             async with c.stream("GET", current) as r:
@@ -234,7 +246,7 @@ async def analyze(raw: str) -> list[dict[str, Any]]:
     sem = asyncio.Semaphore(_LOOKUP_LIMIT)
     autnum_cache: dict[int, tuple[str, str]] = {}
 
-    async with httpx.AsyncClient(timeout=_API_TIMEOUT, headers={"User-Agent": _UA}) as client:
+    async with httpx.AsyncClient(timeout=_API_TIMEOUT, headers={"User-Agent": _API_UA}) as client:
         async def one(ip: str, host: str) -> dict:
             async with sem:
                 row = await _resolve_ip(ip, client, autnum_cache)
