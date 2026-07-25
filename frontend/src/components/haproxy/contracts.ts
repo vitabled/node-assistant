@@ -286,10 +286,25 @@ export interface BootstrapJobResponse {
   exit_code?: number;
 }
 
+// Local NodeFlow stack status (services/nodeflow_server.py).
+export interface HaproxyLocalStatus {
+  panel: string;       // running | stopped | absent | no-docker
+  postgres: string;
+  reachable: boolean;
+  images_built: boolean;
+  deploying: boolean;
+  last_error: string;
+  san_host: string;
+  agent_endpoint: string;
+  has_token: boolean;
+}
+
 // Our backend's /api/haproxy/config shape.
 export interface HaproxyConnState {
   enabled: boolean;
+  mode: "local" | "remote";
   base_url: string;
   has_token: boolean;
   configured: boolean;
+  local?: HaproxyLocalStatus;  // present in local mode
 }

@@ -4,7 +4,7 @@ import {
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
   Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen, FileJson,
-  LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package, Plug,
+  LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -14,7 +14,7 @@ export type Tab =
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
   | "haproxy-overview" | "haproxy-nodes" | "haproxy-routes" | "haproxy-traffic"
-  | "haproxy-firewall" | "haproxy-releases" | "haproxy-settings"
+  | "haproxy-firewall" | "haproxy-releases"
   | "hostings-map" | "hostings-list" | "library"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
@@ -33,6 +33,9 @@ const NAV_MAIN: NavItemDef[] = [
 const STATS_TABS: NavItemDef[] = [
   { tab: "stats-users",      label: "Пользователи",   Icon: Users },
   { tab: "stats-speedtests", label: "Тесты скорости", Icon: Zap   },
+  // HAProxy (NodeFlow) статистика — перенесена сюда из группы «HAPROXY».
+  { tab: "haproxy-overview", label: "HAProxy: обзор",  Icon: LayoutDashboard },
+  { tab: "haproxy-traffic",  label: "HAProxy: трафик", Icon: Gauge           },
 ];
 
 const AUTOMATION_TABS: NavItemDef[] = [
@@ -55,15 +58,13 @@ const RW_TABS: NavItemDef[] = [
   { tab: "configs",      label: "Конфиги",              Icon: FileJson       },
 ];
 
-// Группа «HAPROXY» — прокси к панели NodeFlow (деплой + управление HAProxy-нодами).
+// Группа «HAPROXY» — прокси к панели NodeFlow (управление HAProxy-нодами).
+// «Обзор» и «Трафик» перенесены в «Статистику»; «Настройки» — в Настройки → «HAProxy».
 const HAPROXY_TABS: NavItemDef[] = [
-  { tab: "haproxy-overview",  label: "Обзор",     Icon: LayoutDashboard },
   { tab: "haproxy-nodes",     label: "Ноды",      Icon: Boxes           },
   { tab: "haproxy-routes",    label: "Маршруты",  Icon: RouteIcon       },
-  { tab: "haproxy-traffic",   label: "Трафик",    Icon: Gauge           },
   { tab: "haproxy-firewall",  label: "Файрвол",   Icon: ShieldHalf      },
   { tab: "haproxy-releases",  label: "Релизы",    Icon: Package         },
-  { tab: "haproxy-settings",  label: "Настройки", Icon: Plug            },
 ];
 
 // Группа «Справка» (бывш. «Хостинги»): карта хостингов + каталог + библиотека знаний.

@@ -29,7 +29,6 @@ import { PanelVariables }                  from "./components/rw/PanelVariables"
 import { Backup }                          from "./components/rw/Backup";
 import { HostingsCatalog }                from "./components/hostings/HostingsCatalog";
 import { HostingsMap }                     from "./components/hostings/HostingsMap";
-import { HaproxyConnect }                  from "./components/haproxy/HaproxyConnect";
 import { HaproxyOverview }                 from "./components/haproxy/HaproxyOverview";
 import { HaproxyNodes }                    from "./components/haproxy/HaproxyNodes";
 import { HaproxyRoutes }                   from "./components/haproxy/HaproxyRoutes";
@@ -103,13 +102,12 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "rw-profiles":     ["Remnawave", "Профили"],
   "mihomo":          ["Remnawave", "Mihomo"],
   "configs":         ["Remnawave", "Пользовательские конфиги"],
-  "haproxy-overview": ["HAPROXY", "Обзор"],
+  "haproxy-overview": ["Статистика", "HAProxy: обзор"],
   "haproxy-nodes":    ["HAPROXY", "Ноды"],
   "haproxy-routes":   ["HAPROXY", "Маршруты"],
-  "haproxy-traffic":  ["HAPROXY", "Трафик"],
+  "haproxy-traffic":  ["Статистика", "HAProxy: трафик"],
   "haproxy-firewall": ["HAPROXY", "Файрвол"],
   "haproxy-releases": ["HAPROXY", "Релизы"],
-  "haproxy-settings": ["HAPROXY", "Настройки"],
   "hostings-map":    ["Справка", "Карта хостингов"],
   "hostings-list":   ["Справка", "Хостинги"],
   "library":         ["Справка", "Библиотека"],
@@ -293,7 +291,6 @@ export default function App() {
           {tab === "haproxy-traffic"  && <HaproxyTraffic />}
           {tab === "haproxy-firewall" && <HaproxyFirewall />}
           {tab === "haproxy-releases" && <HaproxyReleases />}
-          {tab === "haproxy-settings" && <HaproxyConnect />}
 
           {tab === "hostings-map"  && <HostingsMap />}
           {tab === "hostings-list" && <HostingsCatalog />}

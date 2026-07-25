@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ShieldHalf, RefreshCw, Loader2, Save } from "lucide-react";
 import { Page, PageHeader } from "../infra/ui";
 import { haproxyApi, asList } from "./api";
-import { useHaproxyReady, NotConnected } from "./HaproxyConnect";
+import { useHaproxyReady, NotConnected } from "./gate";
 import type { NodeRecord, NodeFirewallPolicy, FirewallMode } from "./contracts";
 
 const MODES: { v: FirewallMode; l: string; hint: string }[] = [

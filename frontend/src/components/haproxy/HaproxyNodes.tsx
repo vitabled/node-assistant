@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Boxes, Plus, RefreshCw, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { Page, PageHeader, fmtDate } from "../infra/ui";
 import { haproxyApi, asList } from "./api";
-import { useHaproxyReady, NotConnected } from "./HaproxyConnect";
+import { useHaproxyReady, NotConnected } from "./gate";
 import { HaproxyAddNode } from "./HaproxyAddNode";
 import { HaproxyNodeDetail } from "./HaproxyNodeDetail";
 import { nodeTone, TONE_COLOR, TONE_LABEL } from "./format";

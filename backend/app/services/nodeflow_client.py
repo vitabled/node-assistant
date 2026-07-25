@@ -63,13 +63,21 @@ def _normalize_base(base_url: str) -> str:
 
 
 class NodeFlowClient:
-    """Thin per-request client. Construct from an account's HaproxyConfig."""
+    """Thin per-request client. Construct from an account's HaproxyConfig.
 
-    def __init__(self, base_url: str, admin_token: str) -> None:
+    `allow_internal` skips the SSRF guard — used ONLY for the local shared panel
+    reached by its container name (`http://nodeflow-panel:8080`), which is not a
+    public host but is our own trusted DooD container (mirrors how xray_checker
+    exempts the local checker URL). Never set it for a remote, account-supplied URL."""
+
+    def __init__(self, base_url: str, admin_token: str, allow_internal: bool = False) -> None:
         self.base = _normalize_base(base_url)
         self.token = admin_token or ""
+        self.allow_internal = allow_internal
 
     def _guard(self) -> None:
+        if self.allow_internal:
+            return
         if not net_guard.is_safe_url(self.base):
             raise NodeFlowError(
                 "URL панели не разрешён: нужен http(s) с публичным (маршрутизируемым) хостом"

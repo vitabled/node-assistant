@@ -1,0 +1,9 @@
+# One-shot migration runner for the LOCAL NodeFlow deploy (node-installer).
+# Bakes the migrations + migrate.sh into the image so the backend's DooD
+# orchestrator can `docker run` it WITHOUT a host-path bind mount (the backend
+# runs in a container; a bind of ./migrations would need a host path it can't
+# resolve). PG* connection env is supplied at run time by nodeflow_server.py.
+FROM postgres:17-alpine
+COPY migrations /migrations
+COPY scripts/migrate.sh /migrate.sh
+ENTRYPOINT ["/bin/sh", "/migrate.sh"]
