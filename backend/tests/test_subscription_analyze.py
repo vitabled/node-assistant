@@ -69,37 +69,59 @@ def test_analyze_rejects_private_url():
         asyncio.run(sa.fetch_subscription("http://127.0.0.1/sub"))
 
 
-def test_fetch_sends_no_vpn_user_agent(monkeypatch):
-    """Regression: a VPN-client UA (v2rayNG/clash) makes some panels (hardsub.
-    digital) return a JSON/YAML config instead of the base64 share-link list our
-    parser reads — the "Серверы не найдены" bug. The subscription fetch must send
-    NO custom User-Agent (default httpx UA gets the standard list)."""
-    import asyncio
-    captured = {}
+# base64 of "vless://a@example.com:1000" — a parseable share-link body.
+_LINK_B64 = b"dmxlc3M6Ly9hQGV4YW1wbGUuY29tOjEwMDA="
 
-    class _FakeStream:
+
+def _fake_httpx(monkeypatch, body_for_ua, seen):
+    """Patch httpx.AsyncClient so fetch_subscription returns body_for_ua(ua) and
+    records each UA tried in `seen`."""
+    class _Stream:
         def __init__(self, headers): self._h = headers
         async def __aenter__(self):
-            captured["ua"] = (self._h or {}).get("User-Agent")
-            outer = self
+            ua = (self._h or {}).get("User-Agent")
+            seen.append(ua)
+            data = body_for_ua(ua)
             class _R:
                 is_redirect = False
                 def raise_for_status(self): pass
                 async def aiter_bytes(self):
-                    yield b"dmxlc3M6Ly9hQGV4YW1wbGUuY29tOjEwMDA="  # base64 vless://…
+                    yield data
             return _R()
         async def __aexit__(self, *a): pass
 
-    class _FakeClient:
-        def __init__(self, *a, **k): self._headers = k.get("headers")
+    class _Client:
+        def __init__(self, *a, **k): self._h = k.get("headers")
         async def __aenter__(self): return self
         async def __aexit__(self, *a): pass
-        def stream(self, method, url): return _FakeStream(self._headers)
+        def stream(self, m, u): return _Stream(self._h)
 
-    monkeypatch.setattr(sa.httpx, "AsyncClient", _FakeClient)
+    monkeypatch.setattr(sa.httpx, "AsyncClient", _Client)
     monkeypatch.setattr(sa.net_guard, "is_safe_url", lambda u: True)
-    asyncio.run(sa.fetch_subscription("https://panel.example.com/sub"))
-    assert captured["ua"] is None          # no custom (client) UA on the fetch
+
+
+def test_fetch_default_ua_first_when_it_parses(monkeypatch):
+    """When the default UA already yields share links, no client UA is tried."""
+    import asyncio
+    seen = []
+    _fake_httpx(monkeypatch, lambda ua: _LINK_B64, seen)
+    body = asyncio.run(sa.fetch_subscription("https://p.example.com/sub"))
+    assert seen == [None]                        # only the default UA was used
+    assert sa.decode_subscription(body)
+
+
+def test_fetch_ua_fallback_to_client(monkeypatch):
+    """Default UA returns a JSON config (0 links) → fall through to the client UAs
+    (Happ first) and use the first that parses — the hardsub.digital scenario."""
+    import asyncio
+    seen = []
+    # None (default) → JSON with no share links; any client UA → a link list.
+    _fake_httpx(monkeypatch,
+                lambda ua: _LINK_B64 if ua else b'[{"outbounds":[{"protocol":"vless"}]}]',
+                seen)
+    body = asyncio.run(sa.fetch_subscription("https://p.example.com/sub"))
+    assert seen[0] is None and seen[1] == "Happ/1.16.0"   # default first, then Happ
+    assert sa.decode_subscription(body)                    # returned the parseable body
 
 
 # ── routes ─────────────────────────────────────────────────────

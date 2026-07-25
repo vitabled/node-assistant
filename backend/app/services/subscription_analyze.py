@@ -1,15 +1,16 @@
 """Wave-8 §7 — subscription / domain / IP → geo + ASN analysis.
 
-Input is a subscription URL, a bare domain, or an IP. For a URL we fetch it with
-the DEFAULT (non-client) User-Agent — SSRF-guarded, manual redirects, byte-capped
-— decode the share links and take each target host.
+Input is a subscription URL, a bare domain, or an IP. For a URL we fetch it —
+SSRF-guarded, manual redirects, byte-capped — decode the share links and take
+each target host.
 
-⚠️ Do NOT send a VPN-client UA (v2rayNG/clash/…): panels serve DIFFERENT formats
-by UA, and several return a client-specific JSON/YAML config instead of the
-standard base64 share-link list our parser reads. Verified on hardsub.digital: the
-default UA yields a base64 list (parses cleanly), the v2rayNG UA yields a 129 KB
-JSON config (0 links). This mirrors the same lesson `server_monitor._fetch_
-subscription` already records — the base64 share-link list is the lingua franca.
+⚠️ Panels serve DIFFERENT formats by User-Agent, so we try a CHAIN and use the
+first response that decodes to share links: the DEFAULT (non-client) UA first —
+it returns the standard base64 share-link list for most panels (verified on
+hardsub.digital: default UA → base64 list, but a `v2rayNG` UA → 129 KB JSON
+config with 0 links) — then fall through the client UAs (Happ / incy / Streisand
+/ Shadowrocket) for panels that only serve a usable list to a specific client.
+The base64 share-link list is the lingua franca; the default UA usually gets it.
 
 Every host is resolved to IPv4, then per unique IP we look up:
   - actual geo + ASN  → ip-api.com (fallback ipwho.is), no API key
@@ -32,10 +33,21 @@ import httpx
 from app.services import net_guard
 from app.services.subscription_import import decode_subscription, link_to_candidate
 
-# Neutral UA for the geo/RDAP lookups only. The subscription fetch sends NO
-# client UA on purpose (see the module docstring) — the default httpx UA gets the
-# standard base64 share-link list; a VPN-client UA makes some panels return JSON.
+# Neutral UA for the geo/RDAP lookups only.
 _API_UA = "node-assistant"
+
+# Subscription-fetch User-Agent fallback chain (Wave-8): the default httpx UA
+# (None) first — it gets the standard base64 share-link list for most panels —
+# then client UAs for panels that only serve a usable list to a specific client.
+# Tried in order; the first body that decodes to share links wins.
+_SUB_USER_AGENTS = [
+    None,                    # default httpx UA (proven for hardsub.digital)
+    "Happ/1.16.0",
+    "incy/1.0",
+    "Streisand/1.6.0",
+    "Shadowrocket/2.2.9",
+]
+
 _FETCH_TIMEOUT = 15
 _MAX_SUB_BYTES = 4 * 1024 * 1024
 _MAX_REDIRECTS = 5
@@ -67,13 +79,11 @@ def _ip_is_public(ip: str) -> bool:
 
 
 # ── subscription fetch (VPN-client UA, SSRF-guarded) ───────────
-async def fetch_subscription(url: str) -> str:
-    if not net_guard.is_safe_url(url):
-        raise ValueError("URL подписки не разрешён: нужен http(s) с публичным хостом")
-    # No custom User-Agent — the default httpx UA gets the standard base64
-    # share-link list. A VPN-client UA breaks panels like hardsub.digital (they
-    # serve a client-specific JSON config the parser can't read).
-    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=False) as c:
+async def _fetch_once(url: str, user_agent) -> str:
+    """One GET (manual redirects, per-hop SSRF re-check, byte cap) with the given
+    UA. `user_agent=None` → the default httpx UA."""
+    headers = {"User-Agent": user_agent} if user_agent else None
+    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=False, headers=headers) as c:
         current = url
         for _hop in range(_MAX_REDIRECTS + 1):
             async with c.stream("GET", current) as r:
@@ -92,6 +102,29 @@ async def fetch_subscription(url: str) -> str:
                         raise ValueError("Подписка превышает лимит размера")
                 return bytes(buf).decode("utf-8", "replace")
         raise ValueError("Слишком много редиректов подписки")
+
+
+async def fetch_subscription(url: str) -> str:
+    """Fetch through the UA fallback chain; return the first body that decodes to
+    share links, else the first successfully-fetched body. Raises if every UA
+    failed to fetch."""
+    if not net_guard.is_safe_url(url):
+        raise ValueError("URL подписки не разрешён: нужен http(s) с публичным хостом")
+    first_body: Optional[str] = None
+    last_err: Optional[Exception] = None
+    for ua in _SUB_USER_AGENTS:
+        try:
+            body = await _fetch_once(url, ua)
+        except Exception as exc:      # network / redirect-to-bad-host / size — try next UA
+            last_err = exc
+            continue
+        if first_body is None:
+            first_body = body
+        if decode_subscription(body):  # this UA yielded parseable share links → done
+            return body
+    if first_body is not None:
+        return first_body              # nothing parsed, but we got a body — return it
+    raise ValueError("Не удалось загрузить подписку")
 
 
 async def _resolve(host: str) -> str:
