@@ -147,3 +147,106 @@ def test_status_summary_recomputed_per_account(monkeypatch):
     assert body["summary"]["total"] == 1        # only account a's node, not 99
     assert body["summary"]["online"] == 1
     assert [p["name"] for p in body["proxies"]] == ["A"]
+
+
+# ── per-node hiding on Xray uptime (deferred backlog item) ────
+def test_hidden_node_excluded_from_counts_but_shipped_with_flag(monkeypatch):
+    a = _auth()
+
+    async def running():
+        return "running"
+
+    async def proxies(base_url=None):
+        return [
+            _mk_proxy(f"{_acc(a)}:s1|Alpha", "n1", online=True),
+            _mk_proxy(f"{_acc(a)}:s1|Beta", "n2", online=False),
+        ]
+
+    monkeypatch.setattr(xcapi.xc, "container_state", running)
+    monkeypatch.setattr(xcapi.xc, "fetch_proxies", proxies)
+
+    # Baseline: both shown, the offline one keeps the banner "partial".
+    r0 = client.get("/api/checker/statuspage?ticks=30", headers=a).json()
+    assert r0["global"]["total"] == 2 and r0["global"]["state"] == "partial"
+
+    # Hide the offline node "n2".
+    t = client.post("/api/stats/users/hidden/checker", headers=a,
+                    json={"checker_id": "local", "stable_id": "n2",
+                          "name": "Beta", "hidden": True})
+    assert t.status_code == 200
+
+    r1 = client.get("/api/checker/statuspage?ticks=30", headers=a).json()
+    # counts drop the hidden node → banner goes green
+    assert r1["global"]["total"] == 1 and r1["global"]["online"] == 1
+    assert r1["global"]["state"] == "ok"
+    # but the node is still SHIPPED, flagged, so the UI can show a "hidden" section
+    by_id = {n["stableId"]: n for n in r1["nodes"]}
+    assert by_id["n2"]["hidden"] is True and by_id["n1"]["hidden"] is False
+    assert len(r1["nodes"]) == 2   # nothing dropped from the list, only from counts
+
+
+def test_unhiding_restores_the_node_to_counts(monkeypatch):
+    a = _auth()
+
+    async def running():
+        return "running"
+
+    async def proxies(base_url=None):
+        return [_mk_proxy(f"{_acc(a)}:s1|Alpha", "n1", online=True)]
+
+    monkeypatch.setattr(xcapi.xc, "container_state", running)
+    monkeypatch.setattr(xcapi.xc, "fetch_proxies", proxies)
+
+    client.post("/api/stats/users/hidden/checker", headers=a,
+                json={"checker_id": "local", "stable_id": "n1", "hidden": True})
+    r = client.get("/api/checker/statuspage", headers=a).json()
+    assert r["global"]["total"] == 0 and r["global"]["state"] == "unknown"
+
+    client.post("/api/stats/users/hidden/checker", headers=a,
+                json={"checker_id": "local", "stable_id": "n1", "hidden": False})
+    r = client.get("/api/checker/statuspage", headers=a).json()
+    assert r["global"]["total"] == 1 and r["nodes"][0]["hidden"] is False
+
+
+def test_hidden_set_is_shared_with_the_stats_picker(monkeypatch):
+    """Hiding on the dashboard and the stats «Серверы» picker are ONE set — both
+    key on (checker_id, stableId)."""
+    a = _auth()
+    client.post("/api/stats/users/hidden/checker", headers=a,
+                json={"checker_id": "local", "stable_id": "n9", "name": "Node9", "hidden": True})
+    w = client.get("/api/stats/users/widgets", headers=a).json()
+    assert w["hidden"]["checker"]["local"]["n9"] == "Node9"
+
+
+def test_toggle_preserves_widget_layout(monkeypatch):
+    """The dashboard toggle must not clobber the stats layout (it does a
+    read-modify-write, not a full replace)."""
+    a = _auth()
+    r = client.put("/api/stats/users/widgets", headers=a, json={
+        "layout": [{"instance_id": "w1", "kind": "node-load", "w": 2, "order": 0, "settings": {}}],
+        "hidden": {"nodes": {}, "checker": {}},
+    })
+    assert r.status_code == 200, r.text
+    client.post("/api/stats/users/hidden/checker", headers=a,
+                json={"checker_id": "local", "stable_id": "n1", "hidden": True})
+    w = client.get("/api/stats/users/widgets", headers=a).json()
+    assert [x["instance_id"] for x in w["layout"]] == ["w1"]   # layout intact
+    assert "n1" in w["hidden"]["checker"]["local"]
+
+
+def test_hidden_incidents_are_dropped(monkeypatch):
+    a = _auth()
+
+    async def running():
+        return "running"
+
+    async def get_incidents(days, cid):
+        return [{"stableId": "n1", "name": "Alpha"}, {"stableId": "n2", "name": "Beta"}]
+
+    monkeypatch.setattr(xcapi.xc, "container_state", running)
+    monkeypatch.setattr(xcapi.metrics_store, "get_incidents", get_incidents)
+
+    client.post("/api/stats/users/hidden/checker", headers=a,
+                json={"checker_id": "local", "stable_id": "n2", "hidden": True})
+    r = client.get("/api/checker/incidents?days=7", headers=a).json()
+    assert [i["stableId"] for i in r["incidents"]] == ["n1"]

@@ -420,6 +420,20 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - `XrayCheckerConfig.enabled` дефолт **True** (мониторинг вкл. по умолчанию); `xray_checker.autostart_checker()` стартует общий контейнер на буте; `subscriptions._schedule_checker_reload()` (debounce 8с) перезапускает чекер при CRUD подписок.
 - Users-статы (`stats/UsersStats.tsx`): большой мульти-лайн график загрузки нод (6a), селектор чекера включает «Server uptime».
 
+### 9j. Скрытие отдельных узлов на «Xray uptime» (отложенный пункт, сделан)
+- **`POST /api/stats/users/hidden/checker`** (`api/user_stats.py`) — тогл ОДНОГО `(checker_id, stableId)` в
+  наборе `hidden.checker` с СОХРАНЕНИЕМ layout (read-modify-write, не full-replace). Чистая альтернатива
+  `PUT /widgets` для дэшборда, который не владеет раскладкой виджетов.
+- **`/api/checker/statuspage` и `/incidents`** (`api/xray_checker.py`) читают `_hidden_checker_nodes(cid)` и:
+  узлы отдаются с флагом `hidden`, но счётчики/баннер/`global.uptime30d` считаются ТОЛЬКО по нескрытым
+  (как «Server uptime» в §9b); инциденты скрытых отбрасываются. Пробы НЕ трогаются — история/аптайм живут.
+- ⚠️ **Один и тот же набор `hidden.checker[cid][stableId]`**, что у пикера «Серверы» статистики: обе оси
+  ключуются на `(checker_id, stableId)`, поэтому скрытие на дэшборде и в статистике — ОДНО множество
+  («не отслеживаю этот xray-узел»). Server-monitor скрывается ОТДЕЛЬНО (`servers.hidden`, §9b) — другое
+  пространство идентичности (row-id SQLite).
+- Frontend `Dashboard.tsx` (`XrayUptime`): кнопка EyeOff в строке узла (`trailing`) → скрыть; секция
+  «Не отслеживаются (N)» со скрытыми и кнопкой Eye → вернуть. `toggleHidden` шлёт тогл + перечитывает.
+
 ### 9c. Прочее Wave 3
 - **Автодетект существующего сервера (План B, 502b837 backend + фронт Ф2):** `node_ops._DETECT_SETTINGS_SCRIPT` echo `NIVAL:key=value` (ssh_port/open_ports/domain/remnanode_port/xhttp_path/**has_token** — сам токен НЕ читается) + `_parse_settings`; `/api/node/detect` → `{results, settings}`. `DeployRequest.skip_components` пропускает уже установленные компоненты. **Фронт Ф2:** `DeployDashboard` «Существующий сервер» читает `settings` → блок «Обнаружено на сервере» + маппит в `preset` формы (preset > settings-дефолты; тумблеры warp/optimize/trafficguard/hysteria2 зеркалят detect-компоненты). Vanilla-нода: nginx.conf/серта/UFW нет → detect отдаёт только ssh_port+has_token (проверено вживую).
 - **Templates CodeMirror (План C 4a):** `Templates.tsx` `<textarea>`→`<JsonEditor>` (переиспользован из profiles); `$xhttp_path` добавлен в подстановку config-profile И в `_subst_host_vars` (step_create_hosts).
