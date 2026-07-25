@@ -4,6 +4,7 @@ import {
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
   Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen, FileJson,
+  LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package, Plug,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -12,6 +13,8 @@ export type Tab =
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
+  | "haproxy-overview" | "haproxy-nodes" | "haproxy-routes" | "haproxy-traffic"
+  | "haproxy-firewall" | "haproxy-releases" | "haproxy-settings"
   | "hostings-map" | "hostings-list" | "library"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
@@ -50,6 +53,17 @@ const RW_TABS: NavItemDef[] = [
   { tab: "mihomo",       label: "Mihomo",               Icon: Waypoints      },
   // Пользовательские конфиги (шаблоны по типам клиента, Wave-5 План D).
   { tab: "configs",      label: "Конфиги",              Icon: FileJson       },
+];
+
+// Группа «HAPROXY» — прокси к панели NodeFlow (деплой + управление HAProxy-нодами).
+const HAPROXY_TABS: NavItemDef[] = [
+  { tab: "haproxy-overview",  label: "Обзор",     Icon: LayoutDashboard },
+  { tab: "haproxy-nodes",     label: "Ноды",      Icon: Boxes           },
+  { tab: "haproxy-routes",    label: "Маршруты",  Icon: RouteIcon       },
+  { tab: "haproxy-traffic",   label: "Трафик",    Icon: Gauge           },
+  { tab: "haproxy-firewall",  label: "Файрвол",   Icon: ShieldHalf      },
+  { tab: "haproxy-releases",  label: "Релизы",    Icon: Package         },
+  { tab: "haproxy-settings",  label: "Настройки", Icon: Plug            },
 ];
 
 // Группа «Справка» (бывш. «Хостинги»): карта хостингов + каталог + библиотека знаний.
@@ -133,6 +147,10 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Remnawave</p>
         {RW_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
+
+        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>HAPROXY</p>
+        {HAPROXY_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Справка</p>

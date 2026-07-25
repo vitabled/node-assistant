@@ -693,3 +693,48 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - **`scripts/probe_subpage_config.py`** — самодостаточный (без jq, сам находит запись, PATCH-тест на КЛОНЕ →
   оригинал не тронут) снималка формы/семантики с живой панели. `PANEL=… TOKEN=… python scripts/…`. Windows:
   `sys.stdout.reconfigure(utf-8)` внутри, иначе cp1251 роняет кириллицу.
+
+## 12. HAPROXY — интеграция панели NodeFlow (deploy + proxy)
+> Запрос (2026-07-25): «Интегрируй функции прикреплённой панели NodeFlow в новую группу разделов HAPROXY».
+> Архитектура (выбор пользователя): **deploy + proxy** — node-installer РЕГИСТРИРУЕТ инстанс NodeFlow (URL +
+> `PANEL_ADMIN_TOKEN`) пер-аккаунт и проксирует его `/api/v1/*`, а разделы группы «HAPROXY» — нативные React-
+> страницы, бьющие в наш прокси. Реальный Go-агент + HAProxy-движок NodeFlow ПЕРЕИСПОЛЬЗУЕТСЯ, НЕ переписывается.
+> План `docs/superpowers/plans/2026-07-25-haproxy-nodeflow-integration.md`. Install-kit распакован только в
+> scratchpad (Go+Postgres+mTLS+agent-бинарь) — в репозиторий НИЧЕГО из него не копировалось.
+
+- **Что такое NodeFlow:** отдельный продукт — Go-панель + Postgres + mTLS-PKI + скомпилированный node-agent +
+  подписанные релизы. Ноды гоняют агент по mTLS, тот управляет **HAProxy** TCP-relay «маршрутами». Панель:
+  `GET /overview`, `GET/PATCH /settings`, `POST /bootstrap`(+`/host-key`,`GET /{job}`), `GET/POST /nodes`(+`/order`),
+  пер-нода `{id}`: `GET/PATCH/DELETE`,`/operational`,`/audit`,`/traffic`(+`/history`),`/firewall`,`/haproxy`(вкл/выкл),
+  `/agent-update`(+`/rollback`),`/routes`(GET/POST,+`/order`,+`/{rid}` GET/PATCH/DELETE),`/rotate-credentials`,
+  `/reinstall`,`/config-revisions`, `GET/POST/DELETE /agent-releases`.
+- **⚠️ Ключевая находка (auth):** `/api/v1/*` принимает `Authorization: Bearer <PANEL_ADMIN_TOKEN>`, и для
+  bearer-пути NodeFlow ПРОПУСКАЕТ same-origin/cookie/CSRF-проверки (они только для браузерных сессий). Поэтому
+  серверный прокси, инжектящий токен, гоняет ВСЕ функции без сессии. (`internal/panel/http.go::admin()`.)
+- **Backend:** `HaproxyConfig` на `AppSettings` (`enabled`, `base_url`, `admin_token_enc` — **Fernet**, как
+  MCP/cliproxy; наружу токен не отдаётся, только `has_token`). `services/nodeflow_client.py` — httpx-клиент:
+  `request(method, subpath, params, content, headers)` → `{base}/api/v1/{subpath}` с bearer, `follow_redirects=
+  False`, **SSRF-гард `net_guard.is_safe_url` и при регистрации, И на каждом запросе** (DNS-rebinding). `check()`
+  = health + аутентифицированный GET /settings. `api/haproxy.py` (под `require_account`): `GET/POST /api/haproxy/
+  config`, `POST /test`, и **дженерик-прокси `ANY /api/haproxy/proxy/{path:path}`** — сырое тело passthrough
+  (JSON И multipart-загрузка релиза), стрипает hop/auth-заголовки, инжектит bearer, доступен только префикс
+  `/api/v1/`. **Изоляция:** каждый аккаунт регистрирует СВОЙ инстанс → прокси всегда целится в его панель с его
+  токеном. Роутер подключён в `main.py` под `_auth`. Тесты `test_haproxy.py` (7: гейт, SSRF-reject на save,
+  шифрование-at-rest + blank-keeps, not-configured-гарды, forward метод/subpath/query + upstream-статус, Fernet).
+- **Frontend `components/haproxy/`:** `contracts.ts` (типы портированы из NodeFlow), `api.ts` (config/test +
+  `nf()`-прокси, `messageOf` парсит и наш `{detail}`, и NodeFlow `{error}`; `asList` нормализует
+  bare-array vs `{nodes|routes|releases:[]}`), `format.ts` (байты/битрейт/аптайм/тон). Страницы: `HaproxyConnect`
+  (Настройки: URL+токен+тест+вкл, экспортит `useHaproxyReady`+`NotConnected`-гейт), `HaproxyOverview` (KPI+топ-
+  маршруты, 15с-поллинг), `HaproxyNodes`(+`HaproxyAddNode` 3-шаговый мастер bootstrap: host-key-скан→подтверждение
+  отпечатка→POST /bootstrap + polling job; **секреты чистятся при сабмите**; +`HaproxyNodeDetail`: heartbeat-KPI,
+  вкл/выкл HAProxy, ротация кредов, удаление), `HaproxyRoutes`(+редактор: `routeModel.ts` draft↔record↔payload,
+  лёгкая клиент-валидация — глубокую делает `route_validation.go`), `HaproxyTraffic`, `HaproxyFirewall`
+  (off/observe/apply + порты), `HaproxyReleases` (список+удаление; загрузка/подпись — в самой NodeFlow). Nav-группа
+  «HAPROXY» в `Sidebar.tsx` (7 табов, после Remnawave), `Tab`-юнион + `CRUMB` + рендер-свитч в `App.tsx`.
+  Тесты `routeModel.test.ts` (13: payload any_tcp/sni/unix, expected_version, квоты, валидация, round-trip, asList).
+- **Отклонения/заметки:** MVP «deploy» = **register-by-URL** (аккаунт сам поднимает NodeFlow из install-kit,
+  затем вписывает URL+токен). SSH-деплой стека NodeFlow через `install-panel.sh` — ОТЛОЖЕН (тяжело: заливка
+  300 КБ исходников + 7.7 МБ бинаря агента + генерация PKI/signing-key). Прокси даёт все функции независимо от
+  способа поднятия. Дженерик-прокси не перечисляет ~30 эндпоинтов и авто-покрывает новые версии NodeFlow.
+  Reinstall ноды (нужен полный bootstrap-body с кредами) в UI пока НЕ вынесен — доступны вкл/выкл HAProxy, ротация
+  кредов, удаление. Verify: `pytest tests/test_haproxy.py` (7) + Docker `vitest routeModel.test.ts` (13) + `tsc`.

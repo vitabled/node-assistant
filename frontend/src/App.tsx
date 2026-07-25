@@ -29,6 +29,13 @@ import { PanelVariables }                  from "./components/rw/PanelVariables"
 import { Backup }                          from "./components/rw/Backup";
 import { HostingsCatalog }                from "./components/hostings/HostingsCatalog";
 import { HostingsMap }                     from "./components/hostings/HostingsMap";
+import { HaproxyConnect }                  from "./components/haproxy/HaproxyConnect";
+import { HaproxyOverview }                 from "./components/haproxy/HaproxyOverview";
+import { HaproxyNodes }                    from "./components/haproxy/HaproxyNodes";
+import { HaproxyRoutes }                   from "./components/haproxy/HaproxyRoutes";
+import { HaproxyTraffic }                  from "./components/haproxy/HaproxyTraffic";
+import { HaproxyFirewall }                 from "./components/haproxy/HaproxyFirewall";
+import { HaproxyReleases }                 from "./components/haproxy/HaproxyReleases";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
 import { InfraProjects }                  from "./components/infra/InfraProjects";
@@ -96,6 +103,13 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "rw-profiles":     ["Remnawave", "Профили"],
   "mihomo":          ["Remnawave", "Mihomo"],
   "configs":         ["Remnawave", "Пользовательские конфиги"],
+  "haproxy-overview": ["HAPROXY", "Обзор"],
+  "haproxy-nodes":    ["HAPROXY", "Ноды"],
+  "haproxy-routes":   ["HAPROXY", "Маршруты"],
+  "haproxy-traffic":  ["HAPROXY", "Трафик"],
+  "haproxy-firewall": ["HAPROXY", "Файрвол"],
+  "haproxy-releases": ["HAPROXY", "Релизы"],
+  "haproxy-settings": ["HAPROXY", "Настройки"],
   "hostings-map":    ["Справка", "Карта хостингов"],
   "hostings-list":   ["Справка", "Хостинги"],
   "library":         ["Справка", "Библиотека"],
@@ -250,6 +264,14 @@ export default function App() {
           {tab === "rw-profiles"  && <Profiles />}
           {tab === "mihomo"       && <MihomoEditor />}
           {tab === "configs"      && <ConfigTemplates />}
+
+          {tab === "haproxy-overview" && <HaproxyOverview />}
+          {tab === "haproxy-nodes"    && <HaproxyNodes />}
+          {tab === "haproxy-routes"   && <HaproxyRoutes />}
+          {tab === "haproxy-traffic"  && <HaproxyTraffic />}
+          {tab === "haproxy-firewall" && <HaproxyFirewall />}
+          {tab === "haproxy-releases" && <HaproxyReleases />}
+          {tab === "haproxy-settings" && <HaproxyConnect />}
 
           {tab === "hostings-map"  && <HostingsMap />}
           {tab === "hostings-list" && <HostingsCatalog />}
