@@ -737,14 +737,21 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   шифрование-at-rest + blank-keeps, not-configured-гарды, forward метод/subpath/query + upstream-статус, Fernet).
 - **Frontend `components/haproxy/`:** `contracts.ts` (типы портированы из NodeFlow), `api.ts` (config/test +
   `nf()`-прокси, `messageOf` парсит и наш `{detail}`, и NodeFlow `{error}`; `asList` нормализует
-  bare-array vs `{nodes|routes|releases:[]}`), `format.ts` (байты/битрейт/аптайм/тон). Страницы: `HaproxyConnect`
-  (Настройки: URL+токен+тест+вкл, экспортит `useHaproxyReady`+`NotConnected`-гейт), `HaproxyOverview` (KPI+топ-
-  маршруты, 15с-поллинг), `HaproxyNodes`(+`HaproxyAddNode` 3-шаговый мастер bootstrap: host-key-скан→подтверждение
-  отпечатка→POST /bootstrap + polling job; **секреты чистятся при сабмите**; +`HaproxyNodeDetail`: heartbeat-KPI,
-  вкл/выкл HAProxy, ротация кредов, удаление), `HaproxyRoutes`(+редактор: `routeModel.ts` draft↔record↔payload,
-  лёгкая клиент-валидация — глубокую делает `route_validation.go`), `HaproxyTraffic`, `HaproxyFirewall`
-  (off/observe/apply + порты), `HaproxyReleases` (список+удаление; загрузка/подпись — в самой NodeFlow). Nav-группа
-  «HAPROXY» в `Sidebar.tsx` (7 табов, после Remnawave), `Tab`-юнион + `CRUMB` + рендер-свитч в `App.tsx`.
+  bare-array vs `{nodes|routes|releases:[]}`), `format.ts` (байты/битрейт/аптайм/тон). **Гейт вынесен в
+  `gate.tsx`** (`useHaproxyReady`+`NotConnected` — импортят 6 операционных страниц; текст ведёт в
+  Настройки→«HAProxy»). Страницы: `HaproxyConnect` (connect-UI: сегмент local/remote — теперь это **вкладка
+  Настройки→«HAProxy»**, БЕЗ `Page`-обёртки), `HaproxyOverview` (KPI+топ-маршруты, 15с-поллинг), `HaproxyNodes`
+  (+`HaproxyAddNode` 3-шаговый мастер bootstrap: host-key-скан→подтверждение отпечатка→POST /bootstrap + polling
+  job; **секреты чистятся при сабмите**; +`HaproxyNodeDetail`: heartbeat-KPI, вкл/выкл HAProxy, ротация кредов,
+  удаление), `HaproxyRoutes`(+редактор: `routeModel.ts` draft↔record↔payload, лёгкая клиент-валидация — глубокую
+  делает `route_validation.go`), `HaproxyTraffic`, `HaproxyFirewall` (off/observe/apply + порты), `HaproxyReleases`
+  (список+удаление; загрузка/подпись — в самой NodeFlow).
+  **Реорг нав-групп:** группа «HAPROXY» в `Sidebar.tsx` (после Remnawave) = **Ноды/Маршруты/Файрвол/Релизы**;
+  статистические **«Обзор»→«HAProxy: обзор»** (`haproxy-overview`) и **«Трафик»→«HAProxy: трафик»**
+  (`haproxy-traffic`) перенесены в группу **«Статистика»** (`CRUMB` → `["Статистика", …]`); «Настройки»
+  (`haproxy-settings`) удалён как таб — connect-UI переехал во вкладку **Настройки→«HAProxy»** (`Settings.tsx`
+  `SubTab "haproxy"` рендерит `<HaproxyConnect/>`). Табы `haproxy-overview`/`haproxy-traffic` оставили те же id
+  (меньше churn), рендер-свитч в `App.tsx` не тронут для них.
   Тесты `routeModel.test.ts` (13: payload any_tcp/sni/unix, expected_version, квоты, валидация, round-trip, asList).
 - **Отклонения/заметки:** Дженерик-прокси не перечисляет ~30 эндпоинтов и авто-покрывает новые версии NodeFlow.
   Reinstall ноды (нужен полный bootstrap-body с кредами) в UI пока НЕ вынесен — доступны вкл/выкл HAProxy, ротация
@@ -785,9 +792,11 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   per-account base_url+токен. Ручки: `GET/POST /config` (+mode), `POST /deploy` (фон, ставит local+enabled),
   `POST /stop`, `GET /local/status`. `nodeflow_client.NodeFlowClient(..., allow_internal)` пропускает гард только
   для внутреннего URL.
-- **Frontend `HaproxyConnect`:** сегмент «Локальная (авто)» / «Существующая панель». Local: статус контейнеров +
-  «Развернуть/Переразвернуть»/«Остановить» + опц. `san_host` + **авто-деплой ОДИН раз** на маунте (нет токена +
-  образы собраны + idle) + плашка-требование (публичный хост, порт 4200). Remote: прежняя форма URL+токен.
+- **Frontend `HaproxyConnect`** (теперь вкладка **Настройки→«HAProxy»**, не отдельный нав-таб): сегмент
+  «Локальная (авто)» / «Существующая панель». Local: статус контейнеров + «Развернуть/Переразвернуть»/«Остановить»
+  + опц. `san_host` + **авто-деплой ОДИН раз** на маунте (нет токена + образы собраны + idle) + плашка-требование
+  (публичный хост, порт 4200). Remote: прежняя форма URL+токен. **Авто-деплой срабатывает при открытии вкладки
+  Настройки→«HAProxy»** (компонент монтируется там); операционные страницы группы «HAPROXY» гейтятся `gate.tsx`.
 - **⚠️ Требования локального режима:** хост node-installer СТАНОВИТСЯ хостом NodeFlow-панели — нужен публичный
   IP/DNS и открытый **4200/tcp** (агенты подключаются туда). SAN авто из `backend_ip.get_backend_ip()`, override в
   форме. Стек ОБЩИЙ на все аккаунты (как прочие DooD-синглтоны) — все видят одни ноды NodeFlow.

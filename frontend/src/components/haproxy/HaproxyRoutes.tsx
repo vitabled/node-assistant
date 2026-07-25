@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Route as RouteIcon, Plus, RefreshCw, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { Page, PageHeader } from "../infra/ui";
 import { haproxyApi, asList } from "./api";
-import { useHaproxyReady, NotConnected } from "./HaproxyConnect";
+import { useHaproxyReady, NotConnected } from "./gate";
 import { fmtBytes } from "./format";
 import {
   emptyRouteDraft, routeToDraft, routePayload, validateDraft, QUOTA_PERIODS,

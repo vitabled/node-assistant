@@ -3,47 +3,14 @@ import {
   Plug, ShieldAlert, CheckCircle2, XCircle, Loader2, ServerCog, Rocket,
   Square, RefreshCw, AlertTriangle,
 } from "lucide-react";
-import { Page, PageHeader } from "../infra/ui";
+import { PageHeader } from "../infra/ui";
 import { haproxyApi, type HaproxyTestResult } from "./api";
 import type { HaproxyConnState, HaproxyLocalStatus } from "./contracts";
 
-// ── shared readiness hook + gate ────────────────────────────────
-// Every HAPROXY page mounts this to decide whether to show its content or a
-// «connect first» prompt. `ready` = configured (local deployed / remote registered)
-// AND enabled. One GET /api/haproxy/config, cheap.
-export function useHaproxyReady() {
-  const [state, setState] = useState<HaproxyConnState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try { setState(await haproxyApi.getConfig()); }
-    catch { setState(null); }
-    finally { setLoading(false); }
-  }, []);
-  useEffect(() => { void reload(); }, [reload]);
-  return { state, ready: !!state?.configured && !!state?.enabled, loading, reload };
-}
+// The readiness hook + «not connected» gate live in ./gate (imported by the
+// operational HAPROXY pages). This file is now the Settings → «HAProxy» tab.
 
-export function NotConnected({ loading }: { loading?: boolean }) {
-  return (
-    <div className="card p-8 text-center max-w-md mx-auto mt-10">
-      {loading ? (
-        <Loader2 size={26} className="animate-spin mx-auto text-[var(--t-low)]" />
-      ) : (
-        <>
-          <ServerCog size={30} className="mx-auto text-[var(--t-low)] mb-3" />
-          <p className="text-sm font-medium text-[var(--t-hi)] mb-1">Панель NodeFlow не готова</p>
-          <p className="text-xs text-[var(--t-low)]">
-            Откройте раздел <b>«Настройки»</b> группы <b>HAPROXY</b>: по умолчанию локальная панель
-            разворачивается автоматически. Либо подключите существующую панель.
-          </p>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── the «Настройки» / connect page ──────────────────────────────
+// ── the «HAProxy» settings tab / connect UI ─────────────────────
 export function HaproxyConnect() {
   const [cfg, setCfg] = useState<HaproxyConnState | null>(null);
   const [mode, setMode] = useState<"local" | "remote">("local");
@@ -69,7 +36,7 @@ export function HaproxyConnect() {
   };
 
   return (
-    <Page>
+    <div>
       <PageHeader
         icon={<Plug size={18} />}
         title="Подключение к NodeFlow"
@@ -85,7 +52,7 @@ export function HaproxyConnect() {
 
       {mode === "local" ? <LocalPanel initial={cfg?.local} onChange={load} />
         : <RemotePanel cfg={cfg} onChange={load} />}
-    </Page>
+    </div>
   );
 }
 

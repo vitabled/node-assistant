@@ -18,6 +18,7 @@ import { AiSettingsTab } from "./settings/AiSettingsTab";
 import { InfraTab } from "./settings/InfraTab";
 import { ApiTokensTab } from "./settings/ApiTokensTab";
 import { DataTransfer } from "./settings/DataTransfer";
+import { HaproxyConnect } from "./haproxy/HaproxyConnect";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -761,7 +762,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "assistant" | "tokens" | "transfer" | "infra" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "assistant" | "tokens" | "transfer" | "infra" | "haproxy" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -777,6 +778,7 @@ export function Settings() {
     { id: "tokens",      label: "Токены API" },
     { id: "transfer",    label: "Экспорт/импорт" },
     { id: "infra",       label: "Инфраструктура" },
+    { id: "haproxy",     label: "HAProxy" },
     { id: "theme",       label: "Тема" },
   ];
 
@@ -807,6 +809,7 @@ export function Settings() {
         {sub === "tokens"       && <ApiTokensTab />}
         {sub === "transfer"     && <DataTransfer />}
         {sub === "infra"        && <InfraTab />}
+        {sub === "haproxy"      && <div className="max-w-3xl"><HaproxyConnect /></div>}
         {sub === "theme"        && <ThemeTab />}
       </div>
     </div>

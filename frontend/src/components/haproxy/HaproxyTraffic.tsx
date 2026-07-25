@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Gauge, RefreshCw, Loader2 } from "lucide-react";
 import { Page, PageHeader } from "../infra/ui";
 import { haproxyApi, asList } from "./api";
-import { useHaproxyReady, NotConnected } from "./HaproxyConnect";
+import { useHaproxyReady, NotConnected } from "./gate";
 import { fmtBytes } from "./format";
 import type { NodeRecord, NodeTraffic } from "./contracts";
 
