@@ -21,9 +21,13 @@ export interface Tariff {
 export interface HostingLocation {
   city: string; country_code: string; lat: number; lng: number; note: string;
 }
+export interface AsnRef {
+  number: number; name: string; website: string;
+}
 export interface Hosting {
   id: string; name: string; website: string; notes: string; features: string;
-  tariffs: Tariff[]; locations: HostingLocation[];
+  tags: string[];
+  tariffs: Tariff[]; locations: HostingLocation[]; asns: AsnRef[];
   provider_ref?: string | null; created_at: number;
 }
 
@@ -32,6 +36,7 @@ export type HostingBody = Omit<Hosting, "id" | "created_at">;
 
 export const hostingsApi = {
   list: () => req<Hosting[]>(""),
+  tags: () => req<string[]>("/tags"),
   create: (b: HostingBody) => req<Hosting>("", { method: "POST", body: JSON.stringify(b) }),
   update: (id: string, b: HostingBody) => req<Hosting>(`/${id}`, { method: "PUT", body: JSON.stringify(b) }),
   remove: (id: string) => req<void>(`/${id}`, { method: "DELETE" }),

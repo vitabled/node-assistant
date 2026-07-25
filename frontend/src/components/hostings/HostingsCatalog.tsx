@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Server, Plus, Loader2, Pencil, Trash2, RefreshCw, ExternalLink,
-  MapPin, Tag, X, Globe, Wand2,
+  MapPin, Tag, X, Globe, Wand2, Network,
 } from "lucide-react";
 import {
-  hostingsApi, type Hosting, type HostingBody, type Tariff, type HostingLocation,
+  hostingsApi, type Hosting, type HostingBody, type Tariff, type HostingLocation, type AsnRef,
   CURRENCIES, PERIODS, periodLabel, minTariff,
 } from "./api";
+import { TagInput } from "./TagInput";
 import { resolveCoords } from "./geo";
 import { CountrySelect } from "../CountrySelect";
 import { Page, PageHeader, Field, Modal, fmtNum } from "../infra/ui";
@@ -27,6 +28,7 @@ export function HostingsCatalog() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<null | { edit?: Hosting }>(null);
   const [details, setDetails] = useState<Hosting | null>(null);
+  const [tagFilter, setTagFilter] = useState<string>("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,6 +37,8 @@ export function HostingsCatalog() {
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const shown = tagFilter ? rows.filter(h => (h.tags || []).includes(tagFilter)) : rows;
 
   const del = async (h: Hosting) => {
     if (!confirm(`Удалить хостинг «${h.name}»?`)) return;
@@ -51,13 +55,26 @@ export function HostingsCatalog() {
           <button onClick={() => setModal({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)]"><Plus size={13} /> Хостинг</button>
         </>} />
 
+      {tagFilter && (
+        <div className="flex items-center gap-2 mb-3 text-xs text-[var(--t-mid)]">
+          <span>Фильтр по тегу:</span>
+          <span className="flex items-center gap-1 rounded-full px-2 py-0.5 bg-[var(--accent-dim)] text-[var(--accent-hi)] border border-[var(--accent-line)]">
+            <Tag size={11} /> {tagFilter}
+            <button onClick={() => setTagFilter("")} className="hover:text-[var(--t-hi)]" title="Сбросить"><X size={11} /></button>
+          </span>
+          <span className="text-[var(--t-faint)]">{shown.length} из {rows.length}</span>
+        </div>
+      )}
+
       {loading ? (
         <div className="py-16 text-center text-[var(--t-faint)]"><Loader2 size={18} className="animate-spin inline" /></div>
       ) : rows.length === 0 ? (
         <div className="card p-8 text-center text-[var(--t-faint)] text-sm">Хостингов пока нет. Добавьте первый — его локации появятся на «Карте».</div>
+      ) : shown.length === 0 ? (
+        <div className="card p-8 text-center text-[var(--t-faint)] text-sm">Нет хостингов с тегом «{tagFilter}».</div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {rows.map(h => {
+          {shown.map(h => {
             const mt = minTariff(h);
             // The card itself opens the full view; the icon buttons keep their
             // own actions and must stopPropagation so they don't also trigger it.
@@ -84,6 +101,18 @@ export function HostingsCatalog() {
                 </div>
 
                 {h.features && <p className="text-xs text-[var(--t-low)] line-clamp-2">{h.features}</p>}
+
+                {(h.tags || []).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {(h.tags || []).map(t => (
+                      <button key={t} onClick={e => { e.stopPropagation(); setTagFilter(t); }}
+                        title={`Показать хостинги с тегом «${t}»`}
+                        className="flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5 bg-[var(--accent-dim)] text-[var(--accent-hi)] border border-[var(--accent-line)] hover:bg-[var(--accent)] hover:text-[var(--primary-ink)]">
+                        <Tag size={9} /> {t}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {h.locations.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -138,6 +167,36 @@ function HostingDetails({ h, onClose, onEdit }: { h: Hosting; onClose: () => voi
         {h.features && <p className="text-xs text-[var(--t-mid)] whitespace-pre-wrap">{h.features}</p>}
         {h.notes && <p className="text-xs text-[var(--t-low)] whitespace-pre-wrap">{h.notes}</p>}
 
+        {(h.tags || []).length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {(h.tags || []).map(t => (
+              <span key={t} className="flex items-center gap-1 text-[11px] rounded-full px-2 py-0.5 bg-[var(--accent-dim)] text-[var(--accent-hi)] border border-[var(--accent-line)]">
+                <Tag size={10} /> {t}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {(h.asns || []).length > 0 && (
+          <div>
+            <p className="label mb-1 flex items-center gap-1"><Network size={12} /> ASN</p>
+            <div className="flex flex-col gap-1">
+              {(h.asns || []).map((a, i) => (
+                <p key={i} className="text-xs text-[var(--t-mid)] flex items-center gap-1.5 flex-wrap">
+                  <span className="tabular-nums text-[var(--t-hi)]">AS{a.number}</span>
+                  {a.name && <span>· {a.name}</span>}
+                  {a.website && (
+                    <a href={a.website} target="_blank" rel="noopener noreferrer"
+                      className="text-[var(--accent-hi)] flex items-center gap-1">
+                      <ExternalLink size={10} /> {a.website.replace(/^https?:\/\//, "")}
+                    </a>
+                  )}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div>
           <p className="label mb-1 flex items-center gap-1"><Tag size={12} /> Тарифы</p>
           {h.tariffs.length === 0 ? (
@@ -191,20 +250,25 @@ function HostingDetails({ h, onClose, onEdit }: { h: Hosting; onClose: () => voi
 
 const emptyTariff = (): Tariff => ({ name: "", specs: "", bandwidth: "", price: 0, currency: "USD", period: "mo" });
 const emptyLoc = (): HostingLocation => ({ city: "", country_code: "", lat: 0, lng: 0, note: "" });
+const emptyAsn = (): AsnRef => ({ number: 0, name: "", website: "" });
 
 function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(edit?.name ?? "");
   const [website, setWebsite] = useState(edit?.website ?? "");
   const [features, setFeatures] = useState(edit?.features ?? "");
   const [notes, setNotes] = useState(edit?.notes ?? "");
+  const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   const [tariffs, setTariffs] = useState<Tariff[]>(edit?.tariffs?.length ? edit.tariffs : [emptyTariff()]);
   const [locations, setLocations] = useState<HostingLocation[]>(edit?.locations ?? []);
+  const [asns, setAsns] = useState<AsnRef[]>(edit?.asns ?? []);
   const [saving, setSaving] = useState(false);
 
   const setTariff = (i: number, patch: Partial<Tariff>) =>
     setTariffs(ts => ts.map((t, j) => (j === i ? { ...t, ...patch } : t)));
   const setLoc = (i: number, patch: Partial<HostingLocation>) =>
     setLocations(ls => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  const setAsn = (i: number, patch: Partial<AsnRef>) =>
+    setAsns(as => as.map((a, j) => (j === i ? { ...a, ...patch } : a)));
 
   // Fill lat/lng from the city+country gazetteer.
   const autoCoords = (i: number) => {
@@ -222,9 +286,11 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
     const cleanTariffs = tariffs.filter(
       t => t.name.trim() || t.specs.trim() || (t.bandwidth || "").trim() || t.price > 0);
     const cleanLocs = locations.filter(l => l.country_code || l.city.trim());
+    const cleanAsns = asns.filter(a => a.number > 0 || a.name.trim() || a.website.trim());
     const body: HostingBody = {
       name: name.trim(), website: website.trim(), features: features.trim(), notes: notes.trim(),
-      tariffs: cleanTariffs, locations: cleanLocs, provider_ref: edit?.provider_ref ?? null,
+      tags, tariffs: cleanTariffs, locations: cleanLocs, asns: cleanAsns,
+      provider_ref: edit?.provider_ref ?? null,
     };
     setSaving(true);
     try {
@@ -246,6 +312,8 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
       <Field label="Сайт" value={website} onChange={setWebsite} placeholder="https://hetzner.com" />
       <Field label="Особенности" value={features} onChange={setFeatures} placeholder="BBR, IPv6, DDoS-защита…" />
       <Field label="Примечания" value={notes} onChange={setNotes} placeholder="Личные заметки" />
+
+      <TagInput label="Теги" value={tags} onChange={setTags} />
 
       {/* Tariffs */}
       <div className="flex flex-col gap-2">
@@ -307,6 +375,31 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
                 <Wand2 size={12} /> Авто
               </button>
             </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ASN */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <label className="label flex items-center gap-1"><Network size={12} /> ASN</label>
+          <button type="button" onClick={() => setAsns(as => [...as, emptyAsn()])}
+            className="text-[11px] flex items-center gap-1 text-[var(--accent-hi)]"><Plus size={11} /> Добавить</button>
+        </div>
+        {asns.length === 0 && <p className="text-[11px] text-[var(--t-faint)]">Автономные системы провайдера (можно заполнить из «Анализа подписки»).</p>}
+        {asns.map((a, i) => (
+          <div key={i} className="rounded-lg border border-[var(--line-soft)] p-2.5 flex flex-col gap-2 bg-[var(--bg2)]">
+            <div className="flex items-center gap-2">
+              <span className="text-[var(--t-low)] text-xs">AS</span>
+              <input type="number" min={0} value={a.number || ""} onChange={e => setAsn(i, { number: parseInt(e.target.value) || 0 })}
+                placeholder="12345" className="input w-28" />
+              <input value={a.name} onChange={e => setAsn(i, { name: e.target.value })}
+                placeholder="Имя (Selectel)" spellCheck={false} className="input flex-1" />
+              <button type="button" onClick={() => setAsns(as => as.filter((_, j) => j !== i))}
+                className="p-1 text-[var(--t-low)] hover:text-[var(--err)]"><X size={13} /></button>
+            </div>
+            <input value={a.website} onChange={e => setAsn(i, { website: e.target.value })}
+              placeholder="Сайт ASN (https://…)" spellCheck={false} className="input" />
           </div>
         ))}
       </div>

@@ -11,6 +11,7 @@ from app.models.settings import (
     OptimizationSettings,
     XrayCheckerConfig,
     AppearanceConfig,
+    AutoBackupConfig,
     TemplateCreate,
     TemplateUpdate,
 )
@@ -137,6 +138,56 @@ async def save_appearance(body: AppearanceConfig):
     return {"ok": True}
 
 
+# ── Auto-backup → Telegram (Wave-8 §4) ────────────────────────────────────────
+
+class AutoBackupBody(BaseModel):
+    enabled: bool = False
+    interval_hours: int = 24
+    include_secrets: bool = False
+    chat_id: str = ""
+    bot_token: Optional[str] = None  # write-only; blank/None → keep existing
+
+
+@router.get("/settings/auto-backup")
+async def get_auto_backup():
+    ab = AppSettings(**storage.load_settings()).auto_backup
+    d = ab.model_dump()
+    d.pop("bot_token_enc", None)     # never expose the vault ciphertext here
+    d["has_token"] = bool(ab.bot_token_enc)
+    return d
+
+
+@router.post("/settings/auto-backup")
+async def save_auto_backup(body: AutoBackupBody):
+    from app.services import auto_backup
+    raw = storage.load_settings()
+    settings = AppSettings(**raw)
+    existing = settings.auto_backup
+    enc = existing.bot_token_enc
+    if body.bot_token and body.bot_token.strip():
+        enc = auto_backup.encrypt_token(body.bot_token.strip())
+    settings.auto_backup = AutoBackupConfig(
+        enabled=body.enabled,
+        interval_hours=max(1, min(8760, body.interval_hours)),
+        include_secrets=body.include_secrets,
+        chat_id=body.chat_id.strip(),
+        bot_token_enc=enc,
+        last_run=existing.last_run,
+        last_error=existing.last_error,
+    )
+    storage.save_settings(settings.model_dump())
+    return {"ok": True, "has_token": bool(enc)}
+
+
+@router.post("/settings/auto-backup/run")
+async def run_auto_backup():
+    from app.services import auto_backup, accounts
+    res = await auto_backup.run_once(accounts.current_account.get())
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "Не удалось отправить бэкап")
+    return {"ok": True}
+
+
 @router.post("/settings/deploy-defaults")
 async def save_deploy_defaults(body: DeployDefaults):
     raw = storage.load_settings()
@@ -243,6 +294,43 @@ async def get_node_plugins():
         raise HTTPException(exc.status or 502, exc.detail)
     except Exception as exc:
         raise HTTPException(502, str(exc))
+
+
+@router.get("/remnawave/balancers")
+async def get_balancers():
+    """Wave-8 §5 — every uuids-selector «balancer group» across all config
+    profiles: `[{config_profile_uuid, config_profile_name, tag_prefix, count}]`.
+    A host's uuid is appended to a chosen group's selector at deploy time."""
+    from app.services import xray_selector
+
+    client = _client()
+    try:
+        profiles = await client.list_config_profiles()
+    except RemnavaveError as exc:
+        raise HTTPException(exc.status or 502, exc.detail)
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+
+    out: list[dict] = []
+    for p in profiles:
+        uuid = p.get("uuid")
+        if not uuid:
+            continue
+        # The list payload may omit `config`; fetch the profile to be sure.
+        config = p.get("config")
+        if not isinstance(config, dict):
+            try:
+                config = (await client.get_config_profile(uuid)).get("config") or {}
+            except Exception:
+                config = {}
+        for g in xray_selector.list_uuid_groups(config):
+            out.append({
+                "config_profile_uuid": uuid,
+                "config_profile_name": p.get("name") or "",
+                "tag_prefix": g["tag_prefix"],
+                "count": g["count"],
+            })
+    return out
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────

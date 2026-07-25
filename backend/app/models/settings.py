@@ -151,6 +151,21 @@ class AppearanceConfig(BaseModel):
     neon_glow: bool = True
 
 
+class AutoBackupConfig(BaseModel):
+    """Wave-8 §4 — scheduled per-account export shipped to Telegram. The bot token
+    is Fernet-encrypted (`bot_token_enc`) and NEVER returned to the client (only
+    `has_token`). `include_secrets` toggles whether credential fields are kept in
+    the archive (privacy: with it on, secrets land in the Telegram chat)."""
+
+    enabled: bool = False
+    interval_hours: int = Field(default=24, ge=1, le=8760)
+    include_secrets: bool = False
+    chat_id: str = ""
+    bot_token_enc: str = ""  # Fernet ciphertext (base64); never plaintext
+    last_run: int = 0
+    last_error: str = ""
+
+
 class AppSettings(BaseModel):
     remnawave: RemnavaveConfig = RemnavaveConfig()
     remnawave_registry: RemnawaveRegistry = RemnawaveRegistry()
@@ -161,6 +176,7 @@ class AppSettings(BaseModel):
     ai: AiConfig = AiConfig()
     haproxy: HaproxyConfig = HaproxyConfig()
     appearance: AppearanceConfig = AppearanceConfig()
+    auto_backup: AutoBackupConfig = AutoBackupConfig()
 
     @model_validator(mode="after")
     def _resolve_active_panel(self):

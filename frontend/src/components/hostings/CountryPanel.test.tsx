@@ -4,9 +4,10 @@ import { CountryPanel, hostingsInCountry, countryName } from "./CountryPanel";
 import type { Hosting } from "./api";
 
 const mk = (id: string, name: string, ccs: string[], tariffs: any[] = []): Hosting => ({
-  id, name, website: "", notes: "", features: "",
+  id, name, website: "", notes: "", features: "", tags: [],
   tariffs,
   locations: ccs.map(cc => ({ city: `${cc}-city`, country_code: cc, lat: 0, lng: 0, note: "" })),
+  asns: [],
   created_at: 0,
 });
 

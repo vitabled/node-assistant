@@ -1,9 +1,24 @@
 import { useEffect, useState } from "react";
 import { Plus, Pencil, Trash2, X, Loader2, Check, Server, Eye, EyeOff } from "lucide-react";
-import { MultiSelect } from "./MultiSelect";
+import { MultiSelect, type SelectOption } from "./MultiSelect";
 import { loadDeployNodes } from "./infra/ui";
 
 // ── Types (mirrors backend Pydantic HostTemplateBody exactly) ──
+
+export interface BalancerRef {
+  config_profile_uuid: string;
+  tag_prefix: string;
+}
+
+// MultiSelect works over string values; encode a balancer ref as
+// "<config_profile_uuid>::<tag_prefix>" (tag_prefix charset excludes ':').
+const balKey = (b: BalancerRef) => `${b.config_profile_uuid}::${b.tag_prefix}`;
+const balParse = (v: string): BalancerRef => {
+  const i = v.indexOf("::");
+  return i < 0
+    ? { config_profile_uuid: v, tag_prefix: "" }
+    : { config_profile_uuid: v.slice(0, i), tag_prefix: v.slice(i + 2) };
+};
 
 export interface HostTemplate {
   id?: string;
@@ -35,6 +50,7 @@ export interface HostTemplate {
   shuffle_host: boolean;
   allow_insecure: boolean;
   x25519mlkem768: boolean;
+  balancers: BalancerRef[];
 }
 
 // Editing form: same shape, but numeric fields are edited as text so the
@@ -68,6 +84,7 @@ interface FormState {
   shuffle_host: boolean;
   allow_insecure: boolean;
   x25519mlkem768: boolean;
+  balancers: string[];      // encoded "<uuid>::<tagPrefix>" for MultiSelect
 }
 
 const FORM_DEFAULT: FormState = {
@@ -99,6 +116,7 @@ const FORM_DEFAULT: FormState = {
   shuffle_host: false,
   allow_insecure: false,
   x25519mlkem768: false,
+  balancers: [],
 };
 
 function fromTemplate(t: HostTemplate): FormState {
@@ -131,6 +149,7 @@ function fromTemplate(t: HostTemplate): FormState {
     shuffle_host: t.shuffle_host,
     allow_insecure: t.allow_insecure,
     x25519mlkem768: t.x25519mlkem768,
+    balancers: (t.balancers ?? []).map(balKey),
   };
 }
 
@@ -167,6 +186,7 @@ function toPayload(f: FormState): Omit<HostTemplate, "id"> {
     shuffle_host: f.shuffle_host,
     allow_insecure: f.allow_insecure,
     x25519mlkem768: f.x25519mlkem768,
+    balancers: f.balancers.map(balParse),
   };
 }
 
@@ -373,6 +393,33 @@ function HostEditorModal({ initial, onClose, onSave }: {
   const [apiError, setApiError] = useState<string | null>(null);
   const [nodeOptions] = useState(() => loadDeployNodes());
 
+  // Wave-8 §5 — balancer groups (uuids-selectors) from the active panel.
+  const [balancerOptions, setBalancerOptions] = useState<SelectOption[]>([]);
+  const [balancerErr, setBalancerErr] = useState<string | null>(null);
+  const [balancerLoading, setBalancerLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/remnawave/balancers")
+      .then(async r => {
+        if (!r.ok) {
+          const t = await r.json().catch(() => ({} as any));
+          throw new Error(typeof t.detail === "string" ? t.detail : "Панель Remnawave не настроена");
+        }
+        return r.json();
+      })
+      .then((data: any[]) => {
+        if (!alive) return;
+        setBalancerOptions((data || []).map(b => ({
+          value: `${b.config_profile_uuid}::${b.tag_prefix}`,
+          label: `${b.config_profile_name || "профиль"} · ${b.tag_prefix} (${b.count})`,
+        })));
+        setBalancerLoading(false);
+      })
+      .catch(e => { if (alive) { setBalancerErr((e as Error).message); setBalancerLoading(false); } });
+    return () => { alive = false; };
+  }, []);
+
   const set = <K extends keyof FormState>(name: K, value: FormState[K]) =>
     setForm(f => ({ ...f, [name]: value }));
 
@@ -473,6 +520,17 @@ function HostEditorModal({ initial, onClose, onSave }: {
               <Field label="Vless Route ID" name="vless_route_id" value={form.vless_route_id} onChange={set}
                 type="number" placeholder="0" hint="1–65535, пусто/0 = выкл" />
               <Toggle label="Скрыть хост" checked={form.hide_host} onChange={() => set("hide_host", !form.hide_host)} />
+
+              <GroupLabel>Балансировка (selector)</GroupLabel>
+              {balancerErr ? (
+                <p className="hint">{balancerErr}. Настройте панель в разделе Настройки → Remnawave.</p>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  <MultiSelect label="Балансеры" selected={form.balancers} onChange={v => set("balancers", v)}
+                    options={balancerOptions} loading={balancerLoading} placeholder="— не выбрано —" />
+                  <p className="hint">UUID хоста добавится в selector выбранной группы при деплое.</p>
+                </div>
+              )}
 
               <GroupLabel>Исключить из типа подписки</GroupLabel>
               <div className="grid grid-cols-2 gap-2">

@@ -37,6 +37,8 @@ function matchesPrice(h: Hosting, p: PriceQuery): boolean {
 /** Every searchable string of a hosting, already normalised. */
 function haystack(h: Hosting): string[] {
   const out: string[] = [norm(h.name), norm(h.features), norm(h.notes)];
+  for (const tag of h.tags || []) out.push(norm(tag));
+  for (const a of h.asns || []) out.push(norm(a.name), norm(String(a.number)));
   for (const t of h.tariffs || []) {
     out.push(norm(t.name), norm(t.specs), norm(t.bandwidth || ""));
   }

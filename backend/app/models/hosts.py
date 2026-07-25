@@ -1,8 +1,24 @@
 from __future__ import annotations
+import re
 from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from app.services.http_headers import is_safe_host, is_safe_path
+
+
+class BalancerRef(BaseModel):
+    """A balancer group this host joins (Wave-8 §5): the host's uuid is appended
+    to that config-profile's `remnawave.injectHosts[tagPrefix].selector.values`
+    at deploy time. `config_profile_uuid` may differ from the node's own profile."""
+    config_profile_uuid: str = ""
+    tag_prefix: str = ""
+
+    @field_validator("tag_prefix")
+    @classmethod
+    def _safe_tag_prefix(cls, v: str) -> str:
+        if v and not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}", v):
+            raise ValueError("Недопустимый tag_prefix (разрешены A-Z a-z 0-9 . _ -)")
+        return v
 
 
 class HostTemplateBody(BaseModel):
@@ -44,6 +60,9 @@ class HostTemplateBody(BaseModel):
     shuffle_host: bool = False
     allow_insecure: bool = False
     x25519mlkem768: bool = False
+
+    # Wave-8 §5 — balancer groups the created host joins (selector membership).
+    balancers: list[BalancerRef] = Field(default_factory=list)
 
     # Shell-safety (Wave-5 Plan F): these strings are interpolated into
     # root-run nginx/Xray configs at (future) deploy time — reject metacharacters

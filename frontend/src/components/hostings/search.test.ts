@@ -3,9 +3,10 @@ import { matchHosting, matchedCountries, parsePriceQuery } from "./search";
 import type { Hosting } from "./api";
 
 const H = (over: Partial<Hosting> = {}): Hosting => ({
-  id: "h1", name: "Hetzner", website: "", notes: "", features: "BBR",
+  id: "h1", name: "Hetzner", website: "", notes: "", features: "BBR", tags: [],
   tariffs: [{ name: "CX22", specs: "2 vCPU / 4 GB", bandwidth: "1 Гбит/с, 20 ТБ", price: 5.5, currency: "EUR", period: "mo" }],
   locations: [{ city: "Falkenstein", country_code: "DE", lat: 50.5, lng: 12.4, note: "" }],
+  asns: [],
   created_at: 0,
   ...over,
 });
@@ -44,6 +45,20 @@ describe("matchHosting", () => {
   it("matches by channel width — the field added in Ф1", () => {
     expect(matchHosting(H(), "Гбит")).toBe(true);
     expect(matchHosting(H(), "20 ТБ")).toBe(true);
+  });
+
+  it("matches by tag and by ASN (Wave-8 §1/§6)", () => {
+    const h = H({ tags: ["бюджетный", "vps"], asns: [{ number: 49505, name: "Selectel", website: "" }] });
+    expect(matchHosting(h, "бюджет")).toBe(true);
+    expect(matchHosting(h, "vps")).toBe(true);
+    expect(matchHosting(h, "selectel")).toBe(true);
+    expect(matchHosting(h, "49505")).toBe(true);
+  });
+
+  // Documents stored before Wave-8 carry neither `tags` nor `asns`.
+  it("survives a hosting with no tags/asns keys", () => {
+    const legacy = H({ tags: undefined as any, asns: undefined as any });
+    expect(matchHosting(legacy, "hetz")).toBe(true);
   });
 
   it("filters by price expression", () => {
