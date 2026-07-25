@@ -827,29 +827,34 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   9/9; `tsc` чисто; `search.test.ts` 13/13 (+теги/ASN/legacy-без-ключа).
 
 ### 13b. Ф2 — балансер (selector) вместо `$hostid`
-- **Переменной `$hostid` НЕТ** (и не было — идея отменена). Вместо неё host UUID дописывается в РЕАЛЬНЫЙ selector
-  Remnawave: `config["remnawave"]["injectHosts"][].selector={type:"uuids",values:[…]}` (+`tagPrefix`).
-- **`services/xray_selector.py` (чистые хелперы):** `list_uuid_groups(config)->[{tag_prefix,count}]`,
-  `add_uuid`/`remove_uuid`/`remove_uuid_everywhere` → `(new_config, changed)`. Всё deepcopy, дедуп, порядок
-  values сохраняется (= порядок аутбаундов), группа не найдена/битый config → `changed=False`, НЕ бросают.
-- **API:** `GET /api/remnawave/balancers` (`api/settings.py`) — по всем config-профилям активной панели собирает
-  uuids-selector-группы → `[{config_profile_uuid, config_profile_name, tag_prefix, count}]` (лист-payload без
-  `config` → дотягивает `get_config_profile`). Гейт «панель не настроена» → 400.
-- **Модель:** `HostTemplateBody.balancers: list[BalancerRef]`, `BalancerRef{config_profile_uuid, tag_prefix}`
-  (`tag_prefix` charset-валидируется `[A-Za-z0-9_.\-]{1,64}`; `config_profile_uuid` может отличаться от профиля ноды).
-- **Жизненный цикл:** **добавление** — `pipeline._apply_host_balancers` вызывается в `step_create_hosts` СРАЗУ после
-  `create_host` (взяли `created["uuid"]`): для каждого `tpl.balancers` → `get_config_profile` → `add_uuid` →
-  `update_config_profile`. Best-effort, per-balancer failure = warn, не валит деплой; идемпотентно (дедуп).
-  **Удаление** — `node_ops._cleanup_remnawave_balancers` в `_uninstall` при `component=="remnanode"`: матчит хосты
-  ноды по `address==req.domain` → `remove_uuid_everywhere` по всем профилям (страховка — selector и есть накопленный
-  список). Best-effort. ⚠️ **Ограничение:** ручное удаление хоста в панели selector НЕ чистит (нет backend-события);
-  удаление карточки деплоя — клиентское (localStorage), тоже не чистит.
+- **Переменной `$hostid` НЕТ**. Host UUID дописывается в РЕАЛЬНЫЙ selector Remnawave: `remnawave.injectHosts[].
+  selector={type:"uuids",values:[host-uuid…]}` (+`tagPrefix`). **⚠️ ГДЕ ЖИВЁТ SELECTOR (снято с живой панели):**
+  НЕ в config-профилях (там стандартный xray log/dns/inbounds/outbounds/routing, injectHosts НЕТ), а в
+  **XRAY_JSON subscription-templates** — `templateJson.remnawave.injectHosts`. Хост ссылается на такой шаблон через
+  `xrayJsonTemplateUuid`; шаблон-балансер («Auto»/«NL_auto»/«RU_auto») имеет группы вроде `foreign-proxy`/
+  `wl-proxy`/`russian-proxy`. `xrayJsonTemplateUuid` хоста = uuid subscription-template типа XRAY_JSON.
+- **`services/xray_selector.py` (чистые хелперы, работают на `templateJson`):** `list_uuid_groups(tj)->[{tag_prefix,
+  count}]`, `add_uuid`/`remove_uuid`/`remove_uuid_everywhere` → `(new_tj, changed)`. Deepcopy, дедуп, порядок
+  values сохраняется, группа не найдена/битый tj → `changed=False`, НЕ бросают. (Структура `remnawave.injectHosts`
+  идентична и в config, и в templateJson — модуль не менялся при смене источника.)
+- **API:** `GET /api/remnawave/balancers` (`api/settings.py`) — `list_subscription_templates` → фильтр
+  `templateType=="XRAY_JSON"` → per шаблон `get_subscription_template(uuid).templateJson` → `list_uuid_groups` →
+  `[{template_uuid, template_name, tag_prefix, count}]`. Гейт «панель не настроена» → 400.
+- **Модель:** `HostTemplateBody.balancers: list[BalancerRef]`, `BalancerRef{template_uuid, tag_prefix}`
+  (`tag_prefix` charset `[A-Za-z0-9_.\-]{1,64}`).
+- **Жизненный цикл:** **добавление** — `pipeline._apply_host_balancers` в `step_create_hosts` СРАЗУ после
+  `create_host` (взяли `created["uuid"]`): для каждого `tpl.balancers` → `get_subscription_template` → `add_uuid`
+  → `update_subscription_template(template_json=…)`. Best-effort, per-balancer failure = warn, идемпотентно.
+  **Удаление** — `node_ops._cleanup_remnawave_balancers` при `component=="remnanode"`: матчит хосты ноды по
+  `address==req.domain` → `remove_uuid_everywhere` по всем XRAY_JSON-шаблонам. ⚠️ Ручное удаление хоста в панели/
+  удаление карточки деплоя selector НЕ чистят.
 - **Frontend `Hosts.tsx`:** MultiSelect «Балансеры» (вкладка «Расширенные»), опции из `/balancers`, label
-  «<профиль> · <tagPrefix> (N)», value кодируется `<uuid>::<tagPrefix>` (`balKey`/`balParse`; `tag_prefix` без `:`).
-  Гейт «панель не настроена» → hint. `MultiSelect` теперь экспортирует `SelectOption`.
-- **Проверка:** `test_xray_selector.py` (11: add/remove/dedup/порядок/deepcopy/не-найдена/non-uuids-selector/
-  everywhere), `test_hosts.py` (+balancers roundtrip+tag_prefix charset), `test_host_autocreate.py` (+append после
-  create_host/группа-не-найдена→no-write/без balancers→no-write). Все зелёные (36 с Ф1); `tsc` чисто.
+  «<шаблон> · <tagPrefix> (N)» (напр. «Auto · foreign-proxy (4)»), value `<template_uuid>::<tagPrefix>`
+  (`balKey`/`balParse`). Гейт «панель не настроена» → hint. `MultiSelect` экспортирует `SelectOption`.
+- **Проверка:** `test_xray_selector.py` (11), `test_hosts.py` (+balancers roundtrip+tag_prefix charset),
+  `test_host_autocreate.py` (+append в templateJson после create_host/группа-не-найдена→no-write/без balancers→
+  no-write) — 36 зелёных; `tsc` чисто. **Проверено на живой панели:** read даёт 5 групп в 3 XRAY_JSON-шаблонах;
+  add→PATCH→read (count +1) и remove_uuid_everywhere→PATCH→read (restore) round-trip на реальном шаблоне «Auto».
 
 ### 13c. Ф3 — «Анализ подписки» (§7)
 - **`services/subscription_analyze.py`** — вход url/домен/ip (`classify_input`). URL → `fetch_subscription`

@@ -36,7 +36,7 @@ class _FakeClient:
     def __init__(self, fail_on: set[str] | None = None):
         self.calls: list[dict] = []
         self.fail_on = fail_on or set()
-        self.profiles: dict[str, dict] = {}     # uuid → raw xray config
+        self.templates: dict[str, dict] = {}    # uuid → templateJson (XRAY_JSON)
         self.updates: list[tuple[str, dict]] = []
 
     async def create_host(self, **kwargs):
@@ -46,12 +46,14 @@ class _FakeClient:
             raise RemnavaveError(400, "duplicate remark")
         return {"uuid": "host-uuid-xyz"}
 
-    async def get_config_profile(self, uuid):
-        return {"uuid": uuid, "config": self.profiles.get(uuid, {})}
+    async def get_subscription_template(self, uuid):
+        return {"uuid": uuid, "templateType": "XRAY_JSON",
+                "templateJson": self.templates.get(uuid, {})}
 
-    async def update_config_profile(self, uuid, config):
-        self.updates.append((uuid, config))
-        self.profiles[uuid] = config
+    async def update_subscription_template(self, uuid, *, template_json=None,
+                                           encoded_template_yaml=None):
+        self.updates.append((uuid, template_json))
+        self.templates[uuid] = template_json
         return {"uuid": uuid}
 
 
@@ -183,31 +185,31 @@ def test_map_host_optional_defaults_dropped():
     assert opt == {}
 
 
-# ── Wave-8 §5 — balancer selector hook ─────────────────────────
+# ── Wave-8 §5 — balancer selector hook (XRAY_JSON subscription-templates) ──────
 def test_balancer_uuid_appended_after_create(monkeypatch):
     import app.services.storage as storage
     tpl = [{"id": "hb", "remark": "R", "inbound": "ib", "port": 443,
-            "balancers": [{"config_profile_uuid": "prof-1", "tag_prefix": "proxy"}]}]
+            "balancers": [{"template_uuid": "tpl-1", "tag_prefix": "proxy"}]}]
     monkeypatch.setattr(storage, "load_hosts", lambda *a, **k: tpl)
     client = _FakeClient()
-    client.profiles["prof-1"] = {"remnawave": {"injectHosts": [
+    client.templates["tpl-1"] = {"remnawave": {"injectHosts": [
         {"tagPrefix": "proxy", "selector": {"type": "uuids", "values": []}}]}}
     task = _FakeTask()
     asyncio.run(step_create_hosts(task, client, _req(), NODE_UUID, PROFILE_UUID, ["hb"]))
     assert len(client.updates) == 1
-    puuid, cfg = client.updates[0]
-    assert puuid == "prof-1"
-    # the created host's uuid landed in the group's selector
-    assert cfg["remnawave"]["injectHosts"][0]["selector"]["values"] == ["host-uuid-xyz"]
+    tuuid, tj = client.updates[0]
+    assert tuuid == "tpl-1"
+    # the created host's uuid landed in the template's selector
+    assert tj["remnawave"]["injectHosts"][0]["selector"]["values"] == ["host-uuid-xyz"]
 
 
 def test_balancer_group_missing_no_update(monkeypatch):
     import app.services.storage as storage
     tpl = [{"id": "hb", "remark": "R", "inbound": "ib", "port": 443,
-            "balancers": [{"config_profile_uuid": "prof-1", "tag_prefix": "nope"}]}]
+            "balancers": [{"template_uuid": "tpl-1", "tag_prefix": "nope"}]}]
     monkeypatch.setattr(storage, "load_hosts", lambda *a, **k: tpl)
     client = _FakeClient()
-    client.profiles["prof-1"] = {"remnawave": {"injectHosts": [
+    client.templates["tpl-1"] = {"remnawave": {"injectHosts": [
         {"tagPrefix": "proxy", "selector": {"type": "uuids", "values": []}}]}}
     task = _FakeTask()
     asyncio.run(step_create_hosts(task, client, _req(), NODE_UUID, PROFILE_UUID, ["hb"]))
