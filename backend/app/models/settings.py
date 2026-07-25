@@ -122,15 +122,19 @@ class AiConfig(BaseModel):
 
 class HaproxyConfig(BaseModel):
     """Wave-7: connection to a NodeFlow HAProxy panel (deploy + proxy integration).
-    node-installer registers a per-account NodeFlow instance (URL + PANEL_ADMIN_TOKEN)
-    and proxies its `/api/v1/*` so the «HAPROXY» nav group can drive the real agent/
-    HAProxy engine. The admin token is an infra-control secret → Fernet-encrypted
-    (`admin_token_enc`), like the MCP/cliproxy vaults; the plaintext is NEVER returned
-    to the client (the config endpoint exposes only `has_token`)."""
+
+    Two modes:
+    - `local` (default) — node-installer auto-deploys a SHARED local NodeFlow stack
+      (services/nodeflow_server.py) and proxies it. The admin token + PKI live GLOBALLY
+      (not here); `base_url`/`admin_token_enc` are ignored.
+    - `remote` — the account registers an EXISTING panel (URL + PANEL_ADMIN_TOKEN). The
+      admin token is an infra-control secret → Fernet-encrypted (`admin_token_enc`), like
+      the MCP/cliproxy vaults; the plaintext is NEVER returned (only `has_token`)."""
 
     enabled: bool = False
-    base_url: str = ""  # NodeFlow panel base URL (e.g. https://haproxy.example.com)
-    admin_token_enc: str = ""  # Fernet ciphertext (base64) of PANEL_ADMIN_TOKEN
+    mode: Literal["local", "remote"] = "local"
+    base_url: str = ""  # remote mode: NodeFlow panel base URL
+    admin_token_enc: str = ""  # remote mode: Fernet ciphertext of PANEL_ADMIN_TOKEN
 
 
 class AppearanceConfig(BaseModel):

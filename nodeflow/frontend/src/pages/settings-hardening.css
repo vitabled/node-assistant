@@ -1,0 +1,50 @@
+.nf-panel-facts {
+  margin: 14px;
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--nf-border-soft);
+  border-radius: var(--nf-radius-control);
+  background: var(--nf-border-soft);
+}
+
+.nf-panel-facts > div {
+  min-width: 0;
+  padding: 10px 11px;
+  background: var(--nf-surface);
+}
+
+.nf-panel-facts span,
+.nf-panel-facts strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nf-panel-facts span {
+  color: var(--nf-text-tertiary);
+  font-size: 10px;
+}
+
+.nf-panel-facts strong {
+  margin-top: 5px;
+  color: var(--nf-text);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.nf-panel-facts strong:has(svg) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nf-panel-facts strong svg {
+  flex: 0 0 auto;
+  color: var(--nf-text-secondary);
+}
+
+.nf-panel-facts-note {
+  margin: 0 14px 14px;
+}

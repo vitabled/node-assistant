@@ -6,7 +6,7 @@
 // with a human message parsed from BOTH our `{detail}` and NodeFlow's `{error}` shapes.
 
 import type {
-  HaproxyConnState, DashboardOverview, NodeRecord, NodeOperational, RouteRecord,
+  HaproxyConnState, HaproxyLocalStatus, DashboardOverview, NodeRecord, NodeOperational, RouteRecord,
   NodeTraffic, TrafficHistory, NodeFirewallPolicy, AgentRelease, HostKeyResult,
   BootstrapNodeRequest, BootstrapJobResponse, HAProxyControlState,
 } from "./contracts";
@@ -43,14 +43,20 @@ async function nf<T>(subpath: string, init?: RequestInit): Promise<T> {
 
 const j = (b: unknown) => JSON.stringify(b);
 
-export interface HaproxyConfigInput { enabled: boolean; base_url: string; admin_token: string }
+export interface HaproxyConfigInput { enabled: boolean; mode: "local" | "remote"; base_url: string; admin_token: string }
 export interface HaproxyTestResult { reachable: boolean; authenticated: boolean; version?: string; detail: string }
+export interface HaproxyDeployResult { ok: boolean; started: boolean; warning?: string; local: HaproxyLocalStatus }
 
 export const haproxyApi = {
   // ── connection (our backend) ──
   getConfig: () => be<HaproxyConnState>("/config"),
   saveConfig: (b: HaproxyConfigInput) => be<HaproxyConnState & { ok: boolean }>("/config", { method: "POST", body: j(b) }),
   test: () => be<HaproxyTestResult>("/test", { method: "POST" }),
+
+  // ── local NodeFlow stack ──
+  deployLocal: (san_host = "") => be<HaproxyDeployResult>("/deploy", { method: "POST", body: j({ san_host }) }),
+  stopLocal: () => be<{ ok: boolean; local: HaproxyLocalStatus }>("/stop", { method: "POST" }),
+  localStatus: () => be<HaproxyLocalStatus>("/local/status"),
 
   // ── dashboard ──
   overview: (range = "24h") => nf<DashboardOverview>(`overview?range=${encodeURIComponent(range)}`),

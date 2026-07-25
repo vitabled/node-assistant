@@ -713,8 +713,8 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 > Архитектура (выбор пользователя): **deploy + proxy** — node-installer РЕГИСТРИРУЕТ инстанс NodeFlow (URL +
 > `PANEL_ADMIN_TOKEN`) пер-аккаунт и проксирует его `/api/v1/*`, а разделы группы «HAPROXY» — нативные React-
 > страницы, бьющие в наш прокси. Реальный Go-агент + HAProxy-движок NodeFlow ПЕРЕИСПОЛЬЗУЕТСЯ, НЕ переписывается.
-> План `docs/superpowers/plans/2026-07-25-haproxy-nodeflow-integration.md`. Install-kit распакован только в
-> scratchpad (Go+Postgres+mTLS+agent-бинарь) — в репозиторий НИЧЕГО из него не копировалось.
+> План `docs/superpowers/plans/2026-07-25-haproxy-nodeflow-integration.md`. **Обновление (2026-07-25):** по
+> умолчанию локальный NodeFlow **авто-деплоится** (см. §12b); «существующая панель» стала опцией.
 
 - **Что такое NodeFlow:** отдельный продукт — Go-панель + Postgres + mTLS-PKI + скомпилированный node-agent +
   подписанные релизы. Ноды гоняют агент по mTLS, тот управляет **HAProxy** TCP-relay «маршрутами». Панель:
@@ -746,9 +746,52 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   (off/observe/apply + порты), `HaproxyReleases` (список+удаление; загрузка/подпись — в самой NodeFlow). Nav-группа
   «HAPROXY» в `Sidebar.tsx` (7 табов, после Remnawave), `Tab`-юнион + `CRUMB` + рендер-свитч в `App.tsx`.
   Тесты `routeModel.test.ts` (13: payload any_tcp/sni/unix, expected_version, квоты, валидация, round-trip, asList).
-- **Отклонения/заметки:** MVP «deploy» = **register-by-URL** (аккаунт сам поднимает NodeFlow из install-kit,
-  затем вписывает URL+токен). SSH-деплой стека NodeFlow через `install-panel.sh` — ОТЛОЖЕН (тяжело: заливка
-  300 КБ исходников + 7.7 МБ бинаря агента + генерация PKI/signing-key). Прокси даёт все функции независимо от
-  способа поднятия. Дженерик-прокси не перечисляет ~30 эндпоинтов и авто-покрывает новые версии NodeFlow.
+- **Отклонения/заметки:** Дженерик-прокси не перечисляет ~30 эндпоинтов и авто-покрывает новые версии NodeFlow.
   Reinstall ноды (нужен полный bootstrap-body с кредами) в UI пока НЕ вынесен — доступны вкл/выкл HAProxy, ротация
-  кредов, удаление. Verify: `pytest tests/test_haproxy.py` (7) + Docker `vitest routeModel.test.ts` (13) + `tsc`.
+  кредов, удаление. Verify: `pytest tests/test_haproxy.py test_nodeflow_server.py` (15) + Docker
+  `vitest routeModel.test.ts` (13) + `tsc`.
+
+## 12b. HAPROXY — локальный авто-деплой NodeFlow (по умолчанию)
+> Пользователь (2026-07-25): «Пусть добавление существующей панели — лишь опция; по умолчанию автоматически
+> деплоится и включается локальная версия». Выбор: **полный авто-деплой** (вендоринг исходников + Go/Node-билд +
+> DooD-стек). `HaproxyConfig.mode: local(default)|remote`.
+
+- **Вендоринг:** исходники NodeFlow скопированы в `nodeflow/` (157 файлов, апстрим без изменений, кроме
+  добавленного `Dockerfile.migrate`; **лицензии у апстрима НЕТ** — задокументировано в `nodeflow/VENDORED.md`, как
+  вендоренный mihomo). Панель **собирается из исходников** (публичного образа нет).
+- **Compose (профиль `nodeflow-build`, как MCP):** сервисы `nodeflow-panel` (`Dockerfile.panel`, Go 1.25 + React
+  билд → `node-installer-nodeflow-panel:latest`) и `nodeflow-migrate` (`postgres:17-alpine` + запечённые миграции +
+  migrate.sh → `node-installer-nodeflow-migrate:latest`). Compose их НЕ стартует; бэкенд оркестрирует по DooD.
+  Билд: `docker compose --profile nodeflow-build build nodeflow-panel nodeflow-migrate`.
+- **`services/nodeflow_server.py` — оркестратор (SHARED singleton, как xray-checker/mcp/cliproxy):**
+  - **PKI в Python (`cryptography`), НЕ openssl/root:** `generate_pki(san_host)` — Ed25519 CA + серверный серт
+    (SAN = ПУБЛИЧНЫЙ адрес хоста, агенты идут на него по mTLS :4200) + Ed25519 update-signing-key. **Идемпотентно** —
+    регенерация CA осиротила бы уже зачисленные ноды. Ключи 0440 root:65532 (или 0444 fallback в тестах).
+  - **Глобальный волт** `DATA_DIR/nodeflow/state.json` (Fernet): admin-токен + пароль postgres генерятся ОДИН раз
+    (`ensure_state`), НЕ в per-account settings (стек общий). `san_host` фиксируется при первом деплое.
+  - **`deploy()`**: docker/образы есть? → PKI → postgres(`nodeflow-postgres`) → ждать `pg_isready` → миграции
+    (одноразовый `--rm` образ, миграции запечены → **без host-path-маунта** под DooD) → инициализация прав
+    releases-тома → панель(`nodeflow-panel`) → ждать `/healthz`. Публикуется наружу ТОЛЬКО порт агента **4200**;
+    UI-порт 8080 — по имени контейнера через наш прокси, наружу НЕ публикуется.
+  - **PKI/TLS монтируются в панель через node-data `volume-subpath`** (только `nodeflow/pki`+`nodeflow/tls`, НЕ весь
+    том с данными аккаунтов — третьесторонняя панель не должна видеть чужое). Имя тома резолвится инспектом
+    СОБСТВЕННОГО контейнера (`_node_data_volume`, префикс compose-проекта неизвестен заранее).
+  - `deploy_bg()` — фоновый деплой (~60-90с) с single-flight + `_DEPLOY{running,error}`; `POST /deploy` отвечает
+    сразу, фронт поллит `/local/status`. Docker/образы отсутствуют → warning (не 500), как MCP.
+  - Персистентность: у контейнеров `--restart unless-stopped` → переживают рестарт бэкенда, отдельный lifespan-
+    autostart НЕ нужен.
+- **API (`api/haproxy.py`):** `_client_or_400` ветвится по mode — **local**: `internal_base_url()` +
+  глобальный токен + `allow_internal=True` (SSRF-гард ЭКЗЕМПТ для имени контейнера, как xray_checker); **remote**:
+  per-account base_url+токен. Ручки: `GET/POST /config` (+mode), `POST /deploy` (фон, ставит local+enabled),
+  `POST /stop`, `GET /local/status`. `nodeflow_client.NodeFlowClient(..., allow_internal)` пропускает гард только
+  для внутреннего URL.
+- **Frontend `HaproxyConnect`:** сегмент «Локальная (авто)» / «Существующая панель». Local: статус контейнеров +
+  «Развернуть/Переразвернуть»/«Остановить» + опц. `san_host` + **авто-деплой ОДИН раз** на маунте (нет токена +
+  образы собраны + idle) + плашка-требование (публичный хост, порт 4200). Remote: прежняя форма URL+токен.
+- **⚠️ Требования локального режима:** хост node-installer СТАНОВИТСЯ хостом NodeFlow-панели — нужен публичный
+  IP/DNS и открытый **4200/tcp** (агенты подключаются туда). SAN авто из `backend_ip.get_backend_ip()`, override в
+  форме. Стек ОБЩИЙ на все аккаунты (как прочие DooD-синглтоны) — все видят одни ноды NodeFlow.
+- **Verify:** `pytest tests/test_nodeflow_server.py` (5: PKI подпись/SAN IP+DNS/идемпотентность, волт-шифрование,
+  argv-билдеры) + `test_haproxy.py` (10: local-default, remote-SSRF, 409-local/400-remote гейты, forward,
+  images-not-built warning, internal-SSRF-exempt). `docker compose --profile nodeflow-build build` (migrate собран;
+  panel — Go/Node билд). `tsc` чисто.

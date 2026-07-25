@@ -73,6 +73,32 @@ services:
     networks:
       - app-net
 
+  # -- Local NodeFlow HAProxy panel (Wave-7 «HAPROXY» local deploy) --------
+  # Vendored upstream source in ./nodeflow. Built here so the backend's DooD
+  # orchestrator (services/nodeflow_server.py) can `docker run` the images —
+  # like the MCP container, compose does NOT start them (profile-gated). Build:
+  #   docker compose --profile nodeflow-build build nodeflow-panel nodeflow-migrate
+  # The backend then generates PKI/admin-token/signing-key and brings up
+  # postgres → migrate → panel on this network, publishing only the agent mTLS
+  # port (4200) to the host; the browser UI (8080) is reached by container name
+  # through the backend proxy and is never host-published.
+  nodeflow-panel:
+    build:
+      context: ./nodeflow
+      dockerfile: Dockerfile.panel
+    image: node-installer-nodeflow-panel:latest
+    profiles: ["nodeflow-build"]
+    networks:
+      - app-net
+  nodeflow-migrate:
+    build:
+      context: ./nodeflow
+      dockerfile: Dockerfile.migrate
+    image: node-installer-nodeflow-migrate:latest
+    profiles: ["nodeflow-build"]
+    networks:
+      - app-net
+
   # -- CLIProxyAPI gateway (Wave-7 Plan F) ------------------------
   # LLM gateway reached with OAuth PROVIDER ACCOUNTS instead of API keys.
   # The backend orchestrates it over docker.sock (like the xray-checker and the
