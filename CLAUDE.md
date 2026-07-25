@@ -868,10 +868,17 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   То же у **subs-aggregator** (`_fetch_sub_lines`/`_safe_fetch(user_agent)`, детект по `_has_link_lines`: строка
   стартует со схемы vless/vmess/…) — единственная точка, где мы фетчим подписку для xray-checker (сам Go-контейнер
   в прямом режиме мы не трогаем). Гео/RDAP-клиент шлёт нейтральный `node-assistant`
-  (переиспользованы из `subscription_import`) → хосты. Per-IP: **факт. гео+ASN** = `ip-api.com/json` (fallback
-  `ipwho.is`), **реестр. страна** = RDAP `rdap.org/ip`, **сайт ASN** = RDAP `rdap.org/autnum` (кэш по ASN).
-  Внешние API — ФИКСИРОВАННЫЕ публичные хосты (не user-controlled → не через net_guard); ссылки/вход в логи не
-  попадают.
+  (переиспользованы из `subscription_import`) → хосты. Per-IP (`_resolve_ip`): **ASN + базовое гео** = `ip-api.com/
+  json` (fallback `ipwho.is`); **факт. гео = ТРАССИРОВКА** (`_traceroute_last_hop`, ниже); **реестр. страна** = RDAP
+  `rdap.org/ip` → **RIPEstat `rir-geo` fallback** (`stat.ripe.net`, закрывает ARIN/US-дыры RDAP); **сайт ASN** = RDAP
+  `rdap.org/autnum` → **PeeringDB fallback** (`peeringdb.com/api/net?asn=`, кэш по ASN). Внешние API — ФИКСИРОВАННЫЕ
+  публичные хосты (не user-controlled → не через net_guard); ссылки/вход в логи не попадают.
+- **⚠️ Факт. гео через traceroute:** `_traceroute_last_hop(ip)` запускает системный `traceroute -n -q1 -w1 -m12`
+  (Linux) / `tracert -d` (Windows), берёт ПОСЛЕДНИЙ публичный хоп (сам хост если отвечает, иначе роутер ДЦ — его
+  гео ближе к реальности, чем IP-база) и геолоцирует его через ip-api; если traceroute недоступен/чёрная дыра →
+  fallback на гео самого destination. ASN всегда с destination. Гео теперь ОТНОСИТЕЛЬНО сервера бэкенда (откуда
+  трасса) — это и нужно. Бинарь `traceroute` добавлен в backend `Dockerfile`; Docker по умолчанию даёт `NET_RAW` +
+  бэкенд root → работает без `cap_add`. `_TRACE_SEM=8`, `_TRACE_TIMEOUT=20`, `shutil.which` guard.
 - **⚠️ Дедуп по ИМЕНИ хоста, не по IP (feedback):** `analyze` группирует ссылки по HOSTNAME (каждый адрес
   резолвится ОДИН раз), затем сливает по IP. Иначе один хост (напр. фронт `github.com`, встречается в 3 ссылках
   через domain-fronting) + round-robin DNS давали 3 строки с разными IP. Имена ссылок (`#fragment`/vmess `ps`)
@@ -880,10 +887,10 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   «разбить на реальные хосты» НЕЛЬЗЯ (реальный бэкенд скрыт за фронтом) — показываем имя + даём удалить строку.
 - **⚠️ RDAP `_rdap_get`: `follow_redirects=True` ОБЯЗАТЕЛЕН** — `rdap.org` 301-редиректит на RIR-RDAP
   (`rdap.db.ripe.net`/`rdap.arin.net`/…); без этого «Реестр» был пуст ВЕЗДЕ (клиент analyze дефолтно
-  `follow_redirects=False`). + retries (Cloudflare-фронт rdap.org иногда ConnectError'ит). RIPE/APNIC отдают
-  top-level `country` (заполняется); **ARIN (US) top-level country НЕ отдаёт** → `_entity_country` (скан org-
-  entity на 2-буквенный код) как fallback, но часто пусто → прочерк на US/ARIN (напр. github-фронт). На реале
-  6/10 заполнено, ловит расхождение факт↔реестр (hipes1: факт CA / реестр EE).
+  `follow_redirects=False`). + retries (Cloudflare-фронт rdap.org иногда ConnectError'ит). ARIN top-level country
+  НЕ отдаёт → раньше прочерк; теперь **RIPEstat `rir-geo` fallback заполняет 10/10** (github→US, 206.x→US при факт-
+  гео SG = реальное расхождение, 77.x→AE). Сайт ASN: RDAP autnum часто пуст → **PeeringDB заполнил 5/10** (github/
+  plym/albahost/vdsina/regxa; остальные реально без сайта).
 - `group_to_hostings` — одна `HostingBody` на ASN (дедуп по номеру, локации = уник. факт. cc/city, имена ссылок →
   `notes` «Из подписки: …», записи без ASN пропускаются).
 - **`api/sub_analysis.py`** (`/api/subscription-analyze`, под `_auth`): `POST ""` (dry-run → `{kind, results:[{host,
@@ -891,11 +898,14 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   `POST /to-hostings` (`{results}` → `group_to_hostings` → **upsert** в `hostings_store`: матч по ASN-номеру ИЛИ
   имени → мерж локаций, иначе новая карточка; нет ASN → 400). Роутер подключён в `main.py`.
 - **Frontend `components/SubscriptionAnalyze.tsx`** — nav-таб «Анализ подписки» (группа **«Справка»**, `Tab
-  "subscription-analyze"`, `ScanSearch`). Инпут → таблица (Название/Хост/IP/ASN+сайт/факт-гео `FlagChip`/реестр +
-  `AlertTriangle` при расхождении cc + **✕ убрать строку из выдачи** — удалённые не идут в «Добавить в хостинги»).
-- **Проверка:** `test_subscription_analyze.py` (12: classify/parse_as/ip_public/group-dedup+notes/analyze-dedup-
-  hostname+names/SSRF-reject/UA-default-first/UA-fallback/route-empty-400/route-monkeypatched/to-hostings-merge/
-  no-asn-400). `subs-aggregator/test_app.py` 12/12. `tsc` чисто. Проверено вживую на реальной подписке.
+  "subscription-analyze"`, `ScanSearch`). Инпут → таблица (Название/Хост/IP/ASN/факт-гео `FlagChip`/Реестр/**Website**
+  + `AlertTriangle` при расхождении cc + **✕ убрать строку** — удалённые не идут в «Добавить в хостинги»).
+  **Колонки resizable:** `table-layout:fixed` + `<colgroup>` + per-column `widths` state; тянуть за правый край
+  заголовка (`startResize`, `col-resize`); последняя колонка (✕) фиксированная. Страница расширена до `max-w-6xl`.
+- **Проверка:** `test_subscription_analyze.py` (13: classify/parse_as/ip_public/group-dedup+notes/analyze-dedup-
+  hostname+names/**resolve_ip-fallbacks (RIPEstat+PeeringDB+trace-hop)**/SSRF-reject/UA-default-first/UA-fallback/
+  route-empty-400/route-monkeypatched/to-hostings-merge/no-asn-400). `subs-aggregator/test_app.py` 12/12. `tsc`
+  чисто. **Проверено вживую:** registry 10/10 (RIPEstat), website 5/10 (PeeringDB), traceroute-гео, ~11с.
 
 ### 13d. Ф4 — автобэкап → Telegram (§4)
 - **`AutoBackupConfig`** на `AppSettings` (`models/settings.py`): `{enabled, interval_hours(1..8760), include_secrets,

@@ -159,6 +159,46 @@ def test_fetch_ua_fallback_to_client(monkeypatch):
 
 
 # ── routes ─────────────────────────────────────────────────────
+def test_resolve_ip_fallbacks(monkeypatch):
+    """Registry falls back RDAP→RIPEstat; ASN website falls back RDAP→PeeringDB;
+    actual geo comes from the traceroute last hop when it differs from the dest."""
+    import asyncio
+
+    async def ip_api(ip, c):
+        # dest 1.1.1.1 → ASN + US baseline; trace hop 2.2.2.2 → DE
+        return ({"cc": "US", "city": "NY", "asn_number": 42, "asn_name": "Foo"}
+                if ip == "1.1.1.1"
+                else {"cc": "DE", "city": "Berlin", "asn_number": 0, "asn_name": ""})
+
+    async def rdap_cc(ip, c):
+        return ""                                    # RDAP empty → RIPEstat used
+
+    async def ripestat(ip, c):
+        return "GB"
+
+    async def rdap_autnum(asn, c):
+        return ("FooNet", "")                        # no website → PeeringDB used
+
+    async def peeringdb(asn, c):
+        return "https://foo.example"
+
+    async def trace(ip):
+        return "2.2.2.2"                             # hop differs from dest
+
+    monkeypatch.setattr(sa, "_ip_api", ip_api)
+    monkeypatch.setattr(sa, "_rdap_ip_cc", rdap_cc)
+    monkeypatch.setattr(sa, "_ripestat_cc", ripestat)
+    monkeypatch.setattr(sa, "_rdap_autnum", rdap_autnum)
+    monkeypatch.setattr(sa, "_peeringdb_website", peeringdb)
+    monkeypatch.setattr(sa, "_traceroute_last_hop", trace)
+
+    row = asyncio.run(sa._resolve_ip("1.1.1.1", None, {}))
+    assert row["geo_registry"]["cc"] == "GB"          # RIPEstat fallback
+    assert row["asn"]["website"] == "https://foo.example"  # PeeringDB fallback
+    assert row["asn"]["number"] == 42                 # ASN from the destination
+    assert row["geo_actual"]["cc"] == "DE"            # geo from the trace hop
+
+
 def test_analyze_route_empty_input():
     a = _auth()
     assert client.post("/api/subscription-analyze", headers=a, json={"input": ""}).status_code == 400
