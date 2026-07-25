@@ -83,3 +83,43 @@ def test_tariff_without_bandwidth_still_reads():
     })
     assert r.status_code == 201
     assert r.json()["tariffs"][0]["bandwidth"] == ""
+
+
+# ── Wave-8 §1/§6: tags + ASN ───────────────────────────────────
+def test_tags_normalised():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Tagged",
+        # dupes, whitespace, CR/LF, over-length, plus a fill past the 10-tag cap
+        "tags": ["  vps ", "vps", "de\r\nrack", "x" * 40] + [f"t{i}" for i in range(12)],
+    })
+    assert r.status_code == 201
+    tags = r.json()["tags"]
+    assert "vps" in tags and tags.count("vps") == 1          # trimmed + deduped
+    assert "de rack" in tags                                  # CR/LF → space
+    assert all(len(t) <= 24 for t in tags)                    # length cap
+    assert len(tags) <= 10                                    # count cap
+
+
+def test_tags_pool_endpoint():
+    a = _auth()
+    client.post("/api/hostings", headers=a, json={"name": "A", "tags": ["ru", "budget"]})
+    client.post("/api/hostings", headers=a, json={"name": "B", "tags": ["budget", "eu"]})
+    pool = client.get("/api/hostings/tags", headers=a).json()
+    assert pool == ["budget", "eu", "ru"]                      # sorted union, deduped
+    # isolation: another account's pool is empty
+    assert client.get("/api/hostings/tags", headers=_auth()).json() == []
+
+
+def test_asns_roundtrip():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Sel",
+        "asns": [{"number": 49505, "name": "Selectel", "website": "https://selectel.ru"}],
+    })
+    assert r.status_code == 201
+    asn = r.json()["asns"][0]
+    assert asn["number"] == 49505 and asn["name"] == "Selectel"
+    # negative ASN rejected
+    assert client.post("/api/hostings", headers=a,
+                       json={"name": "X", "asns": [{"number": -1}]}).status_code == 422

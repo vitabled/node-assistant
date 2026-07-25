@@ -51,3 +51,28 @@ async def send_message(bot_token: str, chat_id: str, text: str) -> dict[str, Any
     except Exception as exc:
         log.warning("telegram send error: %s", redact(str(exc), bot_token))
         return {"ok": False, "error": redact(str(exc), bot_token)}
+
+
+async def send_document(
+    bot_token: str, chat_id: str, filename: str, data: bytes, caption: str = ""
+) -> dict[str, Any]:
+    """POST to sendDocument (multipart) — used by the auto-backup to ship an export
+    archive (Wave-8 §4). Returns {ok: bool}; never raises, never logs the token."""
+    if not bot_token or not chat_id:
+        return {"ok": False, "error": "missing bot_token or chat_id"}
+    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+    files = {"document": (filename, data, "application/gzip")}
+    payload: dict[str, str] = {"chat_id": chat_id}
+    if caption:
+        payload["caption"] = caption[:1024]
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, data=payload, files=files)
+        if resp.status_code >= 400:
+            detail = redact(resp.text[:300], bot_token)
+            log.warning("telegram sendDocument failed: HTTP %s %s", resp.status_code, detail)
+            return {"ok": False, "error": f"HTTP {resp.status_code}"}
+        return {"ok": True}
+    except Exception as exc:
+        log.warning("telegram sendDocument error: %s", redact(str(exc), bot_token))
+        return {"ok": False, "error": redact(str(exc), bot_token)}

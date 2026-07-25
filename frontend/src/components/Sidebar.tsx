@@ -4,7 +4,7 @@ import {
   KeyRound, SlidersHorizontal, Users,
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
   Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen, FileJson,
-  LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package,
+  LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package, ScanSearch,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -15,7 +15,7 @@ export type Tab =
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
   | "haproxy-overview" | "haproxy-nodes" | "haproxy-routes" | "haproxy-traffic"
   | "haproxy-firewall" | "haproxy-releases"
-  | "hostings-map" | "hostings-list" | "library"
+  | "hostings-map" | "hostings-list" | "subscription-analyze" | "library"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
@@ -69,9 +69,10 @@ const HAPROXY_TABS: NavItemDef[] = [
 
 // Группа «Справка» (бывш. «Хостинги»): карта хостингов + каталог + библиотека знаний.
 const HOSTINGS_TABS: NavItemDef[] = [
-  { tab: "hostings-map",  label: "Карта хостингов", Icon: MapIcon  },
-  { tab: "hostings-list", label: "Хостинги",        Icon: Server   },
-  { tab: "library",       label: "Библиотека",      Icon: BookOpen },
+  { tab: "hostings-map",         label: "Карта хостингов", Icon: MapIcon    },
+  { tab: "hostings-list",        label: "Хостинги",        Icon: Server     },
+  { tab: "subscription-analyze", label: "Анализ подписки", Icon: ScanSearch },
+  { tab: "library",              label: "Библиотека",      Icon: BookOpen   },
 ];
 
 const INFRA_TABS: NavItemDef[] = [

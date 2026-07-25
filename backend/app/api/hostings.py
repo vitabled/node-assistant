@@ -21,6 +21,18 @@ async def list_hostings() -> list[dict[str, Any]]:
     return store.list_hostings()
 
 
+@router.get("/tags")
+async def list_tags() -> list[str]:
+    """Account-level tag pool for autocomplete (Wave-8 §1) — the sorted union of
+    every hosting's tags. Not a separate entity; derived on read."""
+    seen: set[str] = set()
+    for h in store.list_hostings():
+        for t in h.get("tags", []) or []:
+            if isinstance(t, str) and t:
+                seen.add(t)
+    return sorted(seen)
+
+
 @router.post("", status_code=201)
 async def create_hosting(body: HostingBody) -> dict[str, Any]:
     try:

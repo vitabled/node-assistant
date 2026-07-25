@@ -804,3 +804,115 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   argv-билдеры) + `test_haproxy.py` (10: local-default, remote-SSRF, 409-local/400-remote гейты, forward,
   images-not-built warning, internal-SSRF-exempt). `docker compose --profile nodeflow-build build` (migrate собран;
   panel — Go/Node билд). `tsc` чисто.
+
+## 13. Волна 8 — теги/токен/ASN · балансер(selector) · анализ подписки · автобэкап · Обновления
+> План `docs/superpowers/plans/2026-07-25-wave8-tags-updates-backup-balancer-subanalysis.md` (7 пунктов, 5 фаз
+> Ф1–Ф5). Всё per-account, кроме §3 «Обновления» (глобально, host-level). Отгружаемые дельты ниже.
+
+### 13a. Ф1 — теги хостингов · просмотр токена · поле ASN
+- **Теги (§1):** `HostingBody.tags: list[str]` (`models/hostings.py`, `field_validator` нормализует: `" ".join(
+  raw.split())` → трим+схлоп пробелов/CR/LF, `[:24]`, дедуп, ≤10). Пул тегов НЕ отдельная сущность —
+  `GET /api/hostings/tags` отдаёт `sorted(set(all tags))` для автодополнения (объявлен ДО параметризованных путей;
+  `GET /{id}` нет — конфликта нет). Фронт: `hostings/TagInput.tsx` (чипы + инпут с `<datalist>` из `/tags`,
+  зеркалит бэкенд-лимиты), встроен в редактор `HostingsCatalog`. Чипы на карточке **кликабельны → фильтр каталога
+  по тегу** (`tagFilter` state, клиентский). `search.ts::haystack` матчит теги. ⚠️ Старые записи без ключа `tags`/
+  `asns` — везде читать `(h.tags||[])`/`(h.asns||[])` (стор не ревалидирует через модель, отдаёт сырой JSON).
+- **Просмотр токена (§2):** `Settings.tsx::SettingField` — password-поля получили reveal-тумблер (Eye/EyeOff,
+  локальный `reveal` state, `type` password↔text). Покрывает и Remnawave api_token, и CF-токен. Токен и так уже
+  в браузере (plaintext в settings.json) — это защита от «подглядывания через плечо», не секьюрити-граница.
+- **ASN (§6):** `HostingBody.asns: list[AsnRef]`, `AsnRef{number:int ge=0, name:str, website:str}` (структурный,
+  не список строк — §7 пишет name/website). Редактор в `HostingsCatalog` (номер/имя/сайт), блок «ASN» в details.
+  Заполняется вручную ИЛИ кнопкой §7. `search.ts` матчит имя+номер ASN.
+- **Проверка:** `test_hostings.py` (+3: нормализация тегов/лимиты, `/tags` дедуп+изоляция, asns roundtrip+ge=0) —
+  9/9; `tsc` чисто; `search.test.ts` 13/13 (+теги/ASN/legacy-без-ключа).
+
+### 13b. Ф2 — балансер (selector) вместо `$hostid`
+- **Переменной `$hostid` НЕТ** (и не было — идея отменена). Вместо неё host UUID дописывается в РЕАЛЬНЫЙ selector
+  Remnawave: `config["remnawave"]["injectHosts"][].selector={type:"uuids",values:[…]}` (+`tagPrefix`).
+- **`services/xray_selector.py` (чистые хелперы):** `list_uuid_groups(config)->[{tag_prefix,count}]`,
+  `add_uuid`/`remove_uuid`/`remove_uuid_everywhere` → `(new_config, changed)`. Всё deepcopy, дедуп, порядок
+  values сохраняется (= порядок аутбаундов), группа не найдена/битый config → `changed=False`, НЕ бросают.
+- **API:** `GET /api/remnawave/balancers` (`api/settings.py`) — по всем config-профилям активной панели собирает
+  uuids-selector-группы → `[{config_profile_uuid, config_profile_name, tag_prefix, count}]` (лист-payload без
+  `config` → дотягивает `get_config_profile`). Гейт «панель не настроена» → 400.
+- **Модель:** `HostTemplateBody.balancers: list[BalancerRef]`, `BalancerRef{config_profile_uuid, tag_prefix}`
+  (`tag_prefix` charset-валидируется `[A-Za-z0-9_.\-]{1,64}`; `config_profile_uuid` может отличаться от профиля ноды).
+- **Жизненный цикл:** **добавление** — `pipeline._apply_host_balancers` вызывается в `step_create_hosts` СРАЗУ после
+  `create_host` (взяли `created["uuid"]`): для каждого `tpl.balancers` → `get_config_profile` → `add_uuid` →
+  `update_config_profile`. Best-effort, per-balancer failure = warn, не валит деплой; идемпотентно (дедуп).
+  **Удаление** — `node_ops._cleanup_remnawave_balancers` в `_uninstall` при `component=="remnanode"`: матчит хосты
+  ноды по `address==req.domain` → `remove_uuid_everywhere` по всем профилям (страховка — selector и есть накопленный
+  список). Best-effort. ⚠️ **Ограничение:** ручное удаление хоста в панели selector НЕ чистит (нет backend-события);
+  удаление карточки деплоя — клиентское (localStorage), тоже не чистит.
+- **Frontend `Hosts.tsx`:** MultiSelect «Балансеры» (вкладка «Расширенные»), опции из `/balancers`, label
+  «<профиль> · <tagPrefix> (N)», value кодируется `<uuid>::<tagPrefix>` (`balKey`/`balParse`; `tag_prefix` без `:`).
+  Гейт «панель не настроена» → hint. `MultiSelect` теперь экспортирует `SelectOption`.
+- **Проверка:** `test_xray_selector.py` (11: add/remove/dedup/порядок/deepcopy/не-найдена/non-uuids-selector/
+  everywhere), `test_hosts.py` (+balancers roundtrip+tag_prefix charset), `test_host_autocreate.py` (+append после
+  create_host/группа-не-найдена→no-write/без balancers→no-write). Все зелёные (36 с Ф1); `tsc` чисто.
+
+### 13c. Ф3 — «Анализ подписки» (§7)
+- **`services/subscription_analyze.py`** — вход url/домен/ip (`classify_input`). URL → `fetch_subscription`
+  (UA **`v2rayNG`** — как просил юзер, в ОТЛИЧИЕ от `server_monitor`, который VPN-UA НЕ шлёт; SSRF-гард
+  `net_guard.is_safe_url` + ручные редиректы per-hop + лимит 4 МиБ) → `decode_subscription`+`link_to_candidate`
+  (переиспользованы из `subscription_import`) → хосты. Хосты резолвятся в IPv4, дедуп по IP, **только публичные**
+  (`_ip_is_public`). Per-IP: **факт. гео+ASN** = `ip-api.com/json` (fallback `ipwho.is`), **реестр. страна** =
+  RDAP `rdap.org/ip`, **имя/сайт ASN** = RDAP `rdap.org/autnum` (кэш по ASN). Внешние API — ФИКСИРОВАННЫЕ
+  публичные хосты (не user-controlled → не через net_guard); ссылки/вход в логи не попадают. `group_to_hostings`
+  — одна `HostingBody` на ASN (дедуп по номеру, локации = уник. факт. cc/city, записи без ASN пропускаются).
+- **`api/sub_analysis.py`** (`/api/subscription-analyze`, под `_auth`): `POST ""` (dry-run → `{kind, results:[{host,
+  ip, asn{number,name,website}, geo_actual{cc,city}, geo_registry{cc}}]}`; пусто→400, сбой→502) +
+  `POST /to-hostings` (`{results}` → `group_to_hostings` → **upsert** в `hostings_store`: матч по ASN-номеру ИЛИ
+  имени → мерж локаций, иначе новая карточка; всё через `HostingBody(**).model_dump()` для нормализации;
+  нет ASN → 400). Роутер подключён в `main.py`.
+- **Frontend `components/SubscriptionAnalyze.tsx`** — nav-таб «Анализ подписки» (группа **«Справка»**, `Tab
+  "subscription-analyze"`, CRUMB `["Справка","Анализ подписки"]`, иконка `ScanSearch`). Инпут → таблица (хост/IP/
+  ASN+сайт/факт-гео `FlagChip`/реестр-гео + `AlertTriangle` при расхождении cc) → «Добавить в хостинги».
+- **Проверка:** `test_subscription_analyze.py` (9: classify/parse_as/ip_public/group-dedup/SSRF-reject-private-url/
+  route-empty-400/route-monkeypatched/to-hostings-create-then-update-merge/no-asn-400). `tsc` чисто.
+
+### 13d. Ф4 — автобэкап → Telegram (§4)
+- **`AutoBackupConfig`** на `AppSettings` (`models/settings.py`): `{enabled, interval_hours(1..8760), include_secrets,
+  chat_id, bot_token_enc(Fernet), last_run, last_error}`. Токен — Fernet-волт (ключ = SHA-256 `encryption_key`),
+  наружу НИКОГДА (только `has_token`).
+- **`telegram.send_document(bot_token, chat_id, filename, data, caption)`** — multipart `sendDocument`, timeout 60с,
+  best-effort, `redact` в логах (как `send_message`).
+- **`services/auto_backup.py`:** `encrypt_token`/`decrypt_token` (свой `_fernet`, как ai_agent/mcp_server), `run_once(
+  account_id)` = `export_service.build_archive(account_id, include_secrets)` → `send_document`; пишет last_run/
+  last_error. `loop()` — фон, гейт `worker_lease.MONITORING`, per-account explicit account_id, каждые 15 мин
+  проверяет `enabled && now≥last_run+interval*3600`. Подключён в lifespan (`main.py`, в списке tasks).
+  ⚠️ `build_archive` уже поддерживает `include_secrets` — автобэкап зовёт СЕРВИСНУЮ функцию напрямую (браузерный
+  роут `/api/export` по-прежнему 400 на `include_secrets=true`, секреты наружу по HTTP не отдаём).
+- **API (`api/settings.py`, под `_auth`):** `GET /api/settings/auto-backup` (стрипает `bot_token_enc`, отдаёт
+  `has_token`), `POST /api/settings/auto-backup` (`bot_token` write-only, blank=keep), `POST /api/settings/
+  auto-backup/run` («Отправить сейчас», ошибка→400).
+- **Frontend `settings/DataTransfer.tsx`:** карточка «Автобэкап → Telegram» (тумблер, интервал, chat_id, bot_token
+  password с плашкой-плейсхолдером «токен сохранён», чекбокс «Включать секреты» + amber-предупреждение про
+  приватность чата, last_run/last_error, «Сохранить»/«Отправить сейчас»).
+- **Проверка:** `test_auto_backup.py` (5: fernet-roundtrip, config-CRUD+token-hidden+blank-keeps, run-sends-document,
+  run-no-token-400, include_secrets-propagates). `tsc` чисто.
+
+### 13e. Ф5 — «Обновления» (§3, DooD self-update sidecar)
+- **`services/updater.py` (глобальный, host-level, НЕ per-account):** бэкенд работает из ОБРАЗА (код скопирован,
+  `.git` в контейнере нет) → git/compose гоняются в **короткоживущем sidecar-контейнере**, который bind-маунтит
+  ХОСТ-путь репо (`project_dir()` = лейбл `com.docker.compose.project.working_dir` СВОЕГО контейнера через
+  `docker inspect $(hostname)`, как `nodeflow_server._node_data_volume`) + docker-сокет. Дефолт-образ `docker:cli`
+  (alpine, `apk add git` в скрипте; compose-плагин в образе). ⚠️ **`apply()` — ДЕТАЧНЫЙ** (`docker run -d`):
+  переживает пересоздание бэкенда при `compose up -d`; прогресс пишется в `/data/updater_status.json` (том
+  node-data, который читает пересозданный бэкенд). Конфиг — `DATA_DIR/updater.json` `{auto_update, branch, image}`,
+  статус — `DATA_DIR/updater_status.json`.
+- **Pure-функции (тестируемые):** `parse_check_output` (маркеры `===LOCAL/REMOTE/SUBJECT/BRANCH===`), `is_behind`,
+  `_safe_branch` (charset `[A-Za-z0-9._/-]`, инъекция в скрипт закрыта), `check_argv`/`apply_argv` (билдеры sidecar-
+  argv), `_check_script`/`_apply_script`. `check()` (60с кеш; Docker/git-absent → `docker:false`+warning, НЕ 500),
+  `apply()` (rm старого updater-контейнера → detached run; Docker absent → warning). `auto_loop` (lifespan, гейт
+  `worker_lease.MONITORING`, каждые 6ч: `auto_update && behind` → `apply`).
+- **API (`api/updates.py`, под `_auth`):** `GET /api/updates/status` (check + `progress` из updater_status.json),
+  `POST /api/updates/config` (`{auto_update, branch, image}`), `POST /api/updates/apply` (200 c warning при отсутствии
+  Docker — как MCP/nodeflow). ⚠️ **Любой аутентифицированный аккаунт инициирует host-wide рестарт** (как прочие
+  DooD-синглтоны — задокументировано).
+- **Frontend `settings/UpdatesTab.tsx`** (Settings→«Обновления», `SubTab "updates"`): версия (ветка/local/remote
+  коммит/behind+subject), поллинг прогресса пока sidecar работает, тумблер автообновления, ветка/образ, «Проверить»/
+  «Обновить сейчас» (confirm) + плашка-предупреждение о host-wide рестарте.
+- **Проверка:** `test_updater.py` (10: is_behind/safe_branch/parse-output(+missing)/check_argv/apply_argv-mounts/
+  apply_script-builds+no-injection/config-roundtrip/status-roundtrip/check-no-docker). `tsc` чисто.
+  ⚠️ Sidecar НЕ гонялся вживую (нужен реальный Docker+репо на хосте) — покрыты argv/парсинг/персистентность.

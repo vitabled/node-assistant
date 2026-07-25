@@ -35,6 +35,7 @@ from app.api import (
     migrate,
     server_monitor,
     hostings,
+    sub_analysis,
     replace_domain,
     certwarden,
     netbird,
@@ -44,6 +45,7 @@ from app.api import (
     export_io,
     library,
     haproxy,
+    updates,
 )
 from app.api.auth import require_account
 from app.services import job_runner, shared_task_store, worker_lease
@@ -75,7 +77,14 @@ async def lifespan(app: FastAPI):
     #  - server monitor: probes each account's tracked servers by IP (TCP/ICMP)
     #    for the «Server uptime» dashboard tab.
     srv_monitor = asyncio.create_task(server_monitor.monitor_loop())
-    tasks = [poller, collector, rules_task, autostart, srv_monitor]
+    #  - auto-backup: ships each account's export to Telegram on its interval
+    #    (Wave-8 §4); also monitoring-lease gated so one process runs it.
+    from app.services import auto_backup, updater
+    auto_bk = asyncio.create_task(auto_backup.loop())
+    #  - updater: global self-update check every ~6h, applies when auto_update is
+    #    on and the tracked branch is behind (Wave-8 §3). Monitoring-lease gated.
+    upd = asyncio.create_task(updater.auto_loop())
+    tasks = [poller, collector, rules_task, autostart, srv_monitor, auto_bk, upd]
     #  - recovery: with a shared task store, claim jobs nobody else will. It idles
     #    while a real deploy-worker holds the duty, and picks up whatever that
     #    worker left behind when it dies — without this, jobs queued in the window
@@ -150,6 +159,7 @@ app.include_router(panel_sync.router, dependencies=_auth)
 app.include_router(migrate.router, dependencies=_auth)
 app.include_router(server_monitor.router, dependencies=_auth)
 app.include_router(hostings.router, dependencies=_auth)
+app.include_router(sub_analysis.router, dependencies=_auth)
 app.include_router(replace_domain.router, dependencies=_auth)
 app.include_router(certwarden.router, dependencies=_auth)
 app.include_router(netbird.router, dependencies=_auth)
@@ -159,6 +169,7 @@ app.include_router(ai_prompts.router, dependencies=_auth)
 app.include_router(export_io.router, dependencies=_auth)
 app.include_router(library.router, dependencies=_auth)
 app.include_router(haproxy.router, dependencies=_auth)
+app.include_router(updates.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.

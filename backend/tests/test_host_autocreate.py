@@ -30,11 +30,14 @@ class _FakeTask:
 
 
 class _FakeClient:
-    """Records create_host payloads. `fail_on` = inbound uuids that raise."""
+    """Records create_host payloads. `fail_on` = inbound uuids that raise.
+    Also serves config profiles for the §5 balancer hook."""
 
     def __init__(self, fail_on: set[str] | None = None):
         self.calls: list[dict] = []
         self.fail_on = fail_on or set()
+        self.profiles: dict[str, dict] = {}     # uuid → raw xray config
+        self.updates: list[tuple[str, dict]] = []
 
     async def create_host(self, **kwargs):
         self.calls.append(kwargs)
@@ -42,6 +45,14 @@ class _FakeClient:
         if ib in self.fail_on:
             raise RemnavaveError(400, "duplicate remark")
         return {"uuid": "host-uuid-xyz"}
+
+    async def get_config_profile(self, uuid):
+        return {"uuid": uuid, "config": self.profiles.get(uuid, {})}
+
+    async def update_config_profile(self, uuid, config):
+        self.updates.append((uuid, config))
+        self.profiles[uuid] = config
+        return {"uuid": uuid}
 
 
 def _req(disabled=None, xhttp_path=""):
@@ -170,3 +181,40 @@ def test_map_host_optional_defaults_dropped():
     opt = _map_host_optional({"remark": "x", "inbound": "ib", "port": 443,
                               "security_layer": "default", "vless_route_id": 0})
     assert opt == {}
+
+
+# ── Wave-8 §5 — balancer selector hook ─────────────────────────
+def test_balancer_uuid_appended_after_create(monkeypatch):
+    import app.services.storage as storage
+    tpl = [{"id": "hb", "remark": "R", "inbound": "ib", "port": 443,
+            "balancers": [{"config_profile_uuid": "prof-1", "tag_prefix": "proxy"}]}]
+    monkeypatch.setattr(storage, "load_hosts", lambda *a, **k: tpl)
+    client = _FakeClient()
+    client.profiles["prof-1"] = {"remnawave": {"injectHosts": [
+        {"tagPrefix": "proxy", "selector": {"type": "uuids", "values": []}}]}}
+    task = _FakeTask()
+    asyncio.run(step_create_hosts(task, client, _req(), NODE_UUID, PROFILE_UUID, ["hb"]))
+    assert len(client.updates) == 1
+    puuid, cfg = client.updates[0]
+    assert puuid == "prof-1"
+    # the created host's uuid landed in the group's selector
+    assert cfg["remnawave"]["injectHosts"][0]["selector"]["values"] == ["host-uuid-xyz"]
+
+
+def test_balancer_group_missing_no_update(monkeypatch):
+    import app.services.storage as storage
+    tpl = [{"id": "hb", "remark": "R", "inbound": "ib", "port": 443,
+            "balancers": [{"config_profile_uuid": "prof-1", "tag_prefix": "nope"}]}]
+    monkeypatch.setattr(storage, "load_hosts", lambda *a, **k: tpl)
+    client = _FakeClient()
+    client.profiles["prof-1"] = {"remnawave": {"injectHosts": [
+        {"tagPrefix": "proxy", "selector": {"type": "uuids", "values": []}}]}}
+    task = _FakeTask()
+    asyncio.run(step_create_hosts(task, client, _req(), NODE_UUID, PROFILE_UUID, ["hb"]))
+    assert client.updates == []                        # group not found → no write
+
+
+def test_no_balancers_no_profile_update(monkeypatch):
+    client = _FakeClient()
+    _run(monkeypatch, client, ["h1"], _req(disabled=["h2", "h3"]))  # h1 has no balancers
+    assert client.updates == []

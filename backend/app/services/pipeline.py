@@ -1809,6 +1809,39 @@ def _map_host_optional(tpl: dict) -> dict:
     return out
 
 
+async def _apply_host_balancers(task: Task, client, balancers: list, host_uuid: str) -> None:
+    """Wave-8 §5 — append `host_uuid` to each referenced balancer group's selector.
+    Best-effort: a per-balancer failure warns and continues (never fails the deploy).
+    Idempotent — `add_uuid` dedups, so a retry is a no-op."""
+    from app.services import xray_selector
+    from app.services.remnawave_client import RemnavaveError
+
+    for bal in balancers or []:
+        if not isinstance(bal, dict):
+            continue
+        prof_uuid = (bal.get("config_profile_uuid") or "").strip()
+        tag_prefix = (bal.get("tag_prefix") or "").strip()
+        if not prof_uuid or not tag_prefix:
+            continue
+        try:
+            profile = await client.get_config_profile(prof_uuid)
+            config = profile.get("config") if isinstance(profile, dict) else None
+            new_config, changed = xray_selector.add_uuid(config or {}, tag_prefix, host_uuid)
+            if not changed:
+                task.add_log(
+                    f"\x1b[36m[Балансер] Группа «{tag_prefix}» не найдена или хост уже в ней — пропуск.\x1b[0m"
+                )
+                continue
+            await client.update_config_profile(prof_uuid, new_config)
+            task.add_log(
+                f"\x1b[32m[Балансер] Хост добавлен в selector «{tag_prefix}» (профиль {prof_uuid}).\x1b[0m"
+            )
+        except RemnavaveError as exc:
+            task.add_log(f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Балансер «{tag_prefix}»: {exc.detail}\x1b[0m")
+        except Exception as exc:
+            task.add_log(f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Балансер «{tag_prefix}»: {exc}\x1b[0m")
+
+
 async def step_create_hosts(
     task: Task,
     client,
@@ -1869,7 +1902,7 @@ async def step_create_hosts(
         # or the whole create 400s (silently, since failures are caught below).
         remark = f"{tpl.get('remark') or 'host'} · {suffix}"[:40]
         try:
-            await client.create_host(
+            created = await client.create_host(
                 inbound={
                     "configProfileUuid": config_profile_uuid,
                     "configProfileInboundUuid": inbound_uuid,
@@ -1881,6 +1914,10 @@ async def step_create_hosts(
                 **_map_host_optional(tpl),
             )
             task.add_log(f"\x1b[32m[Хосты] Хост «{remark}» создан (address={req.domain}).\x1b[0m")
+            # Wave-8 §5 — join the host to its balancer groups (selector membership).
+            host_uuid = created.get("uuid") if isinstance(created, dict) else None
+            if host_uuid and tpl.get("balancers"):
+                await _apply_host_balancers(task, client, tpl.get("balancers"), host_uuid)
         except RemnavaveError as exc:
             task.add_log(
                 f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Не удалось создать хост «{remark}»: {exc.detail}\x1b[0m"

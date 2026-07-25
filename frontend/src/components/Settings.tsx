@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Save, CheckCircle2, XCircle, Loader2, Wifi, Check, Sun, Moon, Monitor } from "lucide-react";
+import { Save, CheckCircle2, XCircle, Loader2, Wifi, Check, Sun, Moon, Monitor, Eye, EyeOff } from "lucide-react";
 import { MultiSelect, type SelectOption } from "./MultiSelect";
 import { PanelRegistry } from "./common/PanelRegistry";
 import {
@@ -18,6 +18,7 @@ import { AiSettingsTab } from "./settings/AiSettingsTab";
 import { InfraTab } from "./settings/InfraTab";
 import { ApiTokensTab } from "./settings/ApiTokensTab";
 import { DataTransfer } from "./settings/DataTransfer";
+import { UpdatesTab } from "./settings/UpdatesTab";
 import { HaproxyConnect } from "./haproxy/HaproxyConnect";
 
 // ── Types ─────────────────────────────────────────────────────
@@ -98,20 +99,38 @@ function SettingField({
   placeholder?: string;
   hint?: string;
 }) {
+  // Password fields get a reveal (eye) toggle — the value already reaches the
+  // browser, so hiding it is only shoulder-surfing protection (Wave-8 §2).
+  const [reveal, setReveal] = useState(false);
+  const isPw = type === "password";
+  const effType = isPw && reveal ? "text" : type;
   return (
     <div className="flex flex-col gap-1">
       <label className="label">
         {label}
       </label>
-      <input
-        type={type}
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
-        autoComplete="off"
-        spellCheck={false}
-        className="input"
-      />
+      <div className="relative">
+        <input
+          type={effType}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder}
+          autoComplete="off"
+          spellCheck={false}
+          className="input"
+          style={isPw ? { paddingRight: 34 } : undefined}
+        />
+        {isPw && (
+          <button
+            type="button"
+            onClick={() => setReveal(r => !r)}
+            title={reveal ? "Скрыть" : "Показать"}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--t-low)] hover:text-[var(--t-hi)]"
+          >
+            {reveal ? <EyeOff size={14} /> : <Eye size={14} />}
+          </button>
+        )}
+      </div>
       {hint && <p className="hint">{hint}</p>}
     </div>
   );
@@ -762,7 +781,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "assistant" | "tokens" | "transfer" | "infra" | "haproxy" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "assistant" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -777,6 +796,7 @@ export function Settings() {
     { id: "assistant",   label: "Ассистент" },
     { id: "tokens",      label: "Токены API" },
     { id: "transfer",    label: "Экспорт/импорт" },
+    { id: "updates",     label: "Обновления" },
     { id: "infra",       label: "Инфраструктура" },
     { id: "haproxy",     label: "HAProxy" },
     { id: "theme",       label: "Тема" },
@@ -808,6 +828,7 @@ export function Settings() {
         {sub === "assistant"    && <div className="flex flex-col gap-4 max-w-2xl"><AiSettingsTab /></div>}
         {sub === "tokens"       && <ApiTokensTab />}
         {sub === "transfer"     && <DataTransfer />}
+        {sub === "updates"      && <UpdatesTab />}
         {sub === "infra"        && <InfraTab />}
         {sub === "haproxy"      && <div className="max-w-3xl"><HaproxyConnect /></div>}
         {sub === "theme"        && <ThemeTab />}

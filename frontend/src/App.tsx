@@ -29,6 +29,7 @@ import { PanelVariables }                  from "./components/rw/PanelVariables"
 import { Backup }                          from "./components/rw/Backup";
 import { HostingsCatalog }                from "./components/hostings/HostingsCatalog";
 import { HostingsMap }                     from "./components/hostings/HostingsMap";
+import { SubscriptionAnalyze }             from "./components/SubscriptionAnalyze";
 import { HaproxyOverview }                 from "./components/haproxy/HaproxyOverview";
 import { HaproxyNodes }                    from "./components/haproxy/HaproxyNodes";
 import { HaproxyRoutes }                   from "./components/haproxy/HaproxyRoutes";
@@ -110,6 +111,7 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "haproxy-releases": ["HAPROXY", "Релизы"],
   "hostings-map":    ["Справка", "Карта хостингов"],
   "hostings-list":   ["Справка", "Хостинги"],
+  "subscription-analyze": ["Справка", "Анализ подписки"],
   "library":         ["Справка", "Библиотека"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
@@ -294,6 +296,7 @@ export default function App() {
 
           {tab === "hostings-map"  && <HostingsMap />}
           {tab === "hostings-list" && <HostingsCatalog />}
+          {tab === "subscription-analyze" && <SubscriptionAnalyze />}
           {tab === "library" && <Library />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}

@@ -339,6 +339,53 @@ async def _uninstall(ssh: SSHSession, task, req: NodeOpRequest) -> None:
     c = req.component
     script = _UNINSTALL_SCRIPTS[c](req)
     await ssh.run_script(script, task, check=False, timeout=180)
+    # Wave-8 §5 — when a remnanode is torn down, strip its hosts' uuids from every
+    # config-profile balancer selector (best-effort, never fails the op).
+    if c == "remnanode":
+        await _cleanup_remnawave_balancers(task, req)
+
+
+async def _cleanup_remnawave_balancers(task, req: NodeOpRequest) -> None:
+    """Best-effort removal side of the §5 lifecycle. Matches the node's Remnawave
+    hosts by address (= the deploy domain) and removes their uuids from every
+    uuids-selector group. A panel that isn't configured / reachable → silent skip."""
+    try:
+        from app.models.settings import AppSettings
+        from app.services import storage, xray_selector
+        from app.services.remnawave_client import RemnavaveClient
+
+        cfg = AppSettings(**storage.load_settings()).remnawave
+        if not cfg.panel_url or not cfg.api_token or not req.domain:
+            return
+        client = RemnavaveClient(cfg.panel_url, cfg.api_token)
+        hosts = await client.list_hosts()
+        host_uuids = [
+            h.get("uuid") for h in hosts
+            if isinstance(h, dict) and h.get("address") == req.domain and h.get("uuid")
+        ]
+        if not host_uuids:
+            return
+        for p in await client.list_config_profiles():
+            puuid = p.get("uuid")
+            if not puuid:
+                continue
+            config = p.get("config")
+            if not isinstance(config, dict):
+                try:
+                    config = (await client.get_config_profile(puuid)).get("config") or {}
+                except Exception:
+                    continue
+            changed_any = False
+            for hu in host_uuids:
+                config, ch = xray_selector.remove_uuid_everywhere(config, hu)
+                changed_any = changed_any or ch
+            if changed_any:
+                await client.update_config_profile(puuid, config)
+                task.add_log(
+                    f"\x1b[32m[Балансер] Хосты ноды убраны из selector профиля {puuid}.\x1b[0m"
+                )
+    except Exception as exc:
+        task.add_log(f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Очистка балансеров при удалении: {exc}\x1b[0m")
 
 
 # ── Uninstall script builders (idempotent, `|| true`-guarded) ────
