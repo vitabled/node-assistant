@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import {
   CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight,
 } from "lucide-react";
@@ -48,7 +48,7 @@ import { StepProgress, RENEW_STEPS }       from "./components/StepProgress";
 import { TerminalOutput }                  from "./components/TerminalOutput";
 import { useTaskStream, type StatusFrame } from "./hooks/useTaskStream";
 import { AccountMenu }                     from "./auth/AccountMenu";
-import { tabKey, getActiveId }             from "./auth/store";
+import { tabKey, getActiveId, certJobsKey } from "./auth/store";
 import {
   applyAccent, applyDensity, applyThemeMode, applySkin,
   loadAccent, loadDensity, loadThemeMode, loadSkin,
@@ -171,6 +171,8 @@ export default function App() {
   const [certTaskId, setCertTaskId]         = useState<string | null>(null);
   const [certLogs, setCertLogs]             = useState<string[]>([]);
   const [certStepStatus, setCertStepStatus] = useState<StatusFrame>(INITIAL_CERT_STATUS);
+  const pendingCert                         = useRef<CertsFormData | null>(null);
+  const [domainsRefresh, setDomainsRefresh] = useState(0);
   // SSL terminal collapsible (3a): default collapsed → the freed area shows Домены;
   // a new deploy-cert task auto-expands it.
   const [termOpen, setTermOpen]             = useState(false);
@@ -193,11 +195,13 @@ export default function App() {
   const deployCert = async (data: CertsFormData) => {
     setTermOpen(true);  // auto-expand the terminal when a task starts (3a)
     setCertLogs([]); setCertTaskId(null); setCertStepStatus(INITIAL_CERT_STATUS);
+    pendingCert.current = data;  // remember what we deployed → track it on success
     const res = await fetch("/api/certs/deploy", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...data, ssh_port: parseInt(data.ssh_port, 10), cf_api_key: data.cf_api_key || null }),
     });
     if (!res.ok) {
+      pendingCert.current = null;
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       addCertLog(`\x1b[31m[HTTP ${res.status}] ${JSON.stringify(err.detail ?? err)}\x1b[0m`);
       return;
@@ -205,6 +209,24 @@ export default function App() {
     const { task_id } = await res.json();
     setCertTaskId(task_id);
   };
+
+  // When a cert deploy SUCCEEDS, record the domain (with its SSH creds) so it
+  // shows up in «Домены» — a cert-only deploy makes no deploy_jobs entry, so the
+  // domain would otherwise never appear. Client-only store, like deploy_jobs.
+  useEffect(() => {
+    if (certStepStatus.status !== "success" || !pendingCert.current) return;
+    const d = pendingCert.current;
+    pendingCert.current = null;
+    try {
+      const key = certJobsKey();
+      const jobs = JSON.parse(localStorage.getItem(key) || "[]");
+      const arr = Array.isArray(jobs) ? jobs : [];
+      const next = arr.filter((j: CertsFormData) => j.domain?.toLowerCase() !== d.domain.toLowerCase());
+      next.push(d);
+      localStorage.setItem(key, JSON.stringify(next));
+      setDomainsRefresh(n => n + 1);
+    } catch { /* ignore storage errors */ }
+  }, [certStepStatus.status]);
 
   const crumb = CRUMB[tab];
 
@@ -348,7 +370,7 @@ export default function App() {
                   </>
                 ) : (
                   <div style={{ flex: 1, padding: 20, overflowY: "auto", minHeight: 0 }}>
-                    <DomainsPanel />
+                    <DomainsPanel refreshKey={domainsRefresh} />
                   </div>
                 )}
               </div>
