@@ -3,13 +3,15 @@
 // to actual geo + ASN + registry geo. «Добавить в хостинги» creates one hosting
 // card per ASN. Share-link secrets never reach the browser — only the analysis.
 import { useState } from "react";
-import { ScanSearch, Loader2, ExternalLink, Plus, AlertTriangle } from "lucide-react";
+import { ScanSearch, Loader2, ExternalLink, Plus, AlertTriangle, X } from "lucide-react";
 import { FlagChip } from "./common/FlagChip";
 import { toast } from "./infra/Toast";
 
 interface Asn { number: number; name: string; website: string }
 interface Row {
   host: string;
+  hosts: string[];
+  names: string[];
   ip: string;
   asn: Asn;
   geo_actual: { cc: string; city: string };
@@ -90,14 +92,19 @@ export function SubscriptionAnalyze() {
             <div className="overflow-x-auto">
               <table className="tbl text-xs w-full">
                 <thead>
-                  <tr><th>Хост</th><th>IP</th><th>ASN</th><th>Факт. гео</th><th>Реестр</th></tr>
+                  <tr><th>Название</th><th>Хост</th><th>IP</th><th>ASN</th><th>Факт. гео</th><th>Реестр</th><th></th></tr>
                 </thead>
                 <tbody>
                   {rows.map((r, i) => {
                     const mismatch = !!(r.geo_actual.cc && r.geo_registry.cc && r.geo_actual.cc !== r.geo_registry.cc);
+                    const names = (r.names || []).join(", ");
                     return (
-                      <tr key={i}>
-                        <td className="text-[var(--t-mid)] trunc" style={{ maxWidth: 160 }} title={r.host}>{r.host}</td>
+                      <tr key={r.ip + i}>
+                        <td className="text-[var(--t-hi)] trunc" style={{ maxWidth: 170 }} title={names}>
+                          {names || "—"}
+                        </td>
+                        <td className="text-[var(--t-mid)] trunc" style={{ maxWidth: 150 }}
+                          title={(r.hosts || [r.host]).join(", ")}>{r.host}</td>
                         <td className="tabular-nums text-[var(--t-low)]">{r.ip}</td>
                         <td className="text-[var(--t-mid)]">
                           {r.asn.number ? (
@@ -121,6 +128,12 @@ export function SubscriptionAnalyze() {
                             <FlagChip code={r.geo_registry.cc} size={14} /> {r.geo_registry.cc || "—"}
                             {mismatch && <AlertTriangle size={12} style={{ color: "var(--warn)" }} aria-label="Расхождение факт./реестр" />}
                           </span>
+                        </td>
+                        <td>
+                          <button onClick={() => setRows(rs => (rs || []).filter((_, j) => j !== i))}
+                            title="Убрать из выдачи" className="p-1 text-[var(--t-low)] hover:text-[var(--err)]">
+                            <X size={13} />
+                          </button>
                         </td>
                       </tr>
                     );

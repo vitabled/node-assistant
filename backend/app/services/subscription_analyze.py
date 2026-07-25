@@ -43,7 +43,7 @@ _API_UA = "node-assistant"
 _SUB_USER_AGENTS = [
     None,                    # default httpx UA (proven for hardsub.digital)
     "Happ/1.16.0",
-    "incy/1.0",
+    "INCY/3.3.7/android",
     "Streisand/1.6.0",
     "Shadowrocket/2.2.9",
 ]
@@ -191,13 +191,43 @@ async def _ipwho(ip: str, client: httpx.AsyncClient) -> Optional[dict]:
     }
 
 
+async def _rdap_get(url: str, client: httpx.AsyncClient) -> Optional[dict]:
+    """RDAP GET with retries. ⚠️ rdap.org 301-redirects to the RIR RDAP server
+    (rdap.db.ripe.net / rdap.arin.net / …), so `follow_redirects=True` is
+    REQUIRED — without it the «Реестр» column was empty for every IP. rdap.org is
+    also Cloudflare-fronted and intermittently ConnectError's → retry."""
+    for attempt in range(3):
+        try:
+            r = await client.get(url, timeout=6, follow_redirects=True)
+            d = r.json()
+            return d if isinstance(d, dict) else None
+        except Exception:
+            if attempt < 2:
+                await asyncio.sleep(0.4 * (attempt + 1))
+    return None
+
+
+def _entity_country(entities) -> str:
+    """Registry country can sit on an org entity when the network object omits a
+    top-level `country` (ARIN). Best-effort scan (incl. nested) for a 2-letter code."""
+    for ent in entities or []:
+        if not isinstance(ent, dict):
+            continue
+        c = ent.get("country")
+        if isinstance(c, str) and len(c) == 2:
+            return c
+        nested = _entity_country(ent.get("entities"))
+        if nested:
+            return nested
+    return ""
+
+
 async def _rdap_ip_cc(ip: str, client: httpx.AsyncClient) -> str:
-    try:
-        r = await client.get(f"https://rdap.org/ip/{ip}")
-        d = r.json()
-        return str(d.get("country") or "") if isinstance(d, dict) else ""
-    except Exception:
+    d = await _rdap_get(f"https://rdap.org/ip/{ip}", client)
+    if not d:
         return ""
+    cc = str(d.get("country") or "").strip() or _entity_country(d.get("entities"))
+    return cc[:2].upper() if cc else ""
 
 
 def _website_from_rdap_autnum(d: dict) -> str:
@@ -223,14 +253,10 @@ def _website_from_rdap_autnum(d: dict) -> str:
 async def _rdap_autnum(asn: int, client: httpx.AsyncClient) -> tuple[str, str]:
     if asn <= 0:
         return "", ""
-    try:
-        r = await client.get(f"https://rdap.org/autnum/{asn}")
-        d = r.json()
-        if not isinstance(d, dict):
-            return "", ""
-        return str(d.get("name") or ""), _website_from_rdap_autnum(d)
-    except Exception:
+    d = await _rdap_get(f"https://rdap.org/autnum/{asn}", client)
+    if not d:
         return "", ""
+    return str(d.get("name") or ""), _website_from_rdap_autnum(d)
 
 
 async def _resolve_ip(ip: str, client: httpx.AsyncClient, autnum_cache: dict) -> dict:
@@ -254,39 +280,61 @@ async def _resolve_ip(ip: str, client: httpx.AsyncClient, autnum_cache: dict) ->
 
 # ── orchestration ──────────────────────────────────────────────
 async def analyze(raw: str) -> list[dict[str, Any]]:
-    """Return one row per unique target IP (host label kept for context)."""
+    """One row per unique target IP. Hosts are deduped by HOSTNAME first (each
+    address resolved once — fixes the same host appearing N× and round-robin DNS
+    giving different IPs), then merged by resolved IP; the subscription link names
+    for every address on an IP are aggregated (`names`, comma-listed in the UI)."""
     kind = classify_input(raw)
-    hosts: list[str] = []
+    pairs: list[tuple[str, str]] = []       # (host address, link name)
     if kind == "url":
         links = decode_subscription(await fetch_subscription(raw.strip()))
         for link in links:
             cand = link_to_candidate(link)
             if cand and cand.get("host"):
-                hosts.append(cand["host"])
+                pairs.append((cand["host"], cand.get("name") or ""))
     else:
-        hosts.append(raw.strip())
+        pairs.append((raw.strip(), ""))
 
-    # host → IPv4, dedup by IP (keep first host label seen for each IP)
+    # group link names by hostname (dedup, preserve first-seen order)
+    host_names: dict[str, list[str]] = {}
+    for host, name in pairs:
+        names = host_names.setdefault(host, [])
+        if name and name not in names:
+            names.append(name)
+    if not host_names:
+        return []
+
+    # resolve each UNIQUE hostname once
+    hosts = list(host_names.keys())
     resolved = await asyncio.gather(*(_resolve(h) for h in hosts))
-    ip_host: dict[str, str] = {}
-    for host, ip in zip(hosts, resolved):
-        if ip and _ip_is_public(ip) and ip not in ip_host:
-            ip_host[ip] = host
 
-    if not ip_host:
+    # merge hostnames that resolve to the same public IP; aggregate hosts + names
+    by_ip: dict[str, dict] = {}
+    for host, ip in zip(hosts, resolved):
+        if not ip or not _ip_is_public(ip):
+            continue
+        g = by_ip.setdefault(ip, {"hosts": [], "names": []})
+        if host not in g["hosts"]:
+            g["hosts"].append(host)
+        for n in host_names[host]:
+            if n not in g["names"]:
+                g["names"].append(n)
+    if not by_ip:
         return []
 
     sem = asyncio.Semaphore(_LOOKUP_LIMIT)
     autnum_cache: dict[int, tuple[str, str]] = {}
 
     async with httpx.AsyncClient(timeout=_API_TIMEOUT, headers={"User-Agent": _API_UA}) as client:
-        async def one(ip: str, host: str) -> dict:
+        async def one(ip: str, g: dict) -> dict:
             async with sem:
                 row = await _resolve_ip(ip, client, autnum_cache)
-            row["host"] = host
+            row["host"] = g["hosts"][0]
+            row["hosts"] = g["hosts"]
+            row["names"] = g["names"]
             return row
 
-        rows = await asyncio.gather(*(one(ip, host) for ip, host in ip_host.items()))
+        rows = await asyncio.gather(*(one(ip, g) for ip, g in by_ip.items()))
     return list(rows)
 
 
@@ -309,20 +357,26 @@ def group_to_hostings(results: list[dict]) -> list[dict]:
                 "asns": [{"number": num, "name": str(asn.get("name") or ""),
                           "website": str(asn.get("website") or "")}],
                 "_locs": {},
+                "_names": [],      # subscription link names seen for this ASN
             }
         ga = r.get("geo_actual") or {}
         cc = str(ga.get("cc") or "")
         city = str(ga.get("city") or "")
         if cc or city:
             g["_locs"][(cc, city)] = {"city": city, "country_code": cc[:2], "lat": 0, "lng": 0, "note": ""}
+        for n in r.get("names") or []:
+            if n and n not in g["_names"]:
+                g["_names"].append(n)
 
     out: list[dict] = []
     for g in groups.values():
         locs = list(g.pop("_locs").values())
+        names = g.pop("_names")
         out.append({
             "name": g["name"],
             "website": g["website"],
-            "notes": "",
+            # keep the subscription names so the info isn't lost on «в хостинги»
+            "notes": ("Из подписки: " + ", ".join(names))[:500] if names else "",
             "features": "",
             "tags": [],
             "tariffs": [],

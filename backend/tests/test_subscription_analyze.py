@@ -40,10 +40,10 @@ def test_ip_public():
 
 def test_group_to_hostings_dedup_by_asn():
     results = [
-        {"host": "a.com", "ip": "1.1.1.1",
+        {"host": "a.com", "ip": "1.1.1.1", "names": ["🇷🇺 Москва"],
          "asn": {"number": 49505, "name": "Selectel", "website": "https://selectel.ru"},
          "geo_actual": {"cc": "RU", "city": "Moscow"}, "geo_registry": {"cc": "RU"}},
-        {"host": "b.com", "ip": "1.1.1.2",
+        {"host": "b.com", "ip": "1.1.1.2", "names": ["🇷🇺 СПб"],
          "asn": {"number": 49505, "name": "Selectel", "website": "https://selectel.ru"},
          "geo_actual": {"cc": "RU", "city": "Saint Petersburg"}, "geo_registry": {"cc": "RU"}},
         {"host": "c.com", "ip": "2.2.2.2",
@@ -60,6 +60,40 @@ def test_group_to_hostings_dedup_by_asn():
     # two distinct cities merged into one Selectel entry
     cities = sorted(l["city"] for l in sel["locations"])
     assert cities == ["Moscow", "Saint Petersburg"]
+    # subscription link names carried into notes (Wave-8 feedback)
+    assert "🇷🇺 Москва" in sel["notes"] and "🇷🇺 СПб" in sel["notes"]
+
+
+def test_analyze_dedups_hosts_and_aggregates_names(monkeypatch):
+    """Item 4/5: the same host in several links → ONE row with all its names."""
+    import asyncio
+
+    async def fake_fetch(url):
+        return "ignored"
+
+    cand = {
+        "l1": {"host": "github.com", "port": 443, "name": "Авто", "country": ""},
+        "l2": {"host": "github.com", "port": 443, "name": "NL", "country": ""},
+        "l3": {"host": "de.example.com", "port": 443, "name": "DE", "country": ""},
+    }
+
+    async def fake_resolve(h):
+        return {"github.com": "1.1.1.1", "de.example.com": "2.2.2.2"}[h]
+
+    async def fake_resolve_ip(ip, client, cache):
+        return {"ip": ip, "asn": {"number": 1, "name": "X", "website": ""},
+                "geo_actual": {"cc": "DE", "city": ""}, "geo_registry": {"cc": "DE"}}
+
+    monkeypatch.setattr(sa, "fetch_subscription", fake_fetch)
+    monkeypatch.setattr(sa, "decode_subscription", lambda body: ["l1", "l2", "l3"])
+    monkeypatch.setattr(sa, "link_to_candidate", lambda l: cand[l])
+    monkeypatch.setattr(sa, "_resolve", fake_resolve)
+    monkeypatch.setattr(sa, "_resolve_ip", fake_resolve_ip)
+
+    rows = asyncio.run(sa.analyze("https://p/sub"))
+    assert len(rows) == 2                                    # github.com deduped to 1
+    gh = next(r for r in rows if r["host"] == "github.com")
+    assert gh["names"] == ["Авто", "NL"]                     # both names aggregated
 
 
 # ── SSRF guard on the URL fetch ────────────────────────────────

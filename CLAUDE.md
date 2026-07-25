@@ -859,24 +859,38 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   затем клиентские `Happ` / `incy` / `Streisand` / `Shadowrocket`. **БАГ-УРОК:** сначала слали ТОЛЬКО `v2rayNG`-UA
   → `hardsub.digital` отдал 129 КБ `application/json` (xray-конфиг, НЕ ссылки) → 0 хостов («Серверы не найдены»).
   Дефолтный UA даёт стандартный base64-список (12 ссылок). Цепочка нужна для панелей, которые дают список ТОЛЬКО
-  под конкретный клиент. То же у **subs-aggregator** (`_fetch_sub_lines`/`_safe_fetch(user_agent)`, детект по
-  `_has_link_lines`: строка стартует со схемы vless/vmess/…) — единственная точка, где мы фетчим подписку для
-  xray-checker (сам Go-контейнер в прямом режиме мы не трогаем). Гео/RDAP-клиент шлёт нейтральный `node-assistant`
-  (переиспользованы из `subscription_import`) → хосты. Хосты резолвятся в IPv4, дедуп по IP, **только публичные**
-  (`_ip_is_public`). Per-IP: **факт. гео+ASN** = `ip-api.com/json` (fallback `ipwho.is`), **реестр. страна** =
-  RDAP `rdap.org/ip`, **имя/сайт ASN** = RDAP `rdap.org/autnum` (кэш по ASN). Внешние API — ФИКСИРОВАННЫЕ
-  публичные хосты (не user-controlled → не через net_guard); ссылки/вход в логи не попадают. `group_to_hostings`
-  — одна `HostingBody` на ASN (дедуп по номеру, локации = уник. факт. cc/city, записи без ASN пропускаются).
+  под конкретный клиент (UA-список: default → `Happ/1.16.0` → `INCY/3.3.7/android` → `Streisand` → `Shadowrocket`).
+  То же у **subs-aggregator** (`_fetch_sub_lines`/`_safe_fetch(user_agent)`, детект по `_has_link_lines`: строка
+  стартует со схемы vless/vmess/…) — единственная точка, где мы фетчим подписку для xray-checker (сам Go-контейнер
+  в прямом режиме мы не трогаем). Гео/RDAP-клиент шлёт нейтральный `node-assistant`
+  (переиспользованы из `subscription_import`) → хосты. Per-IP: **факт. гео+ASN** = `ip-api.com/json` (fallback
+  `ipwho.is`), **реестр. страна** = RDAP `rdap.org/ip`, **сайт ASN** = RDAP `rdap.org/autnum` (кэш по ASN).
+  Внешние API — ФИКСИРОВАННЫЕ публичные хосты (не user-controlled → не через net_guard); ссылки/вход в логи не
+  попадают.
+- **⚠️ Дедуп по ИМЕНИ хоста, не по IP (feedback):** `analyze` группирует ссылки по HOSTNAME (каждый адрес
+  резолвится ОДИН раз), затем сливает по IP. Иначе один хост (напр. фронт `github.com`, встречается в 3 ссылках
+  через domain-fronting) + round-robin DNS давали 3 строки с разными IP. Имена ссылок (`#fragment`/vmess `ps`)
+  агрегируются per-host → `row.names` (в UI колонка «Название», через запятую; напр. `github.com` = `🇫🇲 Авто,
+  🇳🇱 Нидерланды, 🇷🇺 Россия`). `row.hosts` = все адреса на этом IP. Балансер/фронт-конфиг из share-ссылки
+  «разбить на реальные хосты» НЕЛЬЗЯ (реальный бэкенд скрыт за фронтом) — показываем имя + даём удалить строку.
+- **⚠️ RDAP `_rdap_get`: `follow_redirects=True` ОБЯЗАТЕЛЕН** — `rdap.org` 301-редиректит на RIR-RDAP
+  (`rdap.db.ripe.net`/`rdap.arin.net`/…); без этого «Реестр» был пуст ВЕЗДЕ (клиент analyze дефолтно
+  `follow_redirects=False`). + retries (Cloudflare-фронт rdap.org иногда ConnectError'ит). RIPE/APNIC отдают
+  top-level `country` (заполняется); **ARIN (US) top-level country НЕ отдаёт** → `_entity_country` (скан org-
+  entity на 2-буквенный код) как fallback, но часто пусто → прочерк на US/ARIN (напр. github-фронт). На реале
+  6/10 заполнено, ловит расхождение факт↔реестр (hipes1: факт CA / реестр EE).
+- `group_to_hostings` — одна `HostingBody` на ASN (дедуп по номеру, локации = уник. факт. cc/city, имена ссылок →
+  `notes` «Из подписки: …», записи без ASN пропускаются).
 - **`api/sub_analysis.py`** (`/api/subscription-analyze`, под `_auth`): `POST ""` (dry-run → `{kind, results:[{host,
-  ip, asn{number,name,website}, geo_actual{cc,city}, geo_registry{cc}}]}`; пусто→400, сбой→502) +
+  hosts[], names[], ip, asn{number,name,website}, geo_actual{cc,city}, geo_registry{cc}}]}`; пусто→400, сбой→502) +
   `POST /to-hostings` (`{results}` → `group_to_hostings` → **upsert** в `hostings_store`: матч по ASN-номеру ИЛИ
-  имени → мерж локаций, иначе новая карточка; всё через `HostingBody(**).model_dump()` для нормализации;
-  нет ASN → 400). Роутер подключён в `main.py`.
+  имени → мерж локаций, иначе новая карточка; нет ASN → 400). Роутер подключён в `main.py`.
 - **Frontend `components/SubscriptionAnalyze.tsx`** — nav-таб «Анализ подписки» (группа **«Справка»**, `Tab
-  "subscription-analyze"`, CRUMB `["Справка","Анализ подписки"]`, иконка `ScanSearch`). Инпут → таблица (хост/IP/
-  ASN+сайт/факт-гео `FlagChip`/реестр-гео + `AlertTriangle` при расхождении cc) → «Добавить в хостинги».
-- **Проверка:** `test_subscription_analyze.py` (9: classify/parse_as/ip_public/group-dedup/SSRF-reject-private-url/
-  route-empty-400/route-monkeypatched/to-hostings-create-then-update-merge/no-asn-400). `tsc` чисто.
+  "subscription-analyze"`, `ScanSearch`). Инпут → таблица (Название/Хост/IP/ASN+сайт/факт-гео `FlagChip`/реестр +
+  `AlertTriangle` при расхождении cc + **✕ убрать строку из выдачи** — удалённые не идут в «Добавить в хостинги»).
+- **Проверка:** `test_subscription_analyze.py` (12: classify/parse_as/ip_public/group-dedup+notes/analyze-dedup-
+  hostname+names/SSRF-reject/UA-default-first/UA-fallback/route-empty-400/route-monkeypatched/to-hostings-merge/
+  no-asn-400). `subs-aggregator/test_app.py` 12/12. `tsc` чисто. Проверено вживую на реальной подписке.
 
 ### 13d. Ф4 — автобэкап → Telegram (§4)
 - **`AutoBackupConfig`** на `AppSettings` (`models/settings.py`): `{enabled, interval_hours(1..8760), include_secrets,

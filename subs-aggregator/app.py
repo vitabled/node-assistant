@@ -61,7 +61,7 @@ def _host_is_public(host: str) -> bool:
 _SUB_USER_AGENTS = [
     "subs-aggregator/1",     # default (unchanged behaviour for working panels)
     "Happ/1.16.0",
-    "incy/1.0",
+    "INCY/3.3.7/android",
     "Streisand/1.6.0",
     "Shadowrocket/2.2.9",
 ]
