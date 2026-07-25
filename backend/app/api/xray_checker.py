@@ -82,6 +82,16 @@ def _parse_tag(name: str) -> tuple[str, str, str]:
     return "", "", name
 
 
+def _hidden_checker_nodes(checker_id: str) -> set[str]:
+    """stableIds the account hid for this checker (shared with the stats «Серверы»
+    picker). Never raises — a missing/old doc means «nothing hidden»."""
+    try:
+        doc = storage.load_stat_widgets()
+        return set((doc.get("hidden") or {}).get("checker", {}).get(checker_id, {}).keys())
+    except Exception:
+        return set()
+
+
 def _filter_by_account(items: list[dict], account_id: str, name_key: str = "name") -> list[dict]:
     """Keep only items belonging to `account_id` (by the name tag), strip the tag
     from the display name, and stash the originating subscription id under `subId`
@@ -186,19 +196,13 @@ async def checker_statuspage(ticks: int = 30, checker_id: str = metrics_store.LO
     bars, up30 = await asyncio.gather(
         metrics_store.get_bars(ticks, checker_id), metrics_store.get_uptime_30d(checker_id)
     )
-    protocols = sorted({p.get("protocol", "") for p in proxies if p.get("protocol")})
-    total = len(proxies)
-    online = sum(1 for p in proxies if p.get("online"))
 
-    # Global health state.
-    if total == 0:
-        gstate = "unknown"
-    elif online == total:
-        gstate = "ok"
-    elif online == 0:
-        gstate = "down"
-    else:
-        gstate = "partial"
+    # Per-node hiding: the account may drop individual subscription hosts from
+    # tracking. They stay SAMPLED (history/uptime survive), but are excluded from
+    # counts + the health banner and shipped with a `hidden` flag so the UI can
+    # tuck them into a separate section. Same set as the stats «Серверы» picker —
+    # both key on (checker_id, stableId).
+    hidden_ids = _hidden_checker_nodes(checker_id)
 
     nodes = [
         {
@@ -211,9 +215,27 @@ async def checker_statuspage(ticks: int = 30, checker_id: str = metrics_store.LO
             "latencyMs": p.get("latencyMs", -1),
             "uptime30d": up30["per_node"].get(p.get("stableId", "")),
             "bars":      bars.get(p.get("stableId", ""), []),
+            "hidden":    p.get("stableId", "") in hidden_ids,
         }
         for p in proxies
     ]
+
+    # Counts + health banner reflect ONLY the shown (non-hidden) nodes, so a dead
+    # host the operator stopped tracking can't keep the banner red.
+    shown = [n for n in nodes if not n["hidden"]]
+    protocols = sorted({n["protocol"] for n in shown if n["protocol"]})
+    total = len(shown)
+    online = sum(1 for n in shown if n["online"])
+
+    # Global health state.
+    if total == 0:
+        gstate = "unknown"
+    elif online == total:
+        gstate = "ok"
+    elif online == 0:
+        gstate = "down"
+    else:
+        gstate = "partial"
     # Subscription labels (for the top-level group headers on the dashboard). The
     # aggregator tags each proxy with its sub_id; map those to a human label.
     subs_meta: list[dict] = []
@@ -224,9 +246,10 @@ async def checker_statuspage(ticks: int = 30, checker_id: str = metrics_store.LO
             subs_meta.append({"id": s.get("id", ""), "label": label})
     except Exception:
         subs_meta = []
-    # Global 30d uptime scoped to THIS account's nodes (up30["global"] is the
-    # whole shared DB across all accounts — don't leak that coarse aggregate).
-    own_up = [n["uptime30d"] for n in nodes if n["uptime30d"] is not None]
+    # Global 30d uptime scoped to THIS account's SHOWN nodes (up30["global"] is
+    # the whole shared DB across all accounts — don't leak that coarse aggregate;
+    # hidden nodes are excluded so the number matches the visible list).
+    own_up = [n["uptime30d"] for n in shown if n["uptime30d"] is not None]
     global_uptime = round(sum(own_up) / len(own_up), 1) if own_up else None
 
     result.update({
@@ -251,6 +274,10 @@ async def checker_incidents(days: int = 7, checker_id: str = metrics_store.LOCAL
         raise HTTPException(404, "Инстанс мониторинга не найден")
     incidents = await metrics_store.get_incidents(days, checker_id)
     incidents = _filter_by_account(incidents, accounts.current_account.get() or "")
+    # Drop incidents of hidden nodes — a host the operator stopped tracking should
+    # not clutter the incident log either.
+    hidden_ids = _hidden_checker_nodes(checker_id)
+    incidents = [i for i in incidents if i.get("stableId") not in hidden_ids]
     return {"days": days, "incidents": incidents}
 
 

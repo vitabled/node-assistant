@@ -420,6 +420,20 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - `XrayCheckerConfig.enabled` дефолт **True** (мониторинг вкл. по умолчанию); `xray_checker.autostart_checker()` стартует общий контейнер на буте; `subscriptions._schedule_checker_reload()` (debounce 8с) перезапускает чекер при CRUD подписок.
 - Users-статы (`stats/UsersStats.tsx`): большой мульти-лайн график загрузки нод (6a), селектор чекера включает «Server uptime».
 
+### 9j. Скрытие отдельных узлов на «Xray uptime» (отложенный пункт, сделан)
+- **`POST /api/stats/users/hidden/checker`** (`api/user_stats.py`) — тогл ОДНОГО `(checker_id, stableId)` в
+  наборе `hidden.checker` с СОХРАНЕНИЕМ layout (read-modify-write, не full-replace). Чистая альтернатива
+  `PUT /widgets` для дэшборда, который не владеет раскладкой виджетов.
+- **`/api/checker/statuspage` и `/incidents`** (`api/xray_checker.py`) читают `_hidden_checker_nodes(cid)` и:
+  узлы отдаются с флагом `hidden`, но счётчики/баннер/`global.uptime30d` считаются ТОЛЬКО по нескрытым
+  (как «Server uptime» в §9b); инциденты скрытых отбрасываются. Пробы НЕ трогаются — история/аптайм живут.
+- ⚠️ **Один и тот же набор `hidden.checker[cid][stableId]`**, что у пикера «Серверы» статистики: обе оси
+  ключуются на `(checker_id, stableId)`, поэтому скрытие на дэшборде и в статистике — ОДНО множество
+  («не отслеживаю этот xray-узел»). Server-monitor скрывается ОТДЕЛЬНО (`servers.hidden`, §9b) — другое
+  пространство идентичности (row-id SQLite).
+- Frontend `Dashboard.tsx` (`XrayUptime`): кнопка EyeOff в строке узла (`trailing`) → скрыть; секция
+  «Не отслеживаются (N)» со скрытыми и кнопкой Eye → вернуть. `toggleHidden` шлёт тогл + перечитывает.
+
 ### 9c. Прочее Wave 3
 - **Автодетект существующего сервера (План B, 502b837 backend + фронт Ф2):** `node_ops._DETECT_SETTINGS_SCRIPT` echo `NIVAL:key=value` (ssh_port/open_ports/domain/remnanode_port/xhttp_path/**has_token** — сам токен НЕ читается) + `_parse_settings`; `/api/node/detect` → `{results, settings}`. `DeployRequest.skip_components` пропускает уже установленные компоненты. **Фронт Ф2:** `DeployDashboard` «Существующий сервер» читает `settings` → блок «Обнаружено на сервере» + маппит в `preset` формы (preset > settings-дефолты; тумблеры warp/optimize/trafficguard/hysteria2 зеркалят detect-компоненты). Vanilla-нода: nginx.conf/серта/UFW нет → detect отдаёт только ssh_port+has_token (проверено вживую).
 - **Templates CodeMirror (План C 4a):** `Templates.tsx` `<textarea>`→`<JsonEditor>` (переиспользован из profiles); `$xhttp_path` добавлен в подстановку config-profile И в `_subst_host_vars` (step_create_hosts).
@@ -693,3 +707,48 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - **`scripts/probe_subpage_config.py`** — самодостаточный (без jq, сам находит запись, PATCH-тест на КЛОНЕ →
   оригинал не тронут) снималка формы/семантики с живой панели. `PANEL=… TOKEN=… python scripts/…`. Windows:
   `sys.stdout.reconfigure(utf-8)` внутри, иначе cp1251 роняет кириллицу.
+
+## 12. HAPROXY — интеграция панели NodeFlow (deploy + proxy)
+> Запрос (2026-07-25): «Интегрируй функции прикреплённой панели NodeFlow в новую группу разделов HAPROXY».
+> Архитектура (выбор пользователя): **deploy + proxy** — node-installer РЕГИСТРИРУЕТ инстанс NodeFlow (URL +
+> `PANEL_ADMIN_TOKEN`) пер-аккаунт и проксирует его `/api/v1/*`, а разделы группы «HAPROXY» — нативные React-
+> страницы, бьющие в наш прокси. Реальный Go-агент + HAProxy-движок NodeFlow ПЕРЕИСПОЛЬЗУЕТСЯ, НЕ переписывается.
+> План `docs/superpowers/plans/2026-07-25-haproxy-nodeflow-integration.md`. Install-kit распакован только в
+> scratchpad (Go+Postgres+mTLS+agent-бинарь) — в репозиторий НИЧЕГО из него не копировалось.
+
+- **Что такое NodeFlow:** отдельный продукт — Go-панель + Postgres + mTLS-PKI + скомпилированный node-agent +
+  подписанные релизы. Ноды гоняют агент по mTLS, тот управляет **HAProxy** TCP-relay «маршрутами». Панель:
+  `GET /overview`, `GET/PATCH /settings`, `POST /bootstrap`(+`/host-key`,`GET /{job}`), `GET/POST /nodes`(+`/order`),
+  пер-нода `{id}`: `GET/PATCH/DELETE`,`/operational`,`/audit`,`/traffic`(+`/history`),`/firewall`,`/haproxy`(вкл/выкл),
+  `/agent-update`(+`/rollback`),`/routes`(GET/POST,+`/order`,+`/{rid}` GET/PATCH/DELETE),`/rotate-credentials`,
+  `/reinstall`,`/config-revisions`, `GET/POST/DELETE /agent-releases`.
+- **⚠️ Ключевая находка (auth):** `/api/v1/*` принимает `Authorization: Bearer <PANEL_ADMIN_TOKEN>`, и для
+  bearer-пути NodeFlow ПРОПУСКАЕТ same-origin/cookie/CSRF-проверки (они только для браузерных сессий). Поэтому
+  серверный прокси, инжектящий токен, гоняет ВСЕ функции без сессии. (`internal/panel/http.go::admin()`.)
+- **Backend:** `HaproxyConfig` на `AppSettings` (`enabled`, `base_url`, `admin_token_enc` — **Fernet**, как
+  MCP/cliproxy; наружу токен не отдаётся, только `has_token`). `services/nodeflow_client.py` — httpx-клиент:
+  `request(method, subpath, params, content, headers)` → `{base}/api/v1/{subpath}` с bearer, `follow_redirects=
+  False`, **SSRF-гард `net_guard.is_safe_url` и при регистрации, И на каждом запросе** (DNS-rebinding). `check()`
+  = health + аутентифицированный GET /settings. `api/haproxy.py` (под `require_account`): `GET/POST /api/haproxy/
+  config`, `POST /test`, и **дженерик-прокси `ANY /api/haproxy/proxy/{path:path}`** — сырое тело passthrough
+  (JSON И multipart-загрузка релиза), стрипает hop/auth-заголовки, инжектит bearer, доступен только префикс
+  `/api/v1/`. **Изоляция:** каждый аккаунт регистрирует СВОЙ инстанс → прокси всегда целится в его панель с его
+  токеном. Роутер подключён в `main.py` под `_auth`. Тесты `test_haproxy.py` (7: гейт, SSRF-reject на save,
+  шифрование-at-rest + blank-keeps, not-configured-гарды, forward метод/subpath/query + upstream-статус, Fernet).
+- **Frontend `components/haproxy/`:** `contracts.ts` (типы портированы из NodeFlow), `api.ts` (config/test +
+  `nf()`-прокси, `messageOf` парсит и наш `{detail}`, и NodeFlow `{error}`; `asList` нормализует
+  bare-array vs `{nodes|routes|releases:[]}`), `format.ts` (байты/битрейт/аптайм/тон). Страницы: `HaproxyConnect`
+  (Настройки: URL+токен+тест+вкл, экспортит `useHaproxyReady`+`NotConnected`-гейт), `HaproxyOverview` (KPI+топ-
+  маршруты, 15с-поллинг), `HaproxyNodes`(+`HaproxyAddNode` 3-шаговый мастер bootstrap: host-key-скан→подтверждение
+  отпечатка→POST /bootstrap + polling job; **секреты чистятся при сабмите**; +`HaproxyNodeDetail`: heartbeat-KPI,
+  вкл/выкл HAProxy, ротация кредов, удаление), `HaproxyRoutes`(+редактор: `routeModel.ts` draft↔record↔payload,
+  лёгкая клиент-валидация — глубокую делает `route_validation.go`), `HaproxyTraffic`, `HaproxyFirewall`
+  (off/observe/apply + порты), `HaproxyReleases` (список+удаление; загрузка/подпись — в самой NodeFlow). Nav-группа
+  «HAPROXY» в `Sidebar.tsx` (7 табов, после Remnawave), `Tab`-юнион + `CRUMB` + рендер-свитч в `App.tsx`.
+  Тесты `routeModel.test.ts` (13: payload any_tcp/sni/unix, expected_version, квоты, валидация, round-trip, asList).
+- **Отклонения/заметки:** MVP «deploy» = **register-by-URL** (аккаунт сам поднимает NodeFlow из install-kit,
+  затем вписывает URL+токен). SSH-деплой стека NodeFlow через `install-panel.sh` — ОТЛОЖЕН (тяжело: заливка
+  300 КБ исходников + 7.7 МБ бинаря агента + генерация PKI/signing-key). Прокси даёт все функции независимо от
+  способа поднятия. Дженерик-прокси не перечисляет ~30 эндпоинтов и авто-покрывает новые версии NodeFlow.
+  Reinstall ноды (нужен полный bootstrap-body с кредами) в UI пока НЕ вынесен — доступны вкл/выкл HAProxy, ротация
+  кредов, удаление. Verify: `pytest tests/test_haproxy.py` (7) + Docker `vitest routeModel.test.ts` (13) + `tsc`.

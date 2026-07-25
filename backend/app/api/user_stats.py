@@ -138,6 +138,37 @@ async def put_widgets(body: WidgetLayout) -> dict:
     return data
 
 
+class HiddenCheckerToggle(BaseModel):
+    checker_id: str = Field(..., max_length=64)
+    stable_id: str = Field(..., max_length=200)
+    name: str = ""
+    hidden: bool
+
+
+@router.post("/hidden/checker")
+async def toggle_hidden_checker(body: HiddenCheckerToggle) -> dict:
+    """Скрыть/показать ОДИН узел чекера в наборе `hidden.checker`, СОХРАНИВ layout.
+
+    Чистая альтернатива full-replace PUT для вызывающих, которые не владеют
+    раскладкой виджетов (дэшборд «Xray uptime»). Набор `hidden.checker[cid]`
+    ключуется на `stableId` — та же ось идентичности, что у узлов статус-страницы,
+    поэтому скрытие здесь и в пикере «Серверы» статистики — ОДИН набор."""
+    doc = storage.load_stat_widgets()
+    hidden = doc.get("hidden") or {"nodes": {}, "checker": {}}
+    checker = hidden.setdefault("checker", {})
+    inner = checker.setdefault(body.checker_id, {})
+    if body.hidden:
+        inner[body.stable_id] = (body.name or body.stable_id)[:_MAX_NAME]
+    else:
+        inner.pop(body.stable_id, None)
+        if not inner:
+            checker.pop(body.checker_id, None)
+    # Прогоняем через модель ради лимитов (кол-во узлов/чекеров).
+    doc["hidden"] = HiddenSet(**hidden).model_dump()
+    storage.save_stat_widgets(doc)
+    return {"hidden": doc["hidden"]}
+
+
 # ── Background collector ──────────────────────────────────────
 
 async def _collect_account(account_id: str) -> None:

@@ -1,22 +1,46 @@
 import { useState, useEffect, useCallback } from "react";
 import { Globe, Trash2, Plus, ShieldCheck, Loader2, Download } from "lucide-react";
-import { deployJobsKey } from "../auth/store";
+import { deployJobsKey, certJobsKey } from "../auth/store";
 import type { FormData } from "./DeployForm";
+import type { CertsFormData } from "./CertsForm";
 
 interface DeployJob { domain: string; ip: string; savedForm: FormData; finalStatus?: string }
 interface ManualDomain { id: string; domain: string }
 interface CertInfo { daysLeft: number; notAfter: string }
 
-// A domain row = a name + (for deployed nodes) its SSH creds so we can probe the
-// cert expiry, or (for manual domains) just the name + its store id for delete.
-interface Row { domain: string; ip?: string; form?: FormData; manualId?: string; cert?: CertInfo | null; probing?: boolean }
+// Normalised SSH creds for probing cert expiry / downloading the cert. Both
+// deployed nodes (from savedForm) and cert-only deploys (from CertsFormData)
+// reduce to this, so the probe/download code has one shape to work with.
+interface Creds { ip: string; ssh_user: string; ssh_password: string; ssh_port: number }
+
+// A domain row = a name + (for deployed/cert rows) its SSH creds so we can probe
+// the cert expiry & download it, or (for manual domains) just the name + store id.
+interface Row { domain: string; ip?: string; creds?: Creds; manualId?: string; certJob?: boolean; cert?: CertInfo | null; probing?: boolean }
 
 function loadDeployDomains(): Row[] {
   try {
     const jobs: DeployJob[] = JSON.parse(localStorage.getItem(deployJobsKey()) || "[]");
     return (Array.isArray(jobs) ? jobs : [])
       .filter(j => j.finalStatus === "success" && j.domain && j.savedForm?.mode !== "haproxy")
-      .map(j => ({ domain: j.domain, ip: j.ip, form: j.savedForm }));
+      .map(j => {
+        const f = j.savedForm;
+        const port = parseInt(f.change_ssh_port ? f.new_ssh_port : f.current_ssh_port, 10) || 22;
+        return { domain: j.domain, ip: j.ip,
+          creds: { ip: f.ip, ssh_user: f.ssh_user, ssh_password: f.ssh_password, ssh_port: port } };
+      });
+  } catch { return []; }
+}
+
+// Domains a cert was deployed to via «Управление SSL». No deploy_jobs entry is
+// made for a cert-only deploy, so without this the domain never appeared here.
+function loadCertDomains(): Row[] {
+  try {
+    const jobs: CertsFormData[] = JSON.parse(localStorage.getItem(certJobsKey()) || "[]");
+    return (Array.isArray(jobs) ? jobs : [])
+      .filter(j => j.domain)
+      .map(j => ({ domain: j.domain, ip: j.ip, certJob: true,
+        creds: { ip: j.ip, ssh_user: j.ssh_user, ssh_password: j.ssh_password,
+                 ssh_port: parseInt(j.ssh_port, 10) || 22 } }));
   } catch { return []; }
 }
 
@@ -30,7 +54,7 @@ function DownloadCtl({ row }: { row: Row }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr]   = useState("");
 
-  if (!row.form) {
+  if (!row.creds) {
     return (
       <button className="iconbtn" style={{ width: 22, height: 22, opacity: 0.4 }}
         disabled title="Нет сохранённых SSH-доступов (домен добавлен вручную)">
@@ -38,8 +62,7 @@ function DownloadCtl({ row }: { row: Row }) {
       </button>
     );
   }
-  const f = row.form;
-  const sshPort = parseInt(f.change_ssh_port ? f.new_ssh_port : f.current_ssh_port, 10) || 22;
+  const c = row.creds;
 
   const download = async () => {
     const files = [fc ? "fullchain" : "", key ? "key" : ""].filter(Boolean);
@@ -49,8 +72,8 @@ function DownloadCtl({ row }: { row: Row }) {
       const res = await fetch("/api/certs/download", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ip: f.ip, ssh_user: f.ssh_user, ssh_password: f.ssh_password,
-          ssh_port: sshPort, domain: row.domain, files,
+          ip: c.ip, ssh_user: c.ssh_user, ssh_password: c.ssh_password,
+          ssh_port: c.ssh_port, domain: row.domain, files,
         }),
       });
       if (!res.ok) {
@@ -104,39 +127,44 @@ function DownloadCtl({ row }: { row: Row }) {
   );
 }
 
-export function DomainsPanel() {
+export function DomainsPanel({ refreshKey = 0 }: { refreshKey?: number }) {
   const [rows, setRows]   = useState<Row[]>([]);
   const [adding, setAdding] = useState("");
   const [err, setErr]     = useState("");
 
   const load = useCallback(async () => {
+    // Priority: deployed node > cert deploy > manual — a domain present in a
+    // richer source keeps that row (deploy/cert rows carry SSH creds).
     const deployRows = loadDeployDomains();
+    const seen = new Set(deployRows.map(r => r.domain.toLowerCase()));
+    const certRows = loadCertDomains().filter(r => !seen.has(r.domain.toLowerCase()));
+    certRows.forEach(r => seen.add(r.domain.toLowerCase()));
+
     let manual: ManualDomain[] = [];
     try { manual = await fetch("/api/domains").then(r => r.json()); } catch { /* ignore */ }
-    // Dedup: a manual domain that's also a deployed node keeps the deploy row (has creds).
-    const seen = new Set(deployRows.map(r => r.domain.toLowerCase()));
     const manualRows: Row[] = (Array.isArray(manual) ? manual : [])
       .filter(m => !seen.has(m.domain.toLowerCase()))
       .map(m => ({ domain: m.domain, manualId: m.id }));
-    setRows([...deployRows, ...manualRows]);
+    setRows([...deployRows, ...certRows, ...manualRows]);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Reload on mount AND whenever a cert deploy just succeeded (refreshKey bump).
+  useEffect(() => { load(); }, [load, refreshKey]);
 
-  // Probe cert expiry for deployed rows (creds from savedForm), like DeployCard.
+  // Probe cert expiry for rows that carry creds (deployed nodes + cert deploys),
+  // like DeployCard.
   useEffect(() => {
     let alive = true;
     rows.forEach((row, i) => {
       // Guard on `probing` too: setting probing:true creates a new rows array,
       // which reruns this effect — without the probing check it would fire a
       // fresh SSH probe on every rerun until the first resolved (a fetch storm).
-      if (!row.form || row.cert !== undefined || row.probing) return;
-      const f = row.form;
-      const sshPort = parseInt(f.change_ssh_port ? f.new_ssh_port : f.current_ssh_port, 10) || 22;
+      if (!row.creds || row.cert !== undefined || row.probing) return;
+      const c = row.creds;
       setRows(rs => rs.map((r, j) => j === i ? { ...r, probing: true } : r));
       fetch("/api/stats/node", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ip: f.ip, ssh_port: sshPort, ssh_user: f.ssh_user, ssh_password: f.ssh_password, domain: row.domain }),
+        body: JSON.stringify({ ip: c.ip, ssh_port: c.ssh_port, ssh_user: c.ssh_user, ssh_password: c.ssh_password, domain: row.domain }),
       }).then(r => r.json()).then(d => {
         if (!alive) return;
         setRows(rs => rs.map((r, j) => j === i ? { ...r, cert: d.certInfo ?? null, probing: false } : r));
@@ -168,8 +196,21 @@ export function DomainsPanel() {
     await load();
   };
 
+  // Drop a cert-deploy row from tracking (it lives only in localStorage, not
+  // /api/domains). The cert on the server is untouched — this only stops tracking.
+  const removeCert = (domain: string) => {
+    try {
+      const key = certJobsKey();
+      const jobs = JSON.parse(localStorage.getItem(key) || "[]");
+      const next = (Array.isArray(jobs) ? jobs : [])
+        .filter((j: CertsFormData) => j.domain?.toLowerCase() !== domain.toLowerCase());
+      localStorage.setItem(key, JSON.stringify(next));
+    } catch { /* ignore */ }
+    load();
+  };
+
   const certLabel = (row: Row) => {
-    if (!row.form) return { text: "добавлен вручную", tone: "var(--t-faint)" };
+    if (!row.creds) return { text: "добавлен вручную", tone: "var(--t-faint)" };
     if (row.probing) return { text: "проверка…", tone: "var(--t-faint)" };
     const d = row.cert?.daysLeft;
     if (d === undefined || row.cert === null) return { text: "неизвестно", tone: "var(--t-faint)" };
@@ -199,6 +240,12 @@ export function DomainsPanel() {
               <DownloadCtl row={row} />
               {row.manualId && (
                 <button onClick={() => removeManual(row.manualId!)} title="Удалить"
+                  className="iconbtn danger" style={{ width: 22, height: 22 }}>
+                  <Trash2 size={12} />
+                </button>
+              )}
+              {row.certJob && (
+                <button onClick={() => removeCert(row.domain)} title="Убрать из отслеживания (сертификат на сервере не трогается)"
                   className="iconbtn danger" style={{ width: 22, height: 22 }}>
                   <Trash2 size={12} />
                 </button>

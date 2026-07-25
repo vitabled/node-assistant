@@ -156,8 +156,9 @@ function IncidentLog({ incidents }: { incidents: Incident[] }) {
 }
 
 // A collapsible country subgroup of node rows.
-function CountryGroup({ country, nodes, ticks, defaultOpen = true }: {
+function CountryGroup({ country, nodes, ticks, defaultOpen = true, onHide }: {
   country: string; nodes: Node[]; ticks: number; defaultOpen?: boolean;
+  onHide?: (n: Node) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const cc = flagFor(country);
@@ -175,7 +176,13 @@ function CountryGroup({ country, nodes, ticks, defaultOpen = true }: {
       </button>
       {open && (
         <div className="divide-y divide-[var(--line-soft)]">
-          {nodes.map(n => <NodeRow key={n.stableId} node={n} cc={cc} ticks={ticks} />)}
+          {nodes.map(n => (
+            <NodeRow key={n.stableId} node={n} cc={cc} ticks={ticks}
+              trailing={onHide && (
+                <button className="iconbtn shrink-0" title="Убрать из отслеживания"
+                  onClick={() => onHide(n)}><EyeOff size={13} /></button>
+              )} />
+          ))}
         </div>
       )}
     </div>
@@ -225,16 +232,33 @@ function XrayUptime() {
     setChecking(false);
   };
 
+  // Drop / restore an individual subscription host from tracking. The node keeps
+  // being sampled (history survives), it just leaves the counts and the groups.
+  // Same hidden set as the stats «Серверы» picker — both key on (checker, stableId).
+  const toggleHidden = async (node: Node, hidden: boolean) => {
+    await fetch("/api/stats/users/hidden/checker", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        checker_id: checkerId, stable_id: node.stableId, name: node.name, hidden,
+      }),
+    }).catch(() => {});
+    load(ticks);
+  };
+
   const g = data?.global;
   const running = data?.container === "running";
   const state: GState = running && g?.state ? g.state : "unknown";
 
+  const hiddenNodes = useMemo(
+    () => (data?.nodes ?? []).filter(n => n.hidden), [data]);
+
   // Two-level grouping: subscription → country. subId maps to a subscription
   // label; within a subscription, nodes are grouped by country (from the name).
+  // Hidden nodes leave the groups — they get their own section below.
   const subGroups = useMemo(() => {
     const subLabels = new Map((data?.subscriptions ?? []).map(s => [s.id, s.label]));
     const bySub = new Map<string, Node[]>();
-    (data?.nodes ?? []).forEach(n => {
+    (data?.nodes ?? []).filter(n => !n.hidden).forEach(n => {
       const key = n.subId || "";
       (bySub.get(key) ?? bySub.set(key, []).get(key)!).push(n);
     });
@@ -323,13 +347,35 @@ function XrayUptime() {
             {!isCollapsed && (
               <div className="flex flex-col gap-3 pl-1">
                 {sg.countries.map(([country, nodes]) => (
-                  <CountryGroup key={country} country={country} nodes={nodes} ticks={ticks} />
+                  <CountryGroup key={country} country={country} nodes={nodes} ticks={ticks}
+                    onHide={n => toggleHidden(n, true)} />
                 ))}
               </div>
             )}
           </div>
         );
       })}
+
+      {hiddenNodes.length > 0 && (
+        <details className="mb-5 rounded-xl border border-[var(--line-soft)] overflow-hidden">
+          <summary className="flex items-center gap-2.5 px-4 py-2.5 bg-[var(--bg2)] cursor-pointer text-sm text-[var(--t-mid)]">
+            <EyeOff size={14} className="text-[var(--t-low)]" />
+            Не отслеживаются ({hiddenNodes.length})
+            <span className="text-[11px] text-[var(--t-faint)]">не влияют на счётчики и баннер</span>
+          </summary>
+          <div className="divide-y divide-[var(--line-soft)]">
+            {hiddenNodes.map(n => (
+              <div key={n.stableId} className="flex items-center gap-2 px-4 py-2 text-sm">
+                <FlagChip code={flagFor(n.groupName)} size={16} />
+                <span className="trunc flex-1 text-[var(--t-low)]">{n.name}</span>
+                {n.groupName && <span className="text-[11px] text-[var(--t-faint)]">{n.groupName}</span>}
+                <button className="iconbtn" title="Вернуть в отслеживание"
+                  onClick={() => toggleHidden(n, false)}><Eye size={13} /></button>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
 
       <IncidentLog incidents={incidents} />
     </>

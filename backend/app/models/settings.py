@@ -120,6 +120,19 @@ class AiConfig(BaseModel):
     # per-account field made every non-owner look like the owner (Wave-7 review).
 
 
+class HaproxyConfig(BaseModel):
+    """Wave-7: connection to a NodeFlow HAProxy panel (deploy + proxy integration).
+    node-installer registers a per-account NodeFlow instance (URL + PANEL_ADMIN_TOKEN)
+    and proxies its `/api/v1/*` so the «HAPROXY» nav group can drive the real agent/
+    HAProxy engine. The admin token is an infra-control secret → Fernet-encrypted
+    (`admin_token_enc`), like the MCP/cliproxy vaults; the plaintext is NEVER returned
+    to the client (the config endpoint exposes only `has_token`)."""
+
+    enabled: bool = False
+    base_url: str = ""  # NodeFlow panel base URL (e.g. https://haproxy.example.com)
+    admin_token_enc: str = ""  # Fernet ciphertext (base64) of PANEL_ADMIN_TOKEN
+
+
 class AppearanceConfig(BaseModel):
     """Per-account mirror of the UI appearance prefs (Wave-5 Plan B) so the look
     follows the account across devices. No secrets → plain JSON, no Fernet.
@@ -142,6 +155,7 @@ class AppSettings(BaseModel):
     xray_checker: XrayCheckerConfig = XrayCheckerConfig()
     mcp: McpConfig = McpConfig()
     ai: AiConfig = AiConfig()
+    haproxy: HaproxyConfig = HaproxyConfig()
     appearance: AppearanceConfig = AppearanceConfig()
 
     @model_validator(mode="after")

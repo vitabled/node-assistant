@@ -104,6 +104,12 @@ export function deployJobsKey(id: string | null = state.activeId): string {
 export function panelJobsKey(id: string | null = state.activeId): string {
   return `panel_jobs_${id ?? "none"}`;
 }
+// Domains a cert was deployed to via «Управление SSL» (not full node deploys).
+// Client-only, like deploy_jobs: it holds SSH creds so the domain row can probe
+// cert expiry and download the cert — creds never persist server-side.
+export function certJobsKey(id: string | null = state.activeId): string {
+  return `cert_jobs_${id ?? "none"}`;
+}
 export function tabKey(id: string | null = state.activeId): string {
   return `ni_tab_${id ?? "none"}`;
 }
