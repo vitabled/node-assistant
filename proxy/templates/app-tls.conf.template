@@ -13,8 +13,10 @@ server {
     # 301 below into a certificate it cannot verify for 127.0.0.1.
     include /etc/nginx/snippets/healthz.conf;
 
+    # ${REDIRECT_HOST} is `$host`, or `$host:<port>` when HTTPS is published on a
+    # non-standard port — otherwise the browser would be sent to :443.
     location / {
-        return 301 https://$host$request_uri;
+        return 301 https://${REDIRECT_HOST}$request_uri;
     }
 }
 

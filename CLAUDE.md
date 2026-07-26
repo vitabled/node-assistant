@@ -1002,27 +1002,45 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - Тома: `node-letsencrypt` (серты — **не терять**, иначе повторная выдача против rate-limit) и
   `node-acme-webroot` (challenge-файлы, общий с proxy).
 
-### 14c. `install.sh`
-- Один прогон на чистом сервере: prerequisites (curl/git/openssl) → Docker (get.docker.com) + Compose v2 →
-  найти/склонировать репо (`/opt/node-assistant`) → домен/e-mail → **preflight** (A-запись vs публичный IP,
-  занятость 80/443) → `.env` → firewall (ufw/firewalld) → `build` + `up -d` → ждать `/healthz` → выдать серт →
-  `restart proxy` (рестарт = ре-рендер в TLS-шаблон) → проверить `https://domain/api/health` → сводка.
-- **Идемпотентность:** существующие `ENCRYPTION_KEY`/`AGG_TOKEN` НЕ перегенерируются (иначе инвалидировались бы
-  сессии и Fernet-волты); серт переиспользуется, если есть (`--force-cert` для форса). Повторный прогон =
-  обновление (`git pull --ff-only` только при чистом дереве).
-- **⚠️ Промпты читают `/dev/tty`, а не stdin** — при `curl … | bash` stdin это САМ СКРИПТ, и обычный `read`
-  сожрал бы его остаток. Нет tty → берётся дефолт (для CI нужен `--domain`/`-y`).
-- Флаги: `--domain --email --no-tls --staging --force-cert --dir --branch --repo -y`. `--staging` = staging-CA
-  без rate-limit для отладки DNS/файрвола (урок §6 про LE rate limit).
-- Неудачная выдача серта **не валит установку**: панель остаётся на HTTP + печатается диагностика по 3 частым
-  причинам (DNS, провайдерский файрвол, rate-limit).
-- **⚠️ `.gitattributes` (`*.sh text eol=lf`)** — репо пишется на Windows (`core.autocrlf=true`), а исполняется на
-  Linux: CRLF в `entrypoint.sh` даёт `/entrypoint.sh: not found`, в `install.sh` — `bad interpreter: /bin/sh^M`.
-- **Проверка:** `docker compose config` валиден; образ proxy собран; **реальными контейнерами** проверены оба
-  режима (HTTP-only: `/healthz` 200, `/internal` 404, `/` 502 при отсутствующем frontend, контейнер жив; TLS:
-  `listen 443 ssl` + `http2`, HTTP→301, ACME без редиректа, HTTPS 200, HSTS есть, `server_tokens off`);
-  авто-переход HTTP→TLS watcher'ом; `bash -n` + `shellcheck` чисто. ⚠️ Сам `install.sh` целиком на чистом
-  VPS не гонялся (нет тестового сервера) — проверены синтаксис, линт и все компоненты, которыми он управляет.
+### 14c. `install.sh` — установщик И management-CLI
+- **Установка ОДНОЙ командой** (репо публичный, дефолтная ветка `main`):
+  `curl -fsSL https://raw.githubusercontent.com/vitabled/node-assistant/main/install.sh | sudo bash -s -- --domain … --email …`.
+  Работает потому, что: пайп → `BASH_SOURCE[0]` не файл → `SELF=""` (гард обязателен под `set -u`) → нет чекаута
+  рядом → клон в `/opt/node-assistant`; промпты читают `/dev/tty`, а не stdin (иначе `read` съел бы остаток
+  скрипта). **Проверено в debian:12-slim:** пайп с `--help`, пайп с management-командой («не установлено»), и
+  реальный пайп-install доходит до установки prerequisites.
+- **Команды:** `install` (дефолт) · `status` · `check-updates` · `update` · `set-domain <fqdn>` · `set-ports`.
+  Диспетчер разбирает первый аргумент; неизвестная команда → внятная ошибка (не молчаливый install).
+  `set-domain` берёт домен позиционно.
+- **`check-updates` возвращает exit 10**, если апдейт есть (0 = актуально) — чтобы вешать на cron:
+  `node-assistant check-updates || node-assistant update -y`. `update`: `fetch` → `merge --ff-only` →
+  `build` → `up -d` → `reload_proxy` → пере-создать шорткат. **Отказывается работать при грязном дереве**
+  (не перезатирает локальные правки). ⚠️ В панели есть СВОЙ апдейтер (§13e, DooD-sidecar) — оба работают с тем же
+  чекаутом, конфликта нет, но не запускать одновременно.
+- **Шорткат `/usr/local/bin/node-assistant`** создаётся при первой успешной установке — **симлинк**, а не копия,
+  чтобы `update` не оставлял позади устаревший CLI. ⚠️ Поэтому `SELF` резолвится через **`readlink -f`**: без этого
+  все management-команды искали бы репо в `/usr/local/bin`. **Проверено на Linux:** запуск шортката из `/` находит
+  APP_DIR. Существующий НЕ-симлинк по этому пути не трогается (предупреждение).
+- **Порты веб-входа** (`HTTP_PORT`/`HTTPS_PORT` в `.env` → `ports: "${HTTP_PORT:-80}:80"`): установщик спрашивает
+  их с дефолтами 80/443 (Enter = пропустить; `-y`/`--default-ports`/явные флаги пропуск без вопроса), меняются
+  `set-ports`. Это ЕДИНСТВЕННЫЕ порты, которые могут конфликтовать — остальные живут в bridge-сети.
+  **⚠️ Let's Encrypt http-01 валидируется по ПУБЛИЧНОМУ :80** → при `HTTP_PORT != 80` выдача невозможна:
+  `warn_http01_port` предупреждает и ПРОПУСКАЕТ выдачу (не падает).
+- **⚠️ Нестандартный HTTPS-порт ломал бы редирект:** `return 301 https://$host$request_uri` увёл бы браузер на
+  :443, где никого нет. Поэтому шаблон получил `${REDIRECT_HOST}`, а entrypoint подставляет `$host` или
+  `$host:8443` (`PROXY_HTTPS_PORT` из compose). `$host` остаётся литералом — envsubst не ресканирует подставленное
+  значение. **Проверено контейнерами:** 443 → `https://127.0.0.1/`, 8443 → `https://127.0.0.1:8443/`.
+- **Идемпотентность:** `ENCRYPTION_KEY`/`AGG_TOKEN` НЕ перегенерируются (иначе инвалидация сессий и Fernet-волтов);
+  домен/порты/e-mail читаются обратно из `.env`, так что `sudo node-assistant` без флагов = ремонт/обновление
+  конфигурации.
+- **⚠️ `.gitattributes` (`*.sh text eol=lf`, `.env.example text eol=lf`)** — репо пишется на Windows
+  (`core.autocrlf=true`), исполняется на Linux: CRLF в `entrypoint.sh` → `/entrypoint.sh: not found`,
+  в `install.sh` → `bad interpreter: /bin/sh^M`, в `.env` → `
+` в КАЖДОМ значении.
+- **Проверка:** `bash -n` + `shellcheck` чисто; `docker compose config` с `HTTP_PORT=8080 HTTPS_PORT=8443` даёт
+  правильные published-порты и `PROXY_HTTPS_PORT`; оба режима прокси и оба варианта редиректа — реальными
+  контейнерами; шорткат и пайп-режим — в debian-контейнере. ⚠️ Полный install на чистом VPS не гонялся (нет
+  тестового сервера) — проверены синтаксис, линт, диспетчер, резолв путей и все компоненты по отдельности.
 
 ### 14d. Что нашёл adversarial-ревью (12 агентов, 4 линзы) — НЕ регрессировать
 - **⚠️ `/healthz` обязан отвечать на :80 И в TLS-режиме** (`snippets/healthz.conf`, включён в port-80 блок ОБОИХ

@@ -19,6 +19,17 @@ CONF=/etc/nginx/conf.d/default.conf
 CERT_DIR="/etc/letsencrypt/live/$DOMAIN"
 WATCH_INTERVAL="${PROXY_RELOAD_INTERVAL:-21600}"   # seconds (busybox sleep: no suffixes)
 
+# The HTTP→HTTPS redirect must carry the PUBLIC https port when it is not 443.
+# `$host` stays a literal here — envsubst only replaces the placeholders it is
+# given, and does not rescan the values it substitutes in.
+HTTPS_PORT="${PROXY_HTTPS_PORT:-443}"
+if [ "$HTTPS_PORT" = "443" ]; then
+    # shellcheck disable=SC2016  # literal on purpose: nginx expands $host, not us
+    REDIRECT_HOST='$host'
+else
+    REDIRECT_HOST="\$host:$HTTPS_PORT"
+fi
+
 render() {
     if [ "$DOMAIN" != "_" ] && [ -s "$CERT_DIR/fullchain.pem" ] && [ -s "$CERT_DIR/privkey.pem" ]; then
         _tpl=/templates/app-tls.conf.template
@@ -31,8 +42,10 @@ render() {
     # also eat nginx's own runtime variables ($host, $request_uri, $http_upgrade,
     # …) and silently produce a broken config.
     # shellcheck disable=SC2016  # the single quotes are REQUIRED: envsubst takes
-    # the literal string '${PROXY_DOMAIN}' as its allow-list, not its value.
-    PROXY_DOMAIN="$DOMAIN" envsubst '${PROXY_DOMAIN}' < "$_tpl" > "$1"
+    # the literal strings as its allow-list, not their values. Without the
+    # allow-list it would also eat nginx's own $host/$request_uri/$http_upgrade.
+    PROXY_DOMAIN="$DOMAIN" REDIRECT_HOST="$REDIRECT_HOST" \
+        envsubst '${PROXY_DOMAIN} ${REDIRECT_HOST}' < "$_tpl" > "$1"
 
     # ⚠️ On a host booted with ipv6.disable=1 the container has no AF_INET6, and
     # `listen [::]:80` makes nginx abort at startup with

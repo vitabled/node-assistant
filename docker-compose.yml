@@ -231,9 +231,15 @@ services:
     environment:
       # Empty → HTTP-only catch-all. Set by install.sh (or by hand in .env).
       - PROXY_DOMAIN=${PROXY_DOMAIN:-}
+      # Public HTTPS port, needed for the HTTP→HTTPS redirect: on a non-standard
+      # port the 301 must name it, or the browser lands on :443 where nothing is.
+      - PROXY_HTTPS_PORT=${HTTPS_PORT:-443}
+    # Web entry ports on the host — `node-assistant set-ports` writes these.
+    # ⚠️ Let's Encrypt http-01 validates over PUBLIC port 80; moving HTTP off 80
+    # means no automatic certificate (install.sh warns and skips issuance).
     ports:
-      - "80:80"
-      - "443:443"
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
     volumes:
       - letsencrypt:/etc/letsencrypt
       - acme-webroot:/var/www/certbot
