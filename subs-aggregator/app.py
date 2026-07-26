@@ -54,7 +54,25 @@ def _host_is_public(host: str) -> bool:
     return True
 
 
-def _safe_fetch(url: str, timeout: float = FETCH_TIMEOUT) -> bytes:
+# Subscription-fetch User-Agent fallback chain (Wave-8): panels serve different
+# formats by UA. Try the aggregator's own UA first (its long-standing behaviour),
+# then client UAs for panels that only return a usable list to a specific client.
+# The first response whose decoded body has proxy-URI lines wins.
+_SUB_USER_AGENTS = [
+    "subs-aggregator/1",     # default (unchanged behaviour for working panels)
+    "Happ/1.16.0",
+    "INCY/3.3.7/android",
+    "Streisand/1.6.0",
+    "Shadowrocket/2.2.9",
+]
+_LINK_SCHEMES = (
+    "vless://", "vmess://", "trojan://", "ss://", "ssr://",
+    "tuic://", "hysteria://", "hysteria2://", "hy2://",
+)
+
+
+def _safe_fetch(url: str, timeout: float = FETCH_TIMEOUT,
+                user_agent: str = "subs-aggregator/1") -> bytes:
     """Fetch a USER-supplied upstream subscription with SSRF guards: only
     http/https, only public hosts, size-capped read. (The trusted internal
     source URL uses plain `_fetch`, not this.)"""
@@ -64,12 +82,37 @@ def _safe_fetch(url: str, timeout: float = FETCH_TIMEOUT) -> bytes:
     host = parsed.hostname or ""
     if not host or not _host_is_public(host):
         raise ValueError("host not allowed (non-public / unresolvable)")
-    req = urllib.request.Request(url, headers={"User-Agent": "subs-aggregator/1"})
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = resp.read(MAX_SUB_BYTES + 1)
     if len(data) > MAX_SUB_BYTES:
         raise ValueError("subscription too large")
     return data
+
+
+def _has_link_lines(lines: list[str]) -> bool:
+    return any(ln.lower().startswith(_LINK_SCHEMES) for ln in lines)
+
+
+def _fetch_sub_lines(url: str) -> list[str]:
+    """Fetch + decode an upstream subscription through the UA fallback chain:
+    return the first decoded body that has proxy-URI lines, else the first body
+    that fetched at all. Raises only if EVERY UA failed to fetch."""
+    first = None
+    last_err = None
+    for ua in _SUB_USER_AGENTS:
+        try:
+            lines = _decode_sub_body(_safe_fetch(url, user_agent=ua))
+        except Exception as exc:      # network / too-large — try the next UA
+            last_err = exc
+            continue
+        if first is None:
+            first = lines
+        if _has_link_lines(lines):
+            return lines
+    if first is not None:
+        return first
+    raise last_err if last_err else ValueError("empty subscription")
 
 # Per-subscription cache: key -> {configs: [str], error, tag, count, url}
 # `configs` are already tagged. Survives across /sub calls; re-fetched only on a
@@ -136,7 +179,7 @@ def _load_sub(account_id: str, sub_id: str, url: str) -> dict:
     key = _sub_key(account_id, sub_id)
     tag = key  # tag == "account:sub"
     try:
-        lines = _decode_sub_body(_safe_fetch(url))
+        lines = _fetch_sub_lines(url)     # UA fallback chain (Wave-8)
         tagged = [_tag_config(ln, tag) for ln in lines]
         entry = {"configs": tagged, "error": None, "tag": tag, "count": len(tagged), "url": url}
     except Exception as exc:  # upstream down / malformed

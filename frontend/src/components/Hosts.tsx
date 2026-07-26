@@ -6,18 +6,18 @@ import { loadDeployNodes } from "./infra/ui";
 // ── Types (mirrors backend Pydantic HostTemplateBody exactly) ──
 
 export interface BalancerRef {
-  config_profile_uuid: string;
+  template_uuid: string;
   tag_prefix: string;
 }
 
 // MultiSelect works over string values; encode a balancer ref as
-// "<config_profile_uuid>::<tag_prefix>" (tag_prefix charset excludes ':').
-const balKey = (b: BalancerRef) => `${b.config_profile_uuid}::${b.tag_prefix}`;
+// "<template_uuid>::<tag_prefix>" (tag_prefix charset excludes ':').
+const balKey = (b: BalancerRef) => `${b.template_uuid}::${b.tag_prefix}`;
 const balParse = (v: string): BalancerRef => {
   const i = v.indexOf("::");
   return i < 0
-    ? { config_profile_uuid: v, tag_prefix: "" }
-    : { config_profile_uuid: v.slice(0, i), tag_prefix: v.slice(i + 2) };
+    ? { template_uuid: v, tag_prefix: "" }
+    : { template_uuid: v.slice(0, i), tag_prefix: v.slice(i + 2) };
 };
 
 export interface HostTemplate {
@@ -411,8 +411,8 @@ function HostEditorModal({ initial, onClose, onSave }: {
       .then((data: any[]) => {
         if (!alive) return;
         setBalancerOptions((data || []).map(b => ({
-          value: `${b.config_profile_uuid}::${b.tag_prefix}`,
-          label: `${b.config_profile_name || "профиль"} · ${b.tag_prefix} (${b.count})`,
+          value: `${b.template_uuid}::${b.tag_prefix}`,
+          label: `${b.template_name || "шаблон"} · ${b.tag_prefix} (${b.count})`,
         })));
         setBalancerLoading(false);
       })

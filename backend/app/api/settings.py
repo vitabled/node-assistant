@@ -298,35 +298,37 @@ async def get_node_plugins():
 
 @router.get("/remnawave/balancers")
 async def get_balancers():
-    """Wave-8 §5 — every uuids-selector «balancer group» across all config
-    profiles: `[{config_profile_uuid, config_profile_name, tag_prefix, count}]`.
-    A host's uuid is appended to a chosen group's selector at deploy time."""
+    """Wave-8 §5 — every uuids-selector «balancer group» across all XRAY_JSON
+    subscription-templates: `[{template_uuid, template_name, tag_prefix, count}]`.
+    The selector lives in `templateJson.remnawave.injectHosts[]` (e.g. the «Auto»
+    template) — NOT in config profiles; a host's uuid is appended to a chosen
+    group's selector at deploy time."""
     from app.services import xray_selector
 
     client = _client()
     try:
-        profiles = await client.list_config_profiles()
+        tpls = await client.list_subscription_templates()
     except RemnavaveError as exc:
         raise HTTPException(exc.status or 502, exc.detail)
     except Exception as exc:
         raise HTTPException(502, str(exc))
 
     out: list[dict] = []
-    for p in profiles:
-        uuid = p.get("uuid")
+    for t in tpls:
+        if (t.get("templateType") or "").upper() != "XRAY_JSON":
+            continue
+        uuid = t.get("uuid")
         if not uuid:
             continue
-        # The list payload may omit `config`; fetch the profile to be sure.
-        config = p.get("config")
-        if not isinstance(config, dict):
-            try:
-                config = (await client.get_config_profile(uuid)).get("config") or {}
-            except Exception:
-                config = {}
-        for g in xray_selector.list_uuid_groups(config):
+        # The list payload omits templateJson; fetch the template to read it.
+        try:
+            tj = (await client.get_subscription_template(uuid)).get("templateJson") or {}
+        except Exception:
+            continue
+        for g in xray_selector.list_uuid_groups(tj):
             out.append({
-                "config_profile_uuid": uuid,
-                "config_profile_name": p.get("name") or "",
+                "template_uuid": uuid,
+                "template_name": t.get("name") or "",
                 "tag_prefix": g["tag_prefix"],
                 "count": g["count"],
             })

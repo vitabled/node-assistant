@@ -41,6 +41,8 @@ class GeoRegistry(BaseModel):
 
 class AnalyzeResult(BaseModel):
     host: str = ""
+    hosts: list[str] = []          # all addresses that resolved to this IP
+    names: list[str] = []          # subscription link names for this host
     ip: str = ""
     asn: AsnResult = AsnResult()
     geo_actual: GeoActual = GeoActual()

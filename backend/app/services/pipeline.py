@@ -1810,31 +1810,32 @@ def _map_host_optional(tpl: dict) -> dict:
 
 
 async def _apply_host_balancers(task: Task, client, balancers: list, host_uuid: str) -> None:
-    """Wave-8 §5 — append `host_uuid` to each referenced balancer group's selector.
-    Best-effort: a per-balancer failure warns and continues (never fails the deploy).
-    Idempotent — `add_uuid` dedups, so a retry is a no-op."""
+    """Wave-8 §5 — append `host_uuid` to each referenced balancer group's selector,
+    which lives in an XRAY_JSON subscription-template's `templateJson.remnawave.
+    injectHosts`. Best-effort: a per-balancer failure warns and continues (never
+    fails the deploy). Idempotent — `add_uuid` dedups, so a retry is a no-op."""
     from app.services import xray_selector
     from app.services.remnawave_client import RemnavaveError
 
     for bal in balancers or []:
         if not isinstance(bal, dict):
             continue
-        prof_uuid = (bal.get("config_profile_uuid") or "").strip()
+        tpl_uuid = (bal.get("template_uuid") or "").strip()
         tag_prefix = (bal.get("tag_prefix") or "").strip()
-        if not prof_uuid or not tag_prefix:
+        if not tpl_uuid or not tag_prefix:
             continue
         try:
-            profile = await client.get_config_profile(prof_uuid)
-            config = profile.get("config") if isinstance(profile, dict) else None
-            new_config, changed = xray_selector.add_uuid(config or {}, tag_prefix, host_uuid)
+            full = await client.get_subscription_template(tpl_uuid)
+            tj = full.get("templateJson") if isinstance(full, dict) else None
+            new_tj, changed = xray_selector.add_uuid(tj or {}, tag_prefix, host_uuid)
             if not changed:
                 task.add_log(
                     f"\x1b[36m[Балансер] Группа «{tag_prefix}» не найдена или хост уже в ней — пропуск.\x1b[0m"
                 )
                 continue
-            await client.update_config_profile(prof_uuid, new_config)
+            await client.update_subscription_template(tpl_uuid, template_json=new_tj)
             task.add_log(
-                f"\x1b[32m[Балансер] Хост добавлен в selector «{tag_prefix}» (профиль {prof_uuid}).\x1b[0m"
+                f"\x1b[32m[Балансер] Хост добавлен в selector «{tag_prefix}» (шаблон {tpl_uuid}).\x1b[0m"
             )
         except RemnavaveError as exc:
             task.add_log(f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Балансер «{tag_prefix}»: {exc.detail}\x1b[0m")

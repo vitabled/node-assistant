@@ -347,8 +347,9 @@ async def _uninstall(ssh: SSHSession, task, req: NodeOpRequest) -> None:
 
 async def _cleanup_remnawave_balancers(task, req: NodeOpRequest) -> None:
     """Best-effort removal side of the §5 lifecycle. Matches the node's Remnawave
-    hosts by address (= the deploy domain) and removes their uuids from every
-    uuids-selector group. A panel that isn't configured / reachable → silent skip."""
+    hosts by address (= the deploy domain) and strips their uuids from every
+    XRAY_JSON subscription-template's selector. Panel not configured/reachable →
+    silent skip."""
     try:
         from app.models.settings import AppSettings
         from app.services import storage, xray_selector
@@ -365,24 +366,24 @@ async def _cleanup_remnawave_balancers(task, req: NodeOpRequest) -> None:
         ]
         if not host_uuids:
             return
-        for p in await client.list_config_profiles():
-            puuid = p.get("uuid")
-            if not puuid:
+        for t in await client.list_subscription_templates():
+            if (t.get("templateType") or "").upper() != "XRAY_JSON":
                 continue
-            config = p.get("config")
-            if not isinstance(config, dict):
-                try:
-                    config = (await client.get_config_profile(puuid)).get("config") or {}
-                except Exception:
-                    continue
+            tuuid = t.get("uuid")
+            if not tuuid:
+                continue
+            try:
+                tj = (await client.get_subscription_template(tuuid)).get("templateJson") or {}
+            except Exception:
+                continue
             changed_any = False
             for hu in host_uuids:
-                config, ch = xray_selector.remove_uuid_everywhere(config, hu)
+                tj, ch = xray_selector.remove_uuid_everywhere(tj, hu)
                 changed_any = changed_any or ch
             if changed_any:
-                await client.update_config_profile(puuid, config)
+                await client.update_subscription_template(tuuid, template_json=tj)
                 task.add_log(
-                    f"\x1b[32m[Балансер] Хосты ноды убраны из selector профиля {puuid}.\x1b[0m"
+                    f"\x1b[32m[Балансер] Хосты ноды убраны из selector шаблона {tuuid}.\x1b[0m"
                 )
     except Exception as exc:
         task.add_log(f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Очистка балансеров при удалении: {exc}\x1b[0m")

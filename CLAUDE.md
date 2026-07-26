@@ -827,49 +827,85 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   9/9; `tsc` чисто; `search.test.ts` 13/13 (+теги/ASN/legacy-без-ключа).
 
 ### 13b. Ф2 — балансер (selector) вместо `$hostid`
-- **Переменной `$hostid` НЕТ** (и не было — идея отменена). Вместо неё host UUID дописывается в РЕАЛЬНЫЙ selector
-  Remnawave: `config["remnawave"]["injectHosts"][].selector={type:"uuids",values:[…]}` (+`tagPrefix`).
-- **`services/xray_selector.py` (чистые хелперы):** `list_uuid_groups(config)->[{tag_prefix,count}]`,
-  `add_uuid`/`remove_uuid`/`remove_uuid_everywhere` → `(new_config, changed)`. Всё deepcopy, дедуп, порядок
-  values сохраняется (= порядок аутбаундов), группа не найдена/битый config → `changed=False`, НЕ бросают.
-- **API:** `GET /api/remnawave/balancers` (`api/settings.py`) — по всем config-профилям активной панели собирает
-  uuids-selector-группы → `[{config_profile_uuid, config_profile_name, tag_prefix, count}]` (лист-payload без
-  `config` → дотягивает `get_config_profile`). Гейт «панель не настроена» → 400.
-- **Модель:** `HostTemplateBody.balancers: list[BalancerRef]`, `BalancerRef{config_profile_uuid, tag_prefix}`
-  (`tag_prefix` charset-валидируется `[A-Za-z0-9_.\-]{1,64}`; `config_profile_uuid` может отличаться от профиля ноды).
-- **Жизненный цикл:** **добавление** — `pipeline._apply_host_balancers` вызывается в `step_create_hosts` СРАЗУ после
-  `create_host` (взяли `created["uuid"]`): для каждого `tpl.balancers` → `get_config_profile` → `add_uuid` →
-  `update_config_profile`. Best-effort, per-balancer failure = warn, не валит деплой; идемпотентно (дедуп).
-  **Удаление** — `node_ops._cleanup_remnawave_balancers` в `_uninstall` при `component=="remnanode"`: матчит хосты
-  ноды по `address==req.domain` → `remove_uuid_everywhere` по всем профилям (страховка — selector и есть накопленный
-  список). Best-effort. ⚠️ **Ограничение:** ручное удаление хоста в панели selector НЕ чистит (нет backend-события);
-  удаление карточки деплоя — клиентское (localStorage), тоже не чистит.
+- **Переменной `$hostid` НЕТ**. Host UUID дописывается в РЕАЛЬНЫЙ selector Remnawave: `remnawave.injectHosts[].
+  selector={type:"uuids",values:[host-uuid…]}` (+`tagPrefix`). **⚠️ ГДЕ ЖИВЁТ SELECTOR (снято с живой панели):**
+  НЕ в config-профилях (там стандартный xray log/dns/inbounds/outbounds/routing, injectHosts НЕТ), а в
+  **XRAY_JSON subscription-templates** — `templateJson.remnawave.injectHosts`. Хост ссылается на такой шаблон через
+  `xrayJsonTemplateUuid`; шаблон-балансер («Auto»/«NL_auto»/«RU_auto») имеет группы вроде `foreign-proxy`/
+  `wl-proxy`/`russian-proxy`. `xrayJsonTemplateUuid` хоста = uuid subscription-template типа XRAY_JSON.
+- **`services/xray_selector.py` (чистые хелперы, работают на `templateJson`):** `list_uuid_groups(tj)->[{tag_prefix,
+  count}]`, `add_uuid`/`remove_uuid`/`remove_uuid_everywhere` → `(new_tj, changed)`. Deepcopy, дедуп, порядок
+  values сохраняется, группа не найдена/битый tj → `changed=False`, НЕ бросают. (Структура `remnawave.injectHosts`
+  идентична и в config, и в templateJson — модуль не менялся при смене источника.)
+- **API:** `GET /api/remnawave/balancers` (`api/settings.py`) — `list_subscription_templates` → фильтр
+  `templateType=="XRAY_JSON"` → per шаблон `get_subscription_template(uuid).templateJson` → `list_uuid_groups` →
+  `[{template_uuid, template_name, tag_prefix, count}]`. Гейт «панель не настроена» → 400.
+- **Модель:** `HostTemplateBody.balancers: list[BalancerRef]`, `BalancerRef{template_uuid, tag_prefix}`
+  (`tag_prefix` charset `[A-Za-z0-9_.\-]{1,64}`).
+- **Жизненный цикл:** **добавление** — `pipeline._apply_host_balancers` в `step_create_hosts` СРАЗУ после
+  `create_host` (взяли `created["uuid"]`): для каждого `tpl.balancers` → `get_subscription_template` → `add_uuid`
+  → `update_subscription_template(template_json=…)`. Best-effort, per-balancer failure = warn, идемпотентно.
+  **Удаление** — `node_ops._cleanup_remnawave_balancers` при `component=="remnanode"`: матчит хосты ноды по
+  `address==req.domain` → `remove_uuid_everywhere` по всем XRAY_JSON-шаблонам. ⚠️ Ручное удаление хоста в панели/
+  удаление карточки деплоя selector НЕ чистят.
 - **Frontend `Hosts.tsx`:** MultiSelect «Балансеры» (вкладка «Расширенные»), опции из `/balancers`, label
-  «<профиль> · <tagPrefix> (N)», value кодируется `<uuid>::<tagPrefix>` (`balKey`/`balParse`; `tag_prefix` без `:`).
-  Гейт «панель не настроена» → hint. `MultiSelect` теперь экспортирует `SelectOption`.
-- **Проверка:** `test_xray_selector.py` (11: add/remove/dedup/порядок/deepcopy/не-найдена/non-uuids-selector/
-  everywhere), `test_hosts.py` (+balancers roundtrip+tag_prefix charset), `test_host_autocreate.py` (+append после
-  create_host/группа-не-найдена→no-write/без balancers→no-write). Все зелёные (36 с Ф1); `tsc` чисто.
+  «<шаблон> · <tagPrefix> (N)» (напр. «Auto · foreign-proxy (4)»), value `<template_uuid>::<tagPrefix>`
+  (`balKey`/`balParse`). Гейт «панель не настроена» → hint. `MultiSelect` экспортирует `SelectOption`.
+- **Проверка:** `test_xray_selector.py` (11), `test_hosts.py` (+balancers roundtrip+tag_prefix charset),
+  `test_host_autocreate.py` (+append в templateJson после create_host/группа-не-найдена→no-write/без balancers→
+  no-write) — 36 зелёных; `tsc` чисто. **Проверено на живой панели:** read даёт 5 групп в 3 XRAY_JSON-шаблонах;
+  add→PATCH→read (count +1) и remove_uuid_everywhere→PATCH→read (restore) round-trip на реальном шаблоне «Auto».
 
 ### 13c. Ф3 — «Анализ подписки» (§7)
 - **`services/subscription_analyze.py`** — вход url/домен/ip (`classify_input`). URL → `fetch_subscription`
-  (UA **`v2rayNG`** — как просил юзер, в ОТЛИЧИЕ от `server_monitor`, который VPN-UA НЕ шлёт; SSRF-гард
-  `net_guard.is_safe_url` + ручные редиректы per-hop + лимит 4 МиБ) → `decode_subscription`+`link_to_candidate`
-  (переиспользованы из `subscription_import`) → хосты. Хосты резолвятся в IPv4, дедуп по IP, **только публичные**
-  (`_ip_is_public`). Per-IP: **факт. гео+ASN** = `ip-api.com/json` (fallback `ipwho.is`), **реестр. страна** =
-  RDAP `rdap.org/ip`, **имя/сайт ASN** = RDAP `rdap.org/autnum` (кэш по ASN). Внешние API — ФИКСИРОВАННЫЕ
-  публичные хосты (не user-controlled → не через net_guard); ссылки/вход в логи не попадают. `group_to_hostings`
-  — одна `HostingBody` на ASN (дедуп по номеру, локации = уник. факт. cc/city, записи без ASN пропускаются).
+  (SSRF-гард `net_guard.is_safe_url` + ручные редиректы per-hop + лимит 4 МиБ) → `decode_subscription`+
+  `link_to_candidate`. **⚠️ UA-FALLBACK (`_SUB_USER_AGENTS`):** панели отдают РАЗНЫЙ формат по User-Agent, поэтому
+  пробуем цепочку и берём ПЕРВЫЙ ответ, который парсится в share-ссылки: **дефолтный httpx-UA** (None) первым →
+  затем клиентские `Happ` / `incy` / `Streisand` / `Shadowrocket`. **БАГ-УРОК:** сначала слали ТОЛЬКО `v2rayNG`-UA
+  → `hardsub.digital` отдал 129 КБ `application/json` (xray-конфиг, НЕ ссылки) → 0 хостов («Серверы не найдены»).
+  Дефолтный UA даёт стандартный base64-список (12 ссылок). Цепочка нужна для панелей, которые дают список ТОЛЬКО
+  под конкретный клиент (UA-список: default → `Happ/1.16.0` → `INCY/3.3.7/android` → `Streisand` → `Shadowrocket`).
+  То же у **subs-aggregator** (`_fetch_sub_lines`/`_safe_fetch(user_agent)`, детект по `_has_link_lines`: строка
+  стартует со схемы vless/vmess/…) — единственная точка, где мы фетчим подписку для xray-checker (сам Go-контейнер
+  в прямом режиме мы не трогаем). Гео/RDAP-клиент шлёт нейтральный `node-assistant`
+  (переиспользованы из `subscription_import`) → хосты. Per-IP (`_resolve_ip`): **ASN + базовое гео** = `ip-api.com/
+  json` (fallback `ipwho.is`); **факт. гео = ТРАССИРОВКА** (`_traceroute_last_hop`, ниже); **реестр. страна** = RDAP
+  `rdap.org/ip` → **RIPEstat `rir-geo` fallback** (`stat.ripe.net`, закрывает ARIN/US-дыры RDAP); **сайт ASN** = RDAP
+  `rdap.org/autnum` → **PeeringDB fallback** (`peeringdb.com/api/net?asn=`, кэш по ASN). Внешние API — ФИКСИРОВАННЫЕ
+  публичные хосты (не user-controlled → не через net_guard); ссылки/вход в логи не попадают.
+- **⚠️ Факт. гео через traceroute:** `_traceroute_last_hop(ip)` запускает системный `traceroute -n -q1 -w1 -m12`
+  (Linux) / `tracert -d` (Windows), берёт ПОСЛЕДНИЙ публичный хоп (сам хост если отвечает, иначе роутер ДЦ — его
+  гео ближе к реальности, чем IP-база) и геолоцирует его через ip-api; если traceroute недоступен/чёрная дыра →
+  fallback на гео самого destination. ASN всегда с destination. Гео теперь ОТНОСИТЕЛЬНО сервера бэкенда (откуда
+  трасса) — это и нужно. Бинарь `traceroute` добавлен в backend `Dockerfile`; Docker по умолчанию даёт `NET_RAW` +
+  бэкенд root → работает без `cap_add`. `_TRACE_SEM=8`, `_TRACE_TIMEOUT=20`, `shutil.which` guard.
+- **⚠️ Дедуп по ИМЕНИ хоста, не по IP (feedback):** `analyze` группирует ссылки по HOSTNAME (каждый адрес
+  резолвится ОДИН раз), затем сливает по IP. Иначе один хост (напр. фронт `github.com`, встречается в 3 ссылках
+  через domain-fronting) + round-robin DNS давали 3 строки с разными IP. Имена ссылок (`#fragment`/vmess `ps`)
+  агрегируются per-host → `row.names` (в UI колонка «Название», через запятую; напр. `github.com` = `🇫🇲 Авто,
+  🇳🇱 Нидерланды, 🇷🇺 Россия`). `row.hosts` = все адреса на этом IP. Балансер/фронт-конфиг из share-ссылки
+  «разбить на реальные хосты» НЕЛЬЗЯ (реальный бэкенд скрыт за фронтом) — показываем имя + даём удалить строку.
+- **⚠️ RDAP `_rdap_get`: `follow_redirects=True` ОБЯЗАТЕЛЕН** — `rdap.org` 301-редиректит на RIR-RDAP
+  (`rdap.db.ripe.net`/`rdap.arin.net`/…); без этого «Реестр» был пуст ВЕЗДЕ (клиент analyze дефолтно
+  `follow_redirects=False`). + retries (Cloudflare-фронт rdap.org иногда ConnectError'ит). ARIN top-level country
+  НЕ отдаёт → раньше прочерк; теперь **RIPEstat `rir-geo` fallback заполняет 10/10** (github→US, 206.x→US при факт-
+  гео SG = реальное расхождение, 77.x→AE). Сайт ASN: RDAP autnum часто пуст → **PeeringDB заполнил 5/10** (github/
+  plym/albahost/vdsina/regxa; остальные реально без сайта).
+- `group_to_hostings` — одна `HostingBody` на ASN (дедуп по номеру, локации = уник. факт. cc/city, имена ссылок →
+  `notes` «Из подписки: …», записи без ASN пропускаются).
 - **`api/sub_analysis.py`** (`/api/subscription-analyze`, под `_auth`): `POST ""` (dry-run → `{kind, results:[{host,
-  ip, asn{number,name,website}, geo_actual{cc,city}, geo_registry{cc}}]}`; пусто→400, сбой→502) +
+  hosts[], names[], ip, asn{number,name,website}, geo_actual{cc,city}, geo_registry{cc}}]}`; пусто→400, сбой→502) +
   `POST /to-hostings` (`{results}` → `group_to_hostings` → **upsert** в `hostings_store`: матч по ASN-номеру ИЛИ
-  имени → мерж локаций, иначе новая карточка; всё через `HostingBody(**).model_dump()` для нормализации;
-  нет ASN → 400). Роутер подключён в `main.py`.
+  имени → мерж локаций, иначе новая карточка; нет ASN → 400). Роутер подключён в `main.py`.
 - **Frontend `components/SubscriptionAnalyze.tsx`** — nav-таб «Анализ подписки» (группа **«Справка»**, `Tab
-  "subscription-analyze"`, CRUMB `["Справка","Анализ подписки"]`, иконка `ScanSearch`). Инпут → таблица (хост/IP/
-  ASN+сайт/факт-гео `FlagChip`/реестр-гео + `AlertTriangle` при расхождении cc) → «Добавить в хостинги».
-- **Проверка:** `test_subscription_analyze.py` (9: classify/parse_as/ip_public/group-dedup/SSRF-reject-private-url/
-  route-empty-400/route-monkeypatched/to-hostings-create-then-update-merge/no-asn-400). `tsc` чисто.
+  "subscription-analyze"`, `ScanSearch`). Инпут → таблица (Название/Хост/IP/ASN/факт-гео `FlagChip`/Реестр/**Website**
+  + `AlertTriangle` при расхождении cc + **✕ убрать строку** — удалённые не идут в «Добавить в хостинги»).
+  **Колонки resizable:** `table-layout:fixed` + `<colgroup>` + per-column `widths` state; тянуть за правый край
+  заголовка (`startResize`, `col-resize`); последняя колонка (✕) фиксированная. Страница расширена до `max-w-6xl`.
+- **Проверка:** `test_subscription_analyze.py` (13: classify/parse_as/ip_public/group-dedup+notes/analyze-dedup-
+  hostname+names/**resolve_ip-fallbacks (RIPEstat+PeeringDB+trace-hop)**/SSRF-reject/UA-default-first/UA-fallback/
+  route-empty-400/route-monkeypatched/to-hostings-merge/no-asn-400). `subs-aggregator/test_app.py` 12/12. `tsc`
+  чисто. **Проверено вживую:** registry 10/10 (RIPEstat), website 5/10 (PeeringDB), traceroute-гео, ~11с.
 
 ### 13d. Ф4 — автобэкап → Telegram (§4)
 - **`AutoBackupConfig`** на `AppSettings` (`models/settings.py`): `{enabled, interval_hours(1..8760), include_secrets,

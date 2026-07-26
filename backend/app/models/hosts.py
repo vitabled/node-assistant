@@ -8,9 +8,10 @@ from app.services.http_headers import is_safe_host, is_safe_path
 
 class BalancerRef(BaseModel):
     """A balancer group this host joins (Wave-8 §5): the host's uuid is appended
-    to that config-profile's `remnawave.injectHosts[tagPrefix].selector.values`
-    at deploy time. `config_profile_uuid` may differ from the node's own profile."""
-    config_profile_uuid: str = ""
+    to an XRAY_JSON subscription-template's `templateJson.remnawave.injectHosts
+    [tagPrefix].selector.values` at deploy time. `template_uuid` = the Remnawave
+    subscription-template (the host's `xrayJsonTemplateUuid` points at one too)."""
+    template_uuid: str = ""
     tag_prefix: str = ""
 
     @field_validator("tag_prefix")

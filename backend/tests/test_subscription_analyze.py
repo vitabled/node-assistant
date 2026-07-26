@@ -40,10 +40,10 @@ def test_ip_public():
 
 def test_group_to_hostings_dedup_by_asn():
     results = [
-        {"host": "a.com", "ip": "1.1.1.1",
+        {"host": "a.com", "ip": "1.1.1.1", "names": ["🇷🇺 Москва"],
          "asn": {"number": 49505, "name": "Selectel", "website": "https://selectel.ru"},
          "geo_actual": {"cc": "RU", "city": "Moscow"}, "geo_registry": {"cc": "RU"}},
-        {"host": "b.com", "ip": "1.1.1.2",
+        {"host": "b.com", "ip": "1.1.1.2", "names": ["🇷🇺 СПб"],
          "asn": {"number": 49505, "name": "Selectel", "website": "https://selectel.ru"},
          "geo_actual": {"cc": "RU", "city": "Saint Petersburg"}, "geo_registry": {"cc": "RU"}},
         {"host": "c.com", "ip": "2.2.2.2",
@@ -60,6 +60,40 @@ def test_group_to_hostings_dedup_by_asn():
     # two distinct cities merged into one Selectel entry
     cities = sorted(l["city"] for l in sel["locations"])
     assert cities == ["Moscow", "Saint Petersburg"]
+    # subscription link names carried into notes (Wave-8 feedback)
+    assert "🇷🇺 Москва" in sel["notes"] and "🇷🇺 СПб" in sel["notes"]
+
+
+def test_analyze_dedups_hosts_and_aggregates_names(monkeypatch):
+    """Item 4/5: the same host in several links → ONE row with all its names."""
+    import asyncio
+
+    async def fake_fetch(url):
+        return "ignored"
+
+    cand = {
+        "l1": {"host": "github.com", "port": 443, "name": "Авто", "country": ""},
+        "l2": {"host": "github.com", "port": 443, "name": "NL", "country": ""},
+        "l3": {"host": "de.example.com", "port": 443, "name": "DE", "country": ""},
+    }
+
+    async def fake_resolve(h):
+        return {"github.com": "1.1.1.1", "de.example.com": "2.2.2.2"}[h]
+
+    async def fake_resolve_ip(ip, client, cache):
+        return {"ip": ip, "asn": {"number": 1, "name": "X", "website": ""},
+                "geo_actual": {"cc": "DE", "city": ""}, "geo_registry": {"cc": "DE"}}
+
+    monkeypatch.setattr(sa, "fetch_subscription", fake_fetch)
+    monkeypatch.setattr(sa, "decode_subscription", lambda body: ["l1", "l2", "l3"])
+    monkeypatch.setattr(sa, "link_to_candidate", lambda l: cand[l])
+    monkeypatch.setattr(sa, "_resolve", fake_resolve)
+    monkeypatch.setattr(sa, "_resolve_ip", fake_resolve_ip)
+
+    rows = asyncio.run(sa.analyze("https://p/sub"))
+    assert len(rows) == 2                                    # github.com deduped to 1
+    gh = next(r for r in rows if r["host"] == "github.com")
+    assert gh["names"] == ["Авто", "NL"]                     # both names aggregated
 
 
 # ── SSRF guard on the URL fetch ────────────────────────────────
@@ -69,7 +103,102 @@ def test_analyze_rejects_private_url():
         asyncio.run(sa.fetch_subscription("http://127.0.0.1/sub"))
 
 
+# base64 of "vless://a@example.com:1000" — a parseable share-link body.
+_LINK_B64 = b"dmxlc3M6Ly9hQGV4YW1wbGUuY29tOjEwMDA="
+
+
+def _fake_httpx(monkeypatch, body_for_ua, seen):
+    """Patch httpx.AsyncClient so fetch_subscription returns body_for_ua(ua) and
+    records each UA tried in `seen`."""
+    class _Stream:
+        def __init__(self, headers): self._h = headers
+        async def __aenter__(self):
+            ua = (self._h or {}).get("User-Agent")
+            seen.append(ua)
+            data = body_for_ua(ua)
+            class _R:
+                is_redirect = False
+                def raise_for_status(self): pass
+                async def aiter_bytes(self):
+                    yield data
+            return _R()
+        async def __aexit__(self, *a): pass
+
+    class _Client:
+        def __init__(self, *a, **k): self._h = k.get("headers")
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        def stream(self, m, u): return _Stream(self._h)
+
+    monkeypatch.setattr(sa.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(sa.net_guard, "is_safe_url", lambda u: True)
+
+
+def test_fetch_default_ua_first_when_it_parses(monkeypatch):
+    """When the default UA already yields share links, no client UA is tried."""
+    import asyncio
+    seen = []
+    _fake_httpx(monkeypatch, lambda ua: _LINK_B64, seen)
+    body = asyncio.run(sa.fetch_subscription("https://p.example.com/sub"))
+    assert seen == [None]                        # only the default UA was used
+    assert sa.decode_subscription(body)
+
+
+def test_fetch_ua_fallback_to_client(monkeypatch):
+    """Default UA returns a JSON config (0 links) → fall through to the client UAs
+    (Happ first) and use the first that parses — the hardsub.digital scenario."""
+    import asyncio
+    seen = []
+    # None (default) → JSON with no share links; any client UA → a link list.
+    _fake_httpx(monkeypatch,
+                lambda ua: _LINK_B64 if ua else b'[{"outbounds":[{"protocol":"vless"}]}]',
+                seen)
+    body = asyncio.run(sa.fetch_subscription("https://p.example.com/sub"))
+    assert seen[0] is None and seen[1] == "Happ/1.16.0"   # default first, then Happ
+    assert sa.decode_subscription(body)                    # returned the parseable body
+
+
 # ── routes ─────────────────────────────────────────────────────
+def test_resolve_ip_fallbacks(monkeypatch):
+    """Registry falls back RDAP→RIPEstat; ASN website falls back RDAP→PeeringDB;
+    actual geo comes from the traceroute last hop when it differs from the dest."""
+    import asyncio
+
+    async def ip_api(ip, c):
+        # dest 1.1.1.1 → ASN + US baseline; trace hop 2.2.2.2 → DE
+        return ({"cc": "US", "city": "NY", "asn_number": 42, "asn_name": "Foo"}
+                if ip == "1.1.1.1"
+                else {"cc": "DE", "city": "Berlin", "asn_number": 0, "asn_name": ""})
+
+    async def rdap_cc(ip, c):
+        return ""                                    # RDAP empty → RIPEstat used
+
+    async def ripestat(ip, c):
+        return "GB"
+
+    async def rdap_autnum(asn, c):
+        return ("FooNet", "")                        # no website → PeeringDB used
+
+    async def peeringdb(asn, c):
+        return "https://foo.example"
+
+    async def trace(ip):
+        return "2.2.2.2"                             # hop differs from dest
+
+    monkeypatch.setattr(sa, "_ip_api", ip_api)
+    monkeypatch.setattr(sa, "_rdap_ip_cc", rdap_cc)
+    monkeypatch.setattr(sa, "_ripestat_cc", ripestat)
+    monkeypatch.setattr(sa, "_rdap_autnum", rdap_autnum)
+    monkeypatch.setattr(sa, "_peeringdb_website", peeringdb)
+    monkeypatch.setattr(sa, "_traceroute_last_hop", trace)
+
+    row = asyncio.run(sa._resolve_ip("1.1.1.1", None, {}))
+    assert row["geo_registry"]["cc"] == "GB"          # RIPEstat fallback
+    assert row["asn"]["website"] == "https://foo.example"  # PeeringDB fallback
+    assert row["asn"]["number"] == 42                 # ASN from the destination
+    assert row["geo_actual"]["cc"] == "DE"            # geo from the trace hop
+
+
 def test_analyze_route_empty_input():
     a = _auth()
     assert client.post("/api/subscription-analyze", headers=a, json={"input": ""}).status_code == 400

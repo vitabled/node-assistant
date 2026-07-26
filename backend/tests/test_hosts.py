@@ -87,14 +87,15 @@ def test_host_shell_safety(monkeypatch=None):
 def test_host_balancers(monkeypatch=None):
     """Wave-8 §5 — balancer refs roundtrip; tag_prefix charset validated."""
     a = _auth()
-    good = _body(balancers=[{"config_profile_uuid": "prof-1", "tag_prefix": "proxy"}])
+    good = _body(balancers=[{"template_uuid": "tpl-1", "tag_prefix": "proxy"}])
     r = client.post("/api/hosts", headers=a, json=good)
     assert r.status_code == 201
     assert r.json()["balancers"][0]["tag_prefix"] == "proxy"
+    assert r.json()["balancers"][0]["template_uuid"] == "tpl-1"
     # missing balancers key → defaults to []
     r2 = client.post("/api/hosts", headers=a, json=_body())
     assert r2.status_code == 201 and r2.json()["balancers"] == []
     # bad tag_prefix (shell metachars) → 422
     assert client.post("/api/hosts", headers=a,
-                       json=_body(balancers=[{"config_profile_uuid": "p", "tag_prefix": "a b;$"}])
+                       json=_body(balancers=[{"template_uuid": "t", "tag_prefix": "a b;$"}])
                        ).status_code == 422

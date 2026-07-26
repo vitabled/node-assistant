@@ -2,14 +2,16 @@
 // the backend fetches (VPN-client UA, SSRF-guarded) and resolves each target IP
 // to actual geo + ASN + registry geo. «Добавить в хостинги» creates one hosting
 // card per ASN. Share-link secrets never reach the browser — only the analysis.
-import { useState } from "react";
-import { ScanSearch, Loader2, ExternalLink, Plus, AlertTriangle } from "lucide-react";
+import { useState, type MouseEvent as ReactMouseEvent } from "react";
+import { ScanSearch, Loader2, ExternalLink, Plus, AlertTriangle, X } from "lucide-react";
 import { FlagChip } from "./common/FlagChip";
 import { toast } from "./infra/Toast";
 
 interface Asn { number: number; name: string; website: string }
 interface Row {
   host: string;
+  hosts: string[];
+  names: string[];
   ip: string;
   asn: Asn;
   geo_actual: { cc: string; city: string };
@@ -21,6 +23,24 @@ export function SubscriptionAnalyze() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(false);
+
+  // Resizable columns: table-layout:fixed + <colgroup>; drag a header's right
+  // edge to resize. Last column (delete ✕) is fixed and not resizable.
+  const COLS = ["Название", "Хост", "IP", "ASN", "Факт. гео", "Реестр", "Website"];
+  const [widths, setWidths] = useState<number[]>([170, 150, 120, 190, 150, 90, 180]);
+  const DEL_W = 40;
+  const startResize = (i: number, e: ReactMouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX, startW = widths[i];
+    const move = (ev: MouseEvent) =>
+      setWidths(w => w.map((x, j) => (j === i ? Math.max(48, startW + ev.clientX - startX) : x)));
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
 
   const analyze = async () => {
     const v = input.trim();
@@ -57,7 +77,7 @@ export function SubscriptionAnalyze() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-6 py-6">
+      <div className="max-w-6xl mx-auto px-6 py-6">
         <div className="mb-6">
           <h1 className="h1">Анализ подписки</h1>
           <p className="sub">URL подписки, домен или IP → фактическое и реестровое гео + ASN серверов</p>
@@ -88,39 +108,63 @@ export function SubscriptionAnalyze() {
               </button>
             </div>
             <div className="overflow-x-auto">
-              <table className="tbl text-xs w-full">
+              <table className="tbl text-xs" style={{ tableLayout: "fixed", width: widths.reduce((a, b) => a + b, 0) + DEL_W }}>
+                <colgroup>
+                  {widths.map((w, i) => <col key={i} style={{ width: w }} />)}
+                  <col style={{ width: DEL_W }} />
+                </colgroup>
                 <thead>
-                  <tr><th>Хост</th><th>IP</th><th>ASN</th><th>Факт. гео</th><th>Реестр</th></tr>
+                  <tr>
+                    {COLS.map((label, i) => (
+                      <th key={i} style={{ position: "relative" }}>
+                        <span className="trunc" style={{ display: "block", paddingRight: 6 }}>{label}</span>
+                        <span onMouseDown={e => startResize(i, e)} title="Потянуть, чтобы изменить ширину"
+                          style={{ position: "absolute", right: 0, top: 0, height: "100%", width: 7, cursor: "col-resize", userSelect: "none" }} />
+                      </th>
+                    ))}
+                    <th />
+                  </tr>
                 </thead>
                 <tbody>
                   {rows.map((r, i) => {
                     const mismatch = !!(r.geo_actual.cc && r.geo_registry.cc && r.geo_actual.cc !== r.geo_registry.cc);
+                    const names = (r.names || []).join(", ");
+                    const site = r.asn.website;
                     return (
-                      <tr key={i}>
-                        <td className="text-[var(--t-mid)] trunc" style={{ maxWidth: 160 }} title={r.host}>{r.host}</td>
-                        <td className="tabular-nums text-[var(--t-low)]">{r.ip}</td>
-                        <td className="text-[var(--t-mid)]">
-                          {r.asn.number ? (
-                            <span className="flex items-center gap-1 flex-wrap">
-                              <span className="text-[var(--t-hi)]">AS{r.asn.number}</span>
-                              {r.asn.name && <span>{r.asn.name}</span>}
-                              {r.asn.website && (
-                                <a href={r.asn.website} target="_blank" rel="noopener noreferrer"
-                                  className="text-[var(--accent-hi)]" title={r.asn.website}><ExternalLink size={11} /></a>
-                              )}
-                            </span>
-                          ) : "—"}
+                      <tr key={r.ip + i}>
+                        <td className="text-[var(--t-hi)] trunc" title={names}>{names || "—"}</td>
+                        <td className="text-[var(--t-mid)] trunc" title={(r.hosts || [r.host]).join(", ")}>{r.host}</td>
+                        <td className="tabular-nums text-[var(--t-low)] trunc">{r.ip}</td>
+                        <td className="text-[var(--t-mid)] trunc" title={r.asn.name}>
+                          {r.asn.number
+                            ? <><span className="text-[var(--t-hi)]">AS{r.asn.number}</span>{r.asn.name ? ` ${r.asn.name}` : ""}</>
+                            : "—"}
                         </td>
-                        <td>
+                        <td className="trunc">
                           <span className="flex items-center gap-1.5">
                             <FlagChip code={r.geo_actual.cc} size={14} /> {r.geo_actual.city || r.geo_actual.cc || "—"}
                           </span>
                         </td>
-                        <td>
+                        <td className="trunc">
                           <span className="flex items-center gap-1.5">
                             <FlagChip code={r.geo_registry.cc} size={14} /> {r.geo_registry.cc || "—"}
                             {mismatch && <AlertTriangle size={12} style={{ color: "var(--warn)" }} aria-label="Расхождение факт./реестр" />}
                           </span>
+                        </td>
+                        <td className="trunc">
+                          {site
+                            ? <a href={site} target="_blank" rel="noopener noreferrer" title={site}
+                                className="text-[var(--accent-hi)] inline-flex items-center gap-1">
+                                <ExternalLink size={11} className="shrink-0" />
+                                <span className="trunc">{site.replace(/^https?:\/\//, "").replace(/\/$/, "")}</span>
+                              </a>
+                            : <span className="text-[var(--t-faint)]">—</span>}
+                        </td>
+                        <td>
+                          <button onClick={() => setRows(rs => (rs || []).filter((_, j) => j !== i))}
+                            title="Убрать из выдачи" className="p-1 text-[var(--t-low)] hover:text-[var(--err)]">
+                            <X size={13} />
+                          </button>
                         </td>
                       </tr>
                     );

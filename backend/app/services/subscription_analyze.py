@@ -1,12 +1,26 @@
 """Wave-8 §7 — subscription / domain / IP → geo + ASN analysis.
 
-Input is a subscription URL, a bare domain, or an IP. For a URL we fetch it as a
-VPN client (UA `v2rayNG`) — SSRF-guarded, manual redirects, byte-capped — decode
-the share links and take each target host. Every host is resolved to IPv4, then
-per unique IP we look up:
-  - actual geo + ASN  → ip-api.com (fallback ipwho.is), no API key
-  - registry country  → RDAP (rdap.org/ip)
-  - ASN name/website  → RDAP autnum (rdap.org/autnum), cached per ASN
+Input is a subscription URL, a bare domain, or an IP. For a URL we fetch it —
+SSRF-guarded, manual redirects, byte-capped — decode the share links and take
+each target host.
+
+⚠️ Panels serve DIFFERENT formats by User-Agent, so we try a CHAIN and use the
+first response that decodes to share links: the DEFAULT (non-client) UA first —
+it returns the standard base64 share-link list for most panels (verified on
+hardsub.digital: default UA → base64 list, but a `v2rayNG` UA → 129 KB JSON
+config with 0 links) — then fall through the client UAs (Happ / incy / Streisand
+/ Shadowrocket) for panels that only serve a usable list to a specific client.
+The base64 share-link list is the lingua franca; the default UA usually gets it.
+
+Every host is resolved to IPv4, then per unique IP we look up:
+  - ASN + fallback geo → ip-api.com (fallback ipwho.is), no API key
+  - actual geo         → TRACEROUTE last public hop, geolocated (falls back to
+    the destination IP's geo when traceroute is unavailable/blackholed) — a
+    non-responsive VPS shows its datacentre router's location, closer to reality
+    than an IP-DB guess
+  - registry country   → RDAP (rdap.org/ip) → RIPEstat rir-geo fallback (fills the
+    ARIN gaps where RDAP has no top-level country)
+  - ASN name/website   → RDAP autnum → PeeringDB fallback (net?asn=), cached per ASN
 
 External APIs are FIXED public hosts, so the lookups themselves aren't SSRF-prone;
 we still require every analysed IP to be public. Share links carry credentials —
@@ -16,7 +30,9 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import platform
 import re
+import shutil
 from typing import Any, Optional
 
 import httpx
@@ -24,7 +40,26 @@ import httpx
 from app.services import net_guard
 from app.services.subscription_import import decode_subscription, link_to_candidate
 
-_UA = "v2rayNG/1.8.5"
+# Neutral UA for the geo/RDAP lookups only.
+_API_UA = "node-assistant"
+
+# Traceroute concurrency (item: actual geo via traceroute). Bounded so a big
+# subscription can't spawn dozens of trace processes at once.
+_TRACE_SEM = asyncio.Semaphore(8)
+_TRACE_TIMEOUT = 20
+
+# Subscription-fetch User-Agent fallback chain (Wave-8): the default httpx UA
+# (None) first — it gets the standard base64 share-link list for most panels —
+# then client UAs for panels that only serve a usable list to a specific client.
+# Tried in order; the first body that decodes to share links wins.
+_SUB_USER_AGENTS = [
+    None,                    # default httpx UA (proven for hardsub.digital)
+    "Happ/1.16.0",
+    "INCY/3.3.7/android",
+    "Streisand/1.6.0",
+    "Shadowrocket/2.2.9",
+]
+
 _FETCH_TIMEOUT = 15
 _MAX_SUB_BYTES = 4 * 1024 * 1024
 _MAX_REDIRECTS = 5
@@ -56,12 +91,11 @@ def _ip_is_public(ip: str) -> bool:
 
 
 # ── subscription fetch (VPN-client UA, SSRF-guarded) ───────────
-async def fetch_subscription(url: str) -> str:
-    if not net_guard.is_safe_url(url):
-        raise ValueError("URL подписки не разрешён: нужен http(s) с публичным хостом")
-    async with httpx.AsyncClient(
-        timeout=_FETCH_TIMEOUT, follow_redirects=False, headers={"User-Agent": _UA}
-    ) as c:
+async def _fetch_once(url: str, user_agent) -> str:
+    """One GET (manual redirects, per-hop SSRF re-check, byte cap) with the given
+    UA. `user_agent=None` → the default httpx UA."""
+    headers = {"User-Agent": user_agent} if user_agent else None
+    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=False, headers=headers) as c:
         current = url
         for _hop in range(_MAX_REDIRECTS + 1):
             async with c.stream("GET", current) as r:
@@ -80,6 +114,29 @@ async def fetch_subscription(url: str) -> str:
                         raise ValueError("Подписка превышает лимит размера")
                 return bytes(buf).decode("utf-8", "replace")
         raise ValueError("Слишком много редиректов подписки")
+
+
+async def fetch_subscription(url: str) -> str:
+    """Fetch through the UA fallback chain; return the first body that decodes to
+    share links, else the first successfully-fetched body. Raises if every UA
+    failed to fetch."""
+    if not net_guard.is_safe_url(url):
+        raise ValueError("URL подписки не разрешён: нужен http(s) с публичным хостом")
+    first_body: Optional[str] = None
+    last_err: Optional[Exception] = None
+    for ua in _SUB_USER_AGENTS:
+        try:
+            body = await _fetch_once(url, ua)
+        except Exception as exc:      # network / redirect-to-bad-host / size — try next UA
+            last_err = exc
+            continue
+        if first_body is None:
+            first_body = body
+        if decode_subscription(body):  # this UA yielded parseable share links → done
+            return body
+    if first_body is not None:
+        return first_body              # nothing parsed, but we got a body — return it
+    raise ValueError("Не удалось загрузить подписку")
 
 
 async def _resolve(host: str) -> str:
@@ -146,13 +203,43 @@ async def _ipwho(ip: str, client: httpx.AsyncClient) -> Optional[dict]:
     }
 
 
+async def _rdap_get(url: str, client: httpx.AsyncClient) -> Optional[dict]:
+    """RDAP GET with retries. ⚠️ rdap.org 301-redirects to the RIR RDAP server
+    (rdap.db.ripe.net / rdap.arin.net / …), so `follow_redirects=True` is
+    REQUIRED — without it the «Реестр» column was empty for every IP. rdap.org is
+    also Cloudflare-fronted and intermittently ConnectError's → retry."""
+    for attempt in range(3):
+        try:
+            r = await client.get(url, timeout=6, follow_redirects=True)
+            d = r.json()
+            return d if isinstance(d, dict) else None
+        except Exception:
+            if attempt < 2:
+                await asyncio.sleep(0.4 * (attempt + 1))
+    return None
+
+
+def _entity_country(entities) -> str:
+    """Registry country can sit on an org entity when the network object omits a
+    top-level `country` (ARIN). Best-effort scan (incl. nested) for a 2-letter code."""
+    for ent in entities or []:
+        if not isinstance(ent, dict):
+            continue
+        c = ent.get("country")
+        if isinstance(c, str) and len(c) == 2:
+            return c
+        nested = _entity_country(ent.get("entities"))
+        if nested:
+            return nested
+    return ""
+
+
 async def _rdap_ip_cc(ip: str, client: httpx.AsyncClient) -> str:
-    try:
-        r = await client.get(f"https://rdap.org/ip/{ip}")
-        d = r.json()
-        return str(d.get("country") or "") if isinstance(d, dict) else ""
-    except Exception:
+    d = await _rdap_get(f"https://rdap.org/ip/{ip}", client)
+    if not d:
         return ""
+    cc = str(d.get("country") or "").strip() or _entity_country(d.get("entities"))
+    return cc[:2].upper() if cc else ""
 
 
 def _website_from_rdap_autnum(d: dict) -> str:
@@ -178,70 +265,172 @@ def _website_from_rdap_autnum(d: dict) -> str:
 async def _rdap_autnum(asn: int, client: httpx.AsyncClient) -> tuple[str, str]:
     if asn <= 0:
         return "", ""
-    try:
-        r = await client.get(f"https://rdap.org/autnum/{asn}")
-        d = r.json()
-        if not isinstance(d, dict):
-            return "", ""
-        return str(d.get("name") or ""), _website_from_rdap_autnum(d)
-    except Exception:
+    d = await _rdap_get(f"https://rdap.org/autnum/{asn}", client)
+    if not d:
         return "", ""
+    return str(d.get("name") or ""), _website_from_rdap_autnum(d)
+
+
+async def _ripestat_cc(ip: str, client: httpx.AsyncClient) -> str:
+    """Registry country from RIPEstat's rir-geo dataset (RIR delegation stats).
+    Covers ALL RIRs incl. ARIN, so it fills the gaps where RDAP has no top-level
+    country. Fixed public host — no SSRF concern."""
+    try:
+        r = await client.get(
+            "https://stat.ripe.net/data/rir-geo/data.json",
+            params={"resource": ip}, timeout=6,
+        )
+        locs = (r.json().get("data") or {}).get("located_resources") or []
+        for loc in locs:
+            cc = str(loc.get("location") or "").strip()
+            if cc:
+                return cc[:2].upper()
+    except Exception:
+        pass
+    return ""
+
+
+async def _peeringdb_website(asn: int, client: httpx.AsyncClient) -> str:
+    """ASN website from PeeringDB (net?asn=). Fallback for the RDAP autnum website,
+    which is often empty. Fixed public host."""
+    if asn <= 0:
+        return ""
+    try:
+        r = await client.get(f"https://www.peeringdb.com/api/net?asn={asn}", timeout=6)
+        data = r.json().get("data") or []
+        if data:
+            return str(data[0].get("website") or "")
+    except Exception:
+        pass
+    return ""
+
+
+async def _traceroute_last_hop(ip: str) -> Optional[str]:
+    """Run a system traceroute to `ip` and return the LAST PUBLIC hop IP — the
+    destination if it answers, else the closest responding router (its geo is the
+    real datacentre). None when traceroute is unavailable/blackholed. Bounded by
+    `_TRACE_SEM` + `_TRACE_TIMEOUT`; never raises."""
+    is_win = platform.system() == "Windows"
+    exe = "tracert" if is_win else "traceroute"
+    if not shutil.which(exe):
+        return None
+    args = ([exe, "-d", "-w", "1000", "-h", "12", ip] if is_win
+            else [exe, "-n", "-q", "1", "-w", "1", "-m", "12", ip])
+    async with _TRACE_SEM:
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=_TRACE_TIMEOUT)
+        except Exception:
+            if proc:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            return None
+    text = (out or b"").decode("utf-8", "replace")
+    hops = re.findall(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b", text)
+    for hop in reversed(hops):
+        if _ip_is_public(hop):
+            return hop
+    return None
 
 
 async def _resolve_ip(ip: str, client: httpx.AsyncClient, autnum_cache: dict) -> dict:
-    actual = await _ip_api(ip, client) or await _ipwho(ip, client) or {}
-    registry_cc = await _rdap_ip_cc(ip, client)
-    asn_number = int(actual.get("asn_number") or 0)
-    asn_name = str(actual.get("asn_name") or "")
+    # ASN + a geolocation baseline from the DESTINATION IP.
+    dest = await _ip_api(ip, client) or await _ipwho(ip, client) or {}
+
+    # Actual geo via traceroute's last public hop (item: geo by trace). Reuse the
+    # destination geo when the last hop IS the destination (or trace unavailable);
+    # otherwise geolocate the hop. Either way, ASN stays the destination's.
+    hop = await _traceroute_last_hop(ip)
+    if hop and hop != ip:
+        hop_geo = await _ip_api(hop, client) or await _ipwho(hop, client) or {}
+        geo_cc = hop_geo.get("cc") or dest.get("cc", "")
+        geo_city = hop_geo.get("city") if hop_geo.get("cc") else dest.get("city", "")
+    else:
+        geo_cc, geo_city = dest.get("cc", ""), dest.get("city", "")
+
+    # Registry country: RDAP, then RIPEstat (fills ARIN/US gaps).
+    registry_cc = await _rdap_ip_cc(ip, client) or await _ripestat_cc(ip, client)
+
+    asn_number = int(dest.get("asn_number") or 0)
+    asn_name = str(dest.get("asn_name") or "")
     website = ""
     if asn_number:
         if asn_number not in autnum_cache:
-            autnum_cache[asn_number] = await _rdap_autnum(asn_number, client)
+            reg_name, site = await _rdap_autnum(asn_number, client)
+            if not site:
+                site = await _peeringdb_website(asn_number, client)
+            autnum_cache[asn_number] = (reg_name, site)
         reg_name, website = autnum_cache[asn_number]
         asn_name = asn_name or reg_name
     return {
         "ip": ip,
         "asn": {"number": asn_number, "name": asn_name, "website": website},
-        "geo_actual": {"cc": actual.get("cc", ""), "city": actual.get("city", "")},
+        "geo_actual": {"cc": geo_cc or "", "city": geo_city or ""},
         "geo_registry": {"cc": registry_cc},
     }
 
 
 # ── orchestration ──────────────────────────────────────────────
 async def analyze(raw: str) -> list[dict[str, Any]]:
-    """Return one row per unique target IP (host label kept for context)."""
+    """One row per unique target IP. Hosts are deduped by HOSTNAME first (each
+    address resolved once — fixes the same host appearing N× and round-robin DNS
+    giving different IPs), then merged by resolved IP; the subscription link names
+    for every address on an IP are aggregated (`names`, comma-listed in the UI)."""
     kind = classify_input(raw)
-    hosts: list[str] = []
+    pairs: list[tuple[str, str]] = []       # (host address, link name)
     if kind == "url":
         links = decode_subscription(await fetch_subscription(raw.strip()))
         for link in links:
             cand = link_to_candidate(link)
             if cand and cand.get("host"):
-                hosts.append(cand["host"])
+                pairs.append((cand["host"], cand.get("name") or ""))
     else:
-        hosts.append(raw.strip())
+        pairs.append((raw.strip(), ""))
 
-    # host → IPv4, dedup by IP (keep first host label seen for each IP)
+    # group link names by hostname (dedup, preserve first-seen order)
+    host_names: dict[str, list[str]] = {}
+    for host, name in pairs:
+        names = host_names.setdefault(host, [])
+        if name and name not in names:
+            names.append(name)
+    if not host_names:
+        return []
+
+    # resolve each UNIQUE hostname once
+    hosts = list(host_names.keys())
     resolved = await asyncio.gather(*(_resolve(h) for h in hosts))
-    ip_host: dict[str, str] = {}
-    for host, ip in zip(hosts, resolved):
-        if ip and _ip_is_public(ip) and ip not in ip_host:
-            ip_host[ip] = host
 
-    if not ip_host:
+    # merge hostnames that resolve to the same public IP; aggregate hosts + names
+    by_ip: dict[str, dict] = {}
+    for host, ip in zip(hosts, resolved):
+        if not ip or not _ip_is_public(ip):
+            continue
+        g = by_ip.setdefault(ip, {"hosts": [], "names": []})
+        if host not in g["hosts"]:
+            g["hosts"].append(host)
+        for n in host_names[host]:
+            if n not in g["names"]:
+                g["names"].append(n)
+    if not by_ip:
         return []
 
     sem = asyncio.Semaphore(_LOOKUP_LIMIT)
     autnum_cache: dict[int, tuple[str, str]] = {}
 
-    async with httpx.AsyncClient(timeout=_API_TIMEOUT, headers={"User-Agent": _UA}) as client:
-        async def one(ip: str, host: str) -> dict:
+    async with httpx.AsyncClient(timeout=_API_TIMEOUT, headers={"User-Agent": _API_UA}) as client:
+        async def one(ip: str, g: dict) -> dict:
             async with sem:
                 row = await _resolve_ip(ip, client, autnum_cache)
-            row["host"] = host
+            row["host"] = g["hosts"][0]
+            row["hosts"] = g["hosts"]
+            row["names"] = g["names"]
             return row
 
-        rows = await asyncio.gather(*(one(ip, host) for ip, host in ip_host.items()))
+        rows = await asyncio.gather(*(one(ip, g) for ip, g in by_ip.items()))
     return list(rows)
 
 
@@ -264,20 +453,26 @@ def group_to_hostings(results: list[dict]) -> list[dict]:
                 "asns": [{"number": num, "name": str(asn.get("name") or ""),
                           "website": str(asn.get("website") or "")}],
                 "_locs": {},
+                "_names": [],      # subscription link names seen for this ASN
             }
         ga = r.get("geo_actual") or {}
         cc = str(ga.get("cc") or "")
         city = str(ga.get("city") or "")
         if cc or city:
             g["_locs"][(cc, city)] = {"city": city, "country_code": cc[:2], "lat": 0, "lng": 0, "note": ""}
+        for n in r.get("names") or []:
+            if n and n not in g["_names"]:
+                g["_names"].append(n)
 
     out: list[dict] = []
     for g in groups.values():
         locs = list(g.pop("_locs").values())
+        names = g.pop("_names")
         out.append({
             "name": g["name"],
             "website": g["website"],
-            "notes": "",
+            # keep the subscription names so the info isn't lost on «в хостинги»
+            "notes": ("Из подписки: " + ", ".join(names))[:500] if names else "",
             "features": "",
             "tags": [],
             "tariffs": [],

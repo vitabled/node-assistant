@@ -8,7 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
+    traceroute \
     && rm -rf /var/lib/apt/lists/*
+# `traceroute` powers the «Анализ подписки» actual-geo-by-trace (Wave-8). Docker's
+# default capability set includes NET_RAW and the backend runs as root, so no
+# extra cap_add is needed; the code falls back to IP-DB geo if it's ever missing.
 
 # ── Docker CLI (client only) ──────────────────────────────────
 # node-assistant manages the sibling xray-checker container via the host Docker

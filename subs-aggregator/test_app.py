@@ -79,6 +79,52 @@ def test_safe_fetch_rejects_private_and_metadata_hosts():
         app._ALLOW_PRIVATE = saved
 
 
+# ── UA fallback chain (Wave-8) ────────────────────────────────
+
+def test_has_link_lines():
+    assert app._has_link_lines(["vless://a@h:443#n"]) is True
+    assert app._has_link_lines(["VMESS://xxx"]) is True          # case-insensitive
+    assert app._has_link_lines(['[{"outbounds": []}]']) is False  # JSON config, no links
+    assert app._has_link_lines([]) is False
+
+
+def test_fetch_sub_lines_ua_fallback():
+    # default UA returns a JSON config (no share links) → fall through to Happ.
+    calls = []
+
+    def fake(url, timeout=app.FETCH_TIMEOUT, user_agent="subs-aggregator/1"):
+        calls.append(user_agent)
+        if user_agent == "subs-aggregator/1":
+            return b'[{"outbounds":[]}]'                          # JSON, no links
+        return base64.b64encode(b"vless://a@h:443#N1\nvless://b@h:443#N2")
+
+    saved = app._safe_fetch
+    app._safe_fetch = fake
+    try:
+        lines = app._fetch_sub_lines("https://panel/x")
+    finally:
+        app._safe_fetch = saved
+    assert calls[0] == "subs-aggregator/1" and calls[1] == "Happ/1.16.0"
+    assert lines == ["vless://a@h:443#N1", "vless://b@h:443#N2"]
+
+
+def test_fetch_sub_lines_stops_at_first_ua_with_links():
+    calls = []
+
+    def fake(url, timeout=app.FETCH_TIMEOUT, user_agent="subs-aggregator/1"):
+        calls.append(user_agent)
+        return base64.b64encode(b"vless://a@h:443#N1")
+
+    saved = app._safe_fetch
+    app._safe_fetch = fake
+    try:
+        lines = app._fetch_sub_lines("https://panel/x")
+    finally:
+        app._safe_fetch = saved
+    assert calls == ["subs-aggregator/1"]                        # no client UA tried
+    assert lines == ["vless://a@h:443#N1"]
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
