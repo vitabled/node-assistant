@@ -1037,6 +1037,13 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
   (`core.autocrlf=true`), исполняется на Linux: CRLF в `entrypoint.sh` → `/entrypoint.sh: not found`,
   в `install.sh` → `bad interpreter: /bin/sh^M`, в `.env` → `
 ` в КАЖДОМ значении.
+- **`README.md`** (корень) — публичная точка входа: команда установки одной строкой первым делом, затем
+  управление через `node-assistant`, возможности, требования, порты (+ оговорка про http-01 на :80), схема
+  стека, безопасность (`ENCRYPTION_KEY`, первый аккаунт наследует данные) и **лицензии вендоренного**
+  (`nodeflow/` и `frontend/public/mihomo/` — без лицензии в апстриме; `mcp/` — MIT по package.json; у самого
+  проекта файла лицензии нет). ⚠️ raw-ссылка на `install.sh` проверена вживую: HTTP 200, 0 CR-байт, и
+  `curl … | bash -s -- --help` реально исполняется в debian-контейнере. Том данных зовётся
+  `node-installer_node-data` (project-prefixed), НЕ `node-data` — в доках писать полное имя.
 - **Проверка:** `bash -n` + `shellcheck` чисто; `docker compose config` с `HTTP_PORT=8080 HTTPS_PORT=8443` даёт
   правильные published-порты и `PROXY_HTTPS_PORT`; оба режима прокси и оба варианта редиректа — реальными
   контейнерами; шорткат и пайп-режим — в debian-контейнере. ⚠️ Полный install на чистом VPS не гонялся (нет
