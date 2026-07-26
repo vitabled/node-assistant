@@ -1,0 +1,15 @@
+# This repo is authored on Windows (core.autocrlf=true) and RUN on Linux, inside
+# containers. A shell script that reaches Linux with CRLF endings fails in the
+# most confusing way possible — `/entrypoint.sh: not found`, or
+# `bad interpreter: /bin/sh^M` — so pin the endings for everything that is
+# executed rather than read.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+Dockerfile.*    text eol=lf
+*.conf          text eol=lf
+*.conf.template text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+# install.sh copies this to .env, which docker compose parses: a CRLF here puts a
+# trailing \r inside every value (nginx server_name, certificate paths, tokens).
+.env.example    text eol=lf
