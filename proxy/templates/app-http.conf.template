@@ -1,0 +1,18 @@
+# HTTP-only: rendered while no certificate exists for ${PROXY_DOMAIN} (or when no
+# domain is configured at all — then server_name is `_`, the catch-all, and the
+# panel is simply served over http:// as it was before the proxy existed).
+#
+# There is NO redirect to https here on purpose: without a certificate the
+# redirect would send every visitor into a dead end.
+server {
+    listen      80 default_server;
+    listen      [::]:80 default_server;
+    server_name ${PROXY_DOMAIN};
+
+    server_tokens off;
+
+    include /etc/nginx/snippets/headers.conf;
+    include /etc/nginx/snippets/acme.conf;
+    include /etc/nginx/snippets/healthz.conf;
+    include /etc/nginx/snippets/app.conf;
+}

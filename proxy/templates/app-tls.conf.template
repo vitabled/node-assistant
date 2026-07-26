@@ -1,0 +1,34 @@
+# HTTPS: rendered once /etc/letsencrypt/live/${PROXY_DOMAIN}/ holds a certificate.
+server {
+    listen      80 default_server;
+    listen      [::]:80 default_server;
+    server_name ${PROXY_DOMAIN};
+
+    server_tokens off;
+
+    include /etc/nginx/snippets/headers.conf;
+    # Keep the challenge path on HTTP — renewals depend on it (see acme.conf).
+    include /etc/nginx/snippets/acme.conf;
+    # …and keep /healthz answering here, or the container healthcheck follows the
+    # 301 below into a certificate it cannot verify for 127.0.0.1.
+    include /etc/nginx/snippets/healthz.conf;
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen      443 ssl default_server;
+    listen      [::]:443 ssl default_server;
+    http2       on;
+    server_name ${PROXY_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${PROXY_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${PROXY_DOMAIN}/privkey.pem;
+
+    include /etc/nginx/snippets/tls.conf;
+    include /etc/nginx/snippets/headers.conf;
+    include /etc/nginx/snippets/healthz.conf;
+    include /etc/nginx/snippets/app.conf;
+}

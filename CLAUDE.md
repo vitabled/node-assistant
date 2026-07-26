@@ -952,3 +952,107 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - **Проверка:** `test_updater.py` (10: is_behind/safe_branch/parse-output(+missing)/check_argv/apply_argv-mounts/
   apply_script-builds+no-injection/config-roundtrip/status-roundtrip/check-no-docker). `tsc` чисто.
   ⚠️ Sidecar НЕ гонялся вживую (нужен реальный Docker+репо на хосте) — покрыты argv/парсинг/персистентность.
+
+## 14. Публичная точка входа — nginx reverse-proxy + TLS + `install.sh`
+> Запрос (2026-07-26): «Добавь контейнер с nginx для reverse proxy, а также скрипт установки, чтобы я мог на
+> новом сервере включить скрипт, указать домен и сервис установится и будет доступен по указанному домену
+> (сертификат получается и обновляется автоматически)». Файлы: `proxy/*`, `install.sh`, `docs/deploy.md`,
+> `.gitattributes`, правки `docker-compose.yml` + `.env.example`.
+
+### 14a. Архитектура
+- **`proxy` (nginx:1.27-alpine) — ЕДИНСТВЕННАЯ публичная точка входа**, всегда в стеке, публикует `80` + `443`.
+  `frontend` больше **НЕ** публикует порт (`ports: 80:80` → `expose: 80`) — его отдаёт proxy по имени контейнера.
+  Без `PROXY_DOMAIN` proxy отдаёт панель по HTTP на :80 (ровно то, что раньше делал frontend) → существующие
+  развёртывания не ломаются.
+- **Маршруты (`proxy/snippets/app.conf`):** `/api/` и `/ws/` идут **НАПРЯМУЮ в backend**, минуя внутренний nginx
+  фронтенда — у того нет ни лимита загрузки, ни streaming-твиков, ни таймаутов, поэтому вся настройка живёт в
+  ОДНОМ месте. `/` → `frontend:80` (SPA). `/healthz` → 200 локально (healthcheck не зависит от upstream'ов).
+  **`/internal/` → 404** (там ungated `/internal/agg-subs` — наружу не отдаём никогда).
+- **⚠️ `client_max_body_size 64m`** — дефолтный 1 МБ ронял загрузки библиотеки (25 МБ/файл) и импорт архивов.
+  Латентный баг существовавшего `frontend/nginx.conf`; в проксируемом пути он больше не участвует.
+- **⚠️ `proxy_buffering off` + `proxy_read_timeout`** — ndjson-стрим ИИ-чата и медленные ручки (анализ подписки
+  с traceroute, node-stats по SSH) → 600с для `/api/`, 3600с + upgrade-заголовки для `/ws/` (логи деплоя текут
+  минутами).
+- **⚠️ Upstream'ы через ПЕРЕМЕННЫЕ + `resolver 127.0.0.11`** (`set $up_backend "backend:8000"`). С литеральным
+  `proxy_pass http://frontend:80` nginx резолвит имя на ЗАГРУЗКЕ конфига и **отказывается стартовать**, если оно
+  не резолвится → упавший/пересобираемый frontend утащил бы всю точку входа (и TLS) за собой. С переменной
+  lookup отложен до запроса → просто 502 на этом маршруте. **Проверено:** контейнер жив, `/` отдаёт 502.
+
+### 14b. Chicken-and-egg сертификата (главный квирк)
+- **nginx с `listen 443 ssl` и НЕсуществующим файлом серта не стартует вообще** → первый
+  `certbot --webroot` (которому нужен живой nginx на :80) не может произойти никогда. Обходим тем, что
+  **шаблон выбирается в РАНТАЙМЕ** (`proxy/entrypoint.sh`): нет серта → `app-http.conf.template` (панель по HTTP
+  + ACME-путь), есть серт → `app-tls.conf.template` (редирект + TLS).
+- **`envsubst '${PROXY_DOMAIN}'` — allow-list ОБЯЗАТЕЛЕН**, иначе envsubst съест собственные переменные nginx
+  (`$host`, `$request_uri`, `$http_upgrade`) и молча выдаст битый конфиг (тот же урок, что в §6 про подстановку
+  шаблонов). Проверено: 7 nginx-переменных в app.conf целы.
+- **⚠️ ACME-путь (`acme.conf`) остаётся на HTTP и ПОСЛЕ появления редиректа** — LE валидирует renewal по http://,
+  и глобальный `return 301` убил бы все продления через 60 дней. Проверено: `/.well-known/acme-challenge/` не
+  редиректится.
+- **Watcher в entrypoint** (каждые 6ч, `PROXY_RELOAD_INTERVAL` для тестов): ре-рендер → при изменении `nginx -t`
+  + `reload` (при невалидном — откат на бэкап). Так переход HTTP→TLS после первой выдачи и все продления
+  подхватываются САМИ. Проверено вживую: подкинул серт → «config changed — reloading» → https отвечает 200 без
+  рестарта.
+- **⚠️ `add_header` в location ЗАМЕНЯЕТ весь унаследованный набор** — из-за `add_header Content-Type` в
+  `/healthz` пропадал HSTS с server-уровня (**воспроизведено**). Лечение: `default_type text/plain`. Помнить при
+  добавлении любого location'а с `add_header`.
+- `certbot` (образ НЕ пиннится намеренно — ACME-клиент обязан догонять изменения CA) крутит
+  `certbot renew` каждые 12ч; сам certbot ничего не делает, пока до истечения >30 дней. ПЕРВУЮ выдачу делает
+  `install.sh` через `docker compose run --rm --entrypoint certbot certbot certonly …`.
+- Тома: `node-letsencrypt` (серты — **не терять**, иначе повторная выдача против rate-limit) и
+  `node-acme-webroot` (challenge-файлы, общий с proxy).
+
+### 14c. `install.sh`
+- Один прогон на чистом сервере: prerequisites (curl/git/openssl) → Docker (get.docker.com) + Compose v2 →
+  найти/склонировать репо (`/opt/node-assistant`) → домен/e-mail → **preflight** (A-запись vs публичный IP,
+  занятость 80/443) → `.env` → firewall (ufw/firewalld) → `build` + `up -d` → ждать `/healthz` → выдать серт →
+  `restart proxy` (рестарт = ре-рендер в TLS-шаблон) → проверить `https://domain/api/health` → сводка.
+- **Идемпотентность:** существующие `ENCRYPTION_KEY`/`AGG_TOKEN` НЕ перегенерируются (иначе инвалидировались бы
+  сессии и Fernet-волты); серт переиспользуется, если есть (`--force-cert` для форса). Повторный прогон =
+  обновление (`git pull --ff-only` только при чистом дереве).
+- **⚠️ Промпты читают `/dev/tty`, а не stdin** — при `curl … | bash` stdin это САМ СКРИПТ, и обычный `read`
+  сожрал бы его остаток. Нет tty → берётся дефолт (для CI нужен `--domain`/`-y`).
+- Флаги: `--domain --email --no-tls --staging --force-cert --dir --branch --repo -y`. `--staging` = staging-CA
+  без rate-limit для отладки DNS/файрвола (урок §6 про LE rate limit).
+- Неудачная выдача серта **не валит установку**: панель остаётся на HTTP + печатается диагностика по 3 частым
+  причинам (DNS, провайдерский файрвол, rate-limit).
+- **⚠️ `.gitattributes` (`*.sh text eol=lf`)** — репо пишется на Windows (`core.autocrlf=true`), а исполняется на
+  Linux: CRLF в `entrypoint.sh` даёт `/entrypoint.sh: not found`, в `install.sh` — `bad interpreter: /bin/sh^M`.
+- **Проверка:** `docker compose config` валиден; образ proxy собран; **реальными контейнерами** проверены оба
+  режима (HTTP-only: `/healthz` 200, `/internal` 404, `/` 502 при отсутствующем frontend, контейнер жив; TLS:
+  `listen 443 ssl` + `http2`, HTTP→301, ACME без редиректа, HTTPS 200, HSTS есть, `server_tokens off`);
+  авто-переход HTTP→TLS watcher'ом; `bash -n` + `shellcheck` чисто. ⚠️ Сам `install.sh` целиком на чистом
+  VPS не гонялся (нет тестового сервера) — проверены синтаксис, линт и все компоненты, которыми он управляет.
+
+### 14d. Что нашёл adversarial-ревью (12 агентов, 4 линзы) — НЕ регрессировать
+- **⚠️ `/healthz` обязан отвечать на :80 И в TLS-режиме** (`snippets/healthz.conf`, включён в port-80 блок ОБОИХ
+  шаблонов + в :443). Иначе healthcheck `wget http://127.0.0.1/healthz` ловит `return 301` → идёт на
+  `https://127.0.0.1` → не может проверить серт для IP → контейнер **навсегда `unhealthy`** (воспроизведено на
+  реальном образе). Тот же 301 делал no-op'ом readiness-гейты `install.sh` (у `curl -f` 3xx не ошибка).
+  Поэтому `/healthz` НЕ в `app.conf` — иначе дубль `location` в http-шаблоне.
+- **⚠️ `Connection` для WS — через `map`, не хардкод** (`http.d/00-upgrade-map.conf`, копируется в `conf.d/` =
+  http-контекст; `map` внутри `server{}` невозможен). Иначе обычный GET на `/ws/` уходит в backend с
+  бессмысленным `Connection: upgrade`.
+- **⚠️ `listen [::]` роняет nginx на хостах с `ipv6.disable=1`** (`socket() [::]:80 failed (97)`). `entrypoint.sh`
+  снимает v6-строки `sed`'ом, если нет `/proc/net/if_inet6` (вместо двух лишних шаблонов). Проверено: с IPv6
+  строки остаются.
+- **⚠️ `depends_on: condition: service_started`, НЕ `service_healthy`** — иначе битый backend не даёт стартовать
+  точке входа и **блокирует renewal серта**, превращая починимый сбой в просроченный сертификат. Ленивый резолв
+  upstream'ов (переменные + resolver) делает health-гейт ненужным.
+- **⚠️ `Settings.Config.extra = "ignore"`** (`backend/app/config.py`): pydantic-settings по умолчанию
+  **forbid** и кормит моделью ВСЕ ключи `.env`, а `.env` общий (AGG_TOKEN/TASK_STORE/PROXY_DOMAIN/ACME_EMAIL для
+  compose и прокси) → `extra_forbidden`. Контейнеров не касалось (compose отдаёт env-переменные, `.env` в образ не
+  копируется — `COPY app/ ./app/`), но запуск бэкенда из корня репо падал. Ловушка была и ДО этой волны (AGG_TOKEN).
+- **⚠️ Exec-бит не выражается через `.gitattributes`** и `core.fileMode=false` в этом репо → новый файл
+  коммитится как `100644`, и документированный `sudo ./install.sh` падает с `Permission denied` на свежем клоне.
+  Лечение: `git update-index --chmod=+x install.sh` (проверять `git ls-files -s` → `100755`).
+- **⚠️ Staging-серт на диске не отличим от настоящего по имени файла** → после отладочного прогона с `--staging`
+  обычный ре-ран молча переиспользовал недоверенный серт. `install.sh::cert_is_staging` смотрит issuer через
+  `openssl` (есть в образе certbot) и форсит перевыдачу.
+- **⚠️ CRLF в `.env`** сажает `\r` в КАЖДОЕ значение (в `server_name`, в путь к серту) → `.gitattributes`
+  пиннит `.env.example` на LF, а `install.sh` дополнительно копирует через `tr -d '\r'`.
+- **Отклонено ревью (не баг):** «open redirect через `$host`» — редирект host-СОХРАНЯЮЩИЙ (жертвы нет);
+  «depends_on ломает ребут» — `depends_on` это конструкт CLI, демон при ребуте его не читает.
+- **⚠️ Покрытие ревью НЕполное:** 3 из 12 агентов упали с API-ошибками (линзы **security** и **installer**
+  целиком, + верификатор uppercase-домена). Линза security не отработала — при следующем заходе прогнать её
+  отдельно.

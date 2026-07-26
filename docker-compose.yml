@@ -199,8 +199,11 @@ services:
         - VITE_WS_BASE=/ws
     container_name: node-installer-frontend
     restart: unless-stopped
-    ports:
-      - "80:80"
+    # No host port: the `proxy` service is the single public entry point and
+    # reaches this container by name. (Before the proxy existed this published
+    # 80:80 — http://server/ still works, it is just served one hop earlier.)
+    expose:
+      - "80"
     depends_on:
       backend:
         condition: service_healthy
@@ -213,6 +216,68 @@ services:
       retries: 3
       start_period: 5s
 
+  # ── Public entry point: TLS termination + reverse proxy ────────
+  # Always part of the stack. With no PROXY_DOMAIN/certificate it serves the panel
+  # over plain HTTP on :80 (exactly what `frontend` used to do); once a
+  # certificate exists it redirects to HTTPS and terminates TLS on :443.
+  # See proxy/entrypoint.sh for why the config is rendered at runtime.
+  proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    image: node-installer-proxy:latest
+    container_name: node-installer-proxy
+    restart: unless-stopped
+    environment:
+      # Empty → HTTP-only catch-all. Set by install.sh (or by hand in .env).
+      - PROXY_DOMAIN=${PROXY_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - acme-webroot:/var/www/certbot
+    # ⚠️ service_STARTED, not service_healthy. The upstreams are resolved lazily
+    # (see snippets/app.conf), so the proxy does not need a working backend to
+    # boot — and it MUST boot regardless: waiting on backend health would mean a
+    # broken backend also takes down the panel's error page AND blocks ACME
+    # renewal, turning a recoverable outage into an expired certificate.
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Certificate issuance + renewal (http-01 over the webroot shared with `proxy`).
+  #
+  # Not pinned on purpose: an ACME client is exactly the kind of thing that must
+  # keep up with CA-side deprecations, and `certbot renew` is idempotent.
+  # The loop wakes every 12h; certbot itself no-ops until a cert is within 30
+  # days of expiry. `$$` escapes the compose interpolation so the CONTAINER shell
+  # sees `$!`. Issuance of the FIRST certificate is done by install.sh via
+  # `docker compose run --rm certbot certonly …`.
+  certbot:
+    image: certbot/certbot:latest
+    container_name: node-installer-certbot
+    restart: unless-stopped
+    entrypoint: >
+      /bin/sh -c "trap exit TERM;
+      while :; do
+        certbot renew --webroot -w /var/www/certbot --quiet;
+        sleep 43200 & wait $${!};
+      done"
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - acme-webroot:/var/www/certbot
+    networks:
+      - app-net
+
 networks:
   app-net:
     # Explicit name so node-assistant can attach the xray-checker container to
@@ -224,3 +289,10 @@ volumes:
   cliproxy-conf:
     name: node-cliproxy-conf
   node-data:
+  # Let's Encrypt account + certificates (survives `compose down`; losing it
+  # means re-issuing, which counts against the LE rate limit).
+  letsencrypt:
+    name: node-letsencrypt
+  # http-01 challenge files, written by certbot and served by proxy.
+  acme-webroot:
+    name: node-acme-webroot
