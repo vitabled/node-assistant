@@ -18,6 +18,7 @@ import secrets
 from typing import Optional
 
 from app.models.deploy import DeployRequest
+from app.services import ssh_auth
 from app.services.ssh_manager import SSHSession
 from app.services.cloudflare import upsert_a_record
 from app.services.task_store import Task, TaskStatus, STEP_LABELS
@@ -795,10 +796,13 @@ async def _tcp_reachable(host: str, port: int, timeout: float = 5.0) -> bool:
 
 
 async def _try_ssh_connect(
-    req: "DeployRequest", port: int, timeout: int = 12
+    req: "DeployRequest", port: int, creds: dict, timeout: int = 12
 ) -> Optional[SSHSession]:
-    """Attempt a full SSH connection on `port`; return the session or None."""
-    sess = SSHSession(req.ip, port, req.ssh_user, req.ssh_password)
+    """Attempt a full SSH connection on `port`; return the session or None.
+
+    `creds` is the already-resolved `ssh_auth` payload — the vault is read once
+    per deploy, not on every post-reboot reconnect attempt."""
+    sess = SSHSession(req.ip, port, req.ssh_user, **creds)
     try:
         await sess.connect(timeout=timeout)
         return sess
@@ -826,11 +830,17 @@ async def step_ssh_dualport_verify(
     task: Task,
     req: "DeployRequest",
     backend_ip: str,
+    creds: Optional[dict] = None,
 ) -> SSHSession:
     # This former single step is now presented as THREE progress steps:
     #   7 «Перезагрузка»            — poll for the box to come back online
     #   8 «Проверка нового порта SSH» — SSH-connect on the new port (rollback/lockout here)
     #   9 «Удаление старого порта SSH» — cleanup: drop the old port
+    #
+    # The post-reboot reconnects need the same auth payload the pipeline already
+    # resolved; resolving here too keeps the step callable on its own.
+    if creds is None:
+        creds = await ssh_auth.resolve(req)
     _begin_step(task, 7)
 
     async def _whitelist(sess: SSHSession) -> None:
@@ -882,7 +892,7 @@ async def step_ssh_dualport_verify(
 
     # ── Step 8: verify the new port accepts SSH ──
     _begin_step(task, 8)
-    session_new = await _try_ssh_connect(req, new_port, timeout=12)
+    session_new = await _try_ssh_connect(req, new_port, creds, timeout=12)
     if session_new is not None:
         old_reachable = await _tcp_reachable(req.ip, old_port)
         task.add_log(
@@ -903,7 +913,7 @@ async def step_ssh_dualport_verify(
         return session_new
 
     # ── SCENARIO Б — new port down, old port still alive → rollback ──
-    session_old = await _try_ssh_connect(req, old_port, timeout=12)
+    session_old = await _try_ssh_connect(req, old_port, creds, timeout=12)
     if session_old is not None:
         task.add_log(
             f"\x1b[1;33m[ssh-dualport] Новый порт {new_port} не поднялся после "
@@ -2208,7 +2218,12 @@ async def run_pipeline(req: DeployRequest, task: Task) -> None:
         # ── Step 1: Connect ──────────────────────────────────
         _begin_step(task, 1)
         task.add_log(f"Подключение к {req.ip}:{req.current_ssh_port} как {req.ssh_user}...")
-        ssh = SSHSession(req.ip, req.current_ssh_port, req.ssh_user, req.ssh_password)
+        # Password or a private key from the Хранилище — resolved ONCE here and
+        # reused by the post-reboot reconnects (step 7-9).
+        creds = await ssh_auth.resolve(req)
+        if "private_key" in creds:
+            task.add_log("\x1b[90m[ssh] Авторизация по ключу из Хранилища.\x1b[0m")
+        ssh = SSHSession(req.ip, req.current_ssh_port, req.ssh_user, **creds)
         await ssh.connect()
 
         os_info = await ssh.get_output(
@@ -2289,7 +2304,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         # Step 7 polls for the rebooted server, then verifies the new port and
         # finalizes — or rolls back via the old port and aborts. Returns the live
         # session used for all later steps.
-        ssh = await step_ssh_dualport_verify(ssh, task, req, backend_ip)
+        ssh = await step_ssh_dualport_verify(ssh, task, req, backend_ip, creds)
 
         # ── Mode branch: haproxy relay (step 10, skips 11–14) vs full remnanode
         #    stack (steps 10–14) ──

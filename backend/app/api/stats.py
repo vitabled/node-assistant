@@ -21,7 +21,14 @@ import re as _re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
-from app.services import accounts, speedtest_store, test_tools, testserver_registry
+from app.models.ssh_creds import SshCreds
+from app.services import (
+    accounts,
+    speedtest_store,
+    ssh_auth,
+    test_tools,
+    testserver_registry,
+)
 from app.services.ssh_manager import SSHSession
 
 # Hostname charset guard — `domain` is interpolated into a root SSH script in
@@ -42,11 +49,9 @@ _RE_CURRENT = re.compile(r"Currently banned:\s*(\d+)")
 _RE_TOTAL = re.compile(r"Total banned:\s*(\d+)")
 
 
-class NodeStatsRequest(BaseModel):
-    ip: str
+class NodeStatsRequest(SshCreds):
+    # ip / ssh_user / ssh_password / ssh_key_ref come from SshCreds.
     ssh_port: int = 22
-    ssh_user: str = "root"
-    ssh_password: str
     domain: str = ""  # FQDN whose cert to probe; empty → skip cert check
 
     @field_validator("domain")
@@ -93,8 +98,15 @@ class NodeStatsResponse(BaseModel):
 
 @router.post("/node", response_model=NodeStatsResponse)
 async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
-    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    # Pre-bound: resolving the creds happens inside the try (see below), so on
+    # failure `finally` would otherwise hit an unbound name and turn the graceful
+    # `error` response into a 500.
+    ssh: Optional[SSHSession] = None
     try:
+        # Inside the try on purpose: an unusable Хранилище key ref is, for a card
+        # that polls every few minutes, the same class of problem as an unreachable
+        # box — it belongs in `error`, not in a 400/500 the card can't render.
+        ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, **await ssh_auth.resolve(req))
         await ssh.connect(timeout=10)
         # One SSH session, read-only probes in parallel.
         f2b, tg, traffic, cert = await asyncio.gather(
@@ -119,7 +131,8 @@ async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
     except Exception as exc:
         return NodeStatsResponse(ip=req.ip, online=False, error=str(exc)[:200])
     finally:
-        await ssh.close()
+        if ssh is not None:
+            await ssh.close()
 
 
 async def _fail2ban_sshd(ssh: SSHSession) -> tuple[int, int]:
@@ -222,11 +235,9 @@ async def _cert_expiry(ssh: SSHSession, domain: str) -> Optional[CertInfo]:
 # ══════════════════════════════════════════════════════════════
 
 
-class NodeSpeedtestRequest(BaseModel):
-    ip: str
+class NodeSpeedtestRequest(SshCreds):
+    # ip / ssh_user / ssh_password / ssh_key_ref come from SshCreds.
     ssh_port: int = 22
-    ssh_user: str = "root"
-    ssh_password: str
     testserver_id: Optional[str] = None  # iperf3 target from the account's registry
     xray_link: Optional[str] = None  # vless/trojan/vmess/ss share-link (never logged)
     # Cumulative metric levels: 1=iperf throughput, 2=+ping/jitter, 3=+traceroute.
@@ -427,13 +438,19 @@ async def node_speedtest(req: NodeSpeedtestRequest) -> dict:
     metrics = {m for m in req.metrics if m in (1, 2, 3)} or {1}
     row: dict = {"resource_key": req.ip, "kind": "node"}
 
+    # Resolved BEFORE the in-flight slot is taken: an unusable Хранилище key must
+    # not leave the node marked "тест выполняется" (the slot is only released by
+    # the try/finally below), which would 409 every later attempt.
+    creds = await ssh_auth.resolve(req)
+
     key = (account_id, req.ip)
     if key in _INFLIGHT:
         raise HTTPException(409, "Тест этого сервера уже выполняется")
     _INFLIGHT.add(key)
 
-    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    ssh: Optional[SSHSession] = None
     try:
+        ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, **creds)
         try:
             await ssh.connect(timeout=10)
         except Exception as exc:
@@ -512,7 +529,8 @@ async def node_speedtest(req: NodeSpeedtestRequest) -> dict:
             except Exception:
                 warnings.append("xray-тест не завершился (таймаут/ошибка SSH)")
     finally:
-        await ssh.close()
+        if ssh is not None:
+            await ssh.close()
         _INFLIGHT.discard(key)
 
     await speedtest_store.record_run(account_id, row)

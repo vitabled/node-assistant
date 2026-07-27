@@ -20,6 +20,21 @@ export interface Provider {
   balance: number; currency: string; lowBalanceThreshold: number;
   status: string; apiTokenId: string; apiTokenName: string;
   countryCode?: string;   // optional geo-location (rendered as a flag when present)
+  // Wave-9: vendor-API sync. Empty adapterKind = balance is typed in by hand.
+  adapterKind: string; vaultEntryId: string; balanceSyncedAt: number; lastError: string;
+}
+
+/** One vendor-API adapter available on the backend (GET /adapters). */
+export interface ProviderAdapterInfo {
+  kind: string; title: string; caps: string[];
+  fields: { key: string; label: string; kind: "text" | "password" | "textarea"; required: boolean }[];
+}
+
+export interface ProviderSyncResult {
+  ok: boolean; error?: string; caps?: string[];
+  balance?: number; currency?: string;
+  services?: { id: string; name: string; kind: string; cost: number | null; currency: string;
+               period: string; status: string; ip: string; region: string; paid_till: string }[];
 }
 export interface Project {
   id: string; name: string; description: string; node_uuids: string[];
@@ -54,6 +69,10 @@ export const infraApi = {
   createProvider: (b: unknown) => req("/providers", { method: "POST", body: JSON.stringify(b) }),
   updateProvider: (uuid: string, b: unknown) => req(`/providers/${uuid}`, { method: "PATCH", body: JSON.stringify(b) }),
   deleteProvider: (uuid: string, force = false) => req(`/providers/${uuid}?force=${force}`, { method: "DELETE" }),
+  listAdapters: () => req<ProviderAdapterInfo[]>("/adapters"),
+  syncProvider: (uuid: string) => req<ProviderSyncResult>(`/providers/${uuid}/sync`, { method: "POST" }),
+  importProviderServices: (uuid: string) =>
+    req<{ ok: boolean; created: number; skipped: number }>(`/providers/${uuid}/import-services`, { method: "POST" }),
 
   listProjects: () => req<Project[]>("/projects"),
   createProject: (b: unknown) => req("/projects", { method: "POST", body: JSON.stringify(b) }),

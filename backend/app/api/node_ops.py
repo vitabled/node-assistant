@@ -15,12 +15,14 @@ here); the SSH-port network steps are intentionally excluded too — rolling the
 port back on a live box is lockout-prone and out of scope.
 """
 import re
-from typing import Callable, Literal
+from typing import Callable, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
 from app.models.deploy import DeployRequest
+from app.models.ssh_creds import SshCreds
+from app.services import ssh_auth
 from app.services.ssh_manager import SSHSession
 from app.services.task_store import task_store, TaskStatus
 from app.services.backend_ip import get_backend_ip
@@ -70,14 +72,11 @@ _DOMAIN_RE = re.compile(
 )
 
 
-class NodeDetectRequest(BaseModel):
+class NodeDetectRequest(SshCreds):
     """Creds-per-request body for the read-only component probe. `domain` is
     optional (only needed for the SSL probe) but, when present, is validated as a
     plain hostname — it's interpolated into a root-run shell probe, so the same
     shell-safety allowlist as DeployRequest.domain applies."""
-    ip: str
-    ssh_user: str = "root"
-    ssh_password: str = Field(..., min_length=1)
     ssh_port: int = Field(default=22, ge=1, le=65535)
     domain: str = ""
 
@@ -190,7 +189,7 @@ async def node_detect(req: NodeDetectRequest):
     """Probe a live server (read-only) and report which components are installed.
     One SSH session; a per-probe failure degrades to 'unknown' (never 500). A
     connection failure → 502 with a Russian message."""
-    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, **await ssh_auth.resolve(req))
     try:
         try:
             await ssh.connect()
@@ -253,11 +252,17 @@ async def _run_op(req: NodeOpRequest, task_id: str) -> None:
     label = _COMPONENT_LABEL[req.component]
     verb = {"reinstall": "Переустановка", "reconfigure": "Изменение",
             "uninstall": "Удаление"}[req.action]
-    ssh = SSHSession(req.ip, _effective_port(req), req.ssh_user, req.ssh_password)
+    ssh: Optional[SSHSession] = None
     try:
         task.set_step(1, TaskStatus.RUNNING)
         task.add_log(f"\x1b[1;36m[{verb}] {label} на {req.ip}\x1b[0m")
         task.add_log(f"Подключение к {req.ip}:{_effective_port(req)}...")
+        # Built INSIDE the try: resolving a Хранилище key ref (and parsing the key
+        # itself) can fail, and this runs detached from the request — the error has
+        # to land on the task, not vanish in a background task.
+        ssh = SSHSession(
+            req.ip, _effective_port(req), req.ssh_user, **await ssh_auth.resolve(req)
+        )
         await ssh.connect()
         task.add_log("\x1b[32mПодключено.\x1b[0m")
 
@@ -272,7 +277,8 @@ async def _run_op(req: NodeOpRequest, task_id: str) -> None:
         task.add_log(f"\n\x1b[1;31m✗ Ошибка: {exc}\x1b[0m")
         task.finish(TaskStatus.FAILED, str(exc))
     finally:
-        await ssh.close()
+        if ssh is not None:
+            await ssh.close()
 
 
 async def _reinstall(ssh: SSHSession, task, req: NodeOpRequest) -> None:

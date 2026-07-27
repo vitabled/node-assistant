@@ -46,6 +46,8 @@ from app.api import (
     library,
     haproxy,
     updates,
+    vault,
+    cloudflare,
 )
 from app.api.auth import require_account
 from app.services import job_runner, shared_task_store, worker_lease
@@ -84,7 +86,12 @@ async def lifespan(app: FastAPI):
     #  - updater: global self-update check every ~6h, applies when auto_update is
     #    on and the tracked branch is behind (Wave-8 §3). Monitoring-lease gated.
     upd = asyncio.create_task(updater.auto_loop())
-    tasks = [poller, collector, rules_task, autostart, srv_monitor, auto_bk, upd]
+    #  - provider sync: refreshes hosting-provider balances through their vendor
+    #    APIs (Wave-9 Plan C) so the low-balance warning fires without an open
+    #    browser. Opt-in per account (`auto_sync` in the billing settings).
+    from app.services import provider_sync
+    prov_sync = asyncio.create_task(provider_sync.loop())
+    tasks = [poller, collector, rules_task, autostart, srv_monitor, auto_bk, upd, prov_sync]
     #  - recovery: with a shared task store, claim jobs nobody else will. It idles
     #    while a real deploy-worker holds the duty, and picks up whatever that
     #    worker left behind when it dies — without this, jobs queued in the window
@@ -170,6 +177,8 @@ app.include_router(export_io.router, dependencies=_auth)
 app.include_router(library.router, dependencies=_auth)
 app.include_router(haproxy.router, dependencies=_auth)
 app.include_router(updates.router, dependencies=_auth)
+app.include_router(vault.router, dependencies=_auth)
+app.include_router(cloudflare.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.

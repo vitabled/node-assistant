@@ -65,6 +65,40 @@ def test_confirm_and_bad_archive():
     assert _import(h, b"not a tar.gz").status_code == 422
 
 
+def test_vault_ciphertext_never_leaves_in_an_export():
+    """The vault ships its INVENTORY but never the Fernet blobs.
+
+    Regression: `_strip_secrets` only understood settings.json, so adding
+    vault.json to the export list shipped every stored password/key as
+    ciphertext — recoverable by anyone who also has ENCRYPTION_KEY."""
+    a = _auth()
+    client.post("/api/vault", headers=a, json={
+        "name": "prod-root", "kind": "ssh_password", "resource": "10.0.0.1",
+        "fields": {"password": "s3cr3t-pw"}})
+    blob = _export(a)
+    assert b"s3cr3t-pw" not in blob          # plaintext obviously never
+
+    b = _auth()
+    assert _import(b, blob).status_code == 200
+    rows = client.get("/api/vault", headers=b).json()
+    assert len(rows) == 1 and rows[0]["name"] == "prod-root"   # inventory carried
+    assert rows[0]["has_secret"] is False                      # secret did not
+    assert client.post(f"/api/vault/{rows[0]['id']}/reveal", headers=b).status_code == 404
+
+
+def test_settings_enc_sections_are_all_swept():
+    """Every *_enc key is zeroed, not just the two sections named in the old code."""
+    a = _auth()
+    client.post("/api/settings/auto-backup", headers=a,
+                json={"enabled": True, "chat_id": "42", "bot_token": "111:bot-secret-token"})
+    blob = _export(a)
+    assert b"bot-secret-token" not in blob
+    b = _auth()
+    _import(b, blob)
+    ab = client.get("/api/settings/auto-backup", headers=b).json()
+    assert ab["chat_id"] == "42" and ab["has_token"] is False
+
+
 def test_isolation():
     a = _auth()
     client.post("/api/hosts", headers=a, json={"remark": "solo", "address": "a.com", "port": 443})

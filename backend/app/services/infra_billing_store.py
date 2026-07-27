@@ -162,6 +162,20 @@ def _ensure_schema(path: Path) -> None:
             );
             """
             )
+            # Wave-9: provider API adapters. CREATE TABLE IF NOT EXISTS above
+            # leaves an EXISTING provider_meta at its old shape, so the new
+            # columns are added separately and idempotently (same approach as
+            # metrics_store's `checker_id` and server_monitor's `hidden`).
+            for col, decl in (
+                ("adapter_kind", "TEXT DEFAULT ''"),      # registry kind, '' = manual entry
+                ("vault_entry_id", "TEXT DEFAULT ''"),    # credentials live in the vault
+                ("balance_synced_at", "INTEGER DEFAULT 0"),
+                ("last_error", "TEXT DEFAULT ''"),
+            ):
+                try:
+                    conn.execute(f"ALTER TABLE provider_meta ADD COLUMN {col} {decl}")
+                except sqlite3.OperationalError:
+                    pass  # column already present
         _initialised.add(key)
 
 
