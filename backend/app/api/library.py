@@ -15,6 +15,14 @@ router = APIRouter(prefix="/api/library")
 class NoteBody(BaseModel):
     name: str = Field("Заметка", max_length=200)
     text: str = Field("", max_length=200000)
+    # Folder path («Инфра/Провайдеры»). Normalised in the store — a folder has no
+    # identity of its own here, exactly like in Obsidian.
+    folder: str = Field("", max_length=300)
+
+
+class FolderRename(BaseModel):
+    src: str = Field(..., min_length=1, max_length=300)
+    dst: str = Field("", max_length=300)
 
 
 @router.get("")
@@ -34,7 +42,7 @@ async def upload(file: UploadFile = File(...)):
 @router.post("/notes", status_code=201)
 async def create_note(body: NoteBody):
     try:
-        return store.add_note(body.name.strip(), body.text)
+        return store.add_note(body.name.strip(), body.text, body.folder)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -49,10 +57,25 @@ async def get_note(item_id: str):
 
 @router.put("/notes/{item_id}")
 async def update_note(item_id: str, body: NoteBody):
-    updated = store.update_note(item_id, body.name.strip(), body.text)
+    updated = store.update_note(item_id, body.name.strip(), body.text, body.folder)
     if not updated:
         raise HTTPException(404, "Заметка не найдена")
     return updated
+
+
+@router.get("/graph")
+async def graph():
+    """Outgoing/incoming wiki-links per note + names that resolve to nothing."""
+    return store.graph()
+
+
+@router.post("/folders/rename")
+async def rename_folder(body: FolderRename):
+    try:
+        moved = store.rename_folder(body.src, body.dst)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "moved": moved}
 
 
 @router.get("/files/{item_id}")

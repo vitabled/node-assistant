@@ -27,6 +27,10 @@ export interface AsnRef {
 export interface Hosting {
   id: string; name: string; website: string; notes: string; features: string;
   tags: string[];
+  // Ids in the shared media store (see components/common/MediaDrop.tsx). Optional:
+  // records saved before the field existed come back without the key — read it as
+  // `(h.media || [])` everywhere, same as tags/asns.
+  media?: string[];
   tariffs: Tariff[]; locations: HostingLocation[]; asns: AsnRef[];
   provider_ref?: string | null; created_at: number;
 }
