@@ -20,6 +20,7 @@ import { ApiTokensTab } from "./settings/ApiTokensTab";
 import { DataTransfer } from "./settings/DataTransfer";
 import { UpdatesTab } from "./settings/UpdatesTab";
 import { HaproxyConnect } from "./haproxy/HaproxyConnect";
+import { CfConnect } from "./cloudflare/CfConnect";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -781,7 +782,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "assistant" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "assistant" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "cloudflare" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -798,6 +799,7 @@ export function Settings() {
     { id: "transfer",    label: "Экспорт/импорт" },
     { id: "updates",     label: "Обновления" },
     { id: "infra",       label: "Инфраструктура" },
+    { id: "cloudflare",  label: "Cloudflare" },
     { id: "haproxy",     label: "HAProxy" },
     { id: "theme",       label: "Тема" },
   ];
@@ -831,6 +833,7 @@ export function Settings() {
         {sub === "updates"      && <UpdatesTab />}
         {sub === "infra"        && <InfraTab />}
         {sub === "haproxy"      && <div className="max-w-3xl"><HaproxyConnect /></div>}
+        {sub === "cloudflare"   && <div className="max-w-3xl"><CfConnect /></div>}
         {sub === "theme"        && <ThemeTab />}
       </div>
     </div>

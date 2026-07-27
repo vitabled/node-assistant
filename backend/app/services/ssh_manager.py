@@ -6,6 +6,9 @@ Design choices:
 - run_script() sends multi-line bash via stdin to "bash -s 2>&1" — no SFTP needed.
 - stderr merged into stdout with 2>&1 to preserve interleaved ordering.
 - Global semaphore caps concurrent SSH sessions (shared across all tasks).
+- Auth is either a password or a private key (wave 9): callers build the kwargs
+  with `ssh_auth.resolve(req)`, so `password` stays the 4th POSITIONAL parameter
+  that ~20 existing call-sites already pass.
 """
 
 import asyncio
@@ -25,21 +28,53 @@ def _get_sem() -> asyncio.Semaphore:
     return _session_sem
 
 
+def _import_key(private_key: str, passphrase: str):
+    """Parse an OpenSSH/PEM private key into an asyncssh key object.
+
+    asyncssh raises KeyImportError / KeyEncryptionError (both ValueError
+    subclasses) and its message can quote the offending key material, so the
+    original exception is swallowed and replaced with a fixed Russian text —
+    the key must never reach a log, a task stream or an API response."""
+    try:
+        return asyncssh.import_private_key(private_key, passphrase or None)
+    except Exception:
+        raise ValueError("Приватный ключ не распознан или неверный пароль ключа")
+
+
 class SSHSession:
-    def __init__(self, host: str, port: int, username: str, password: str):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        username: str,
+        password: str = "",
+        private_key: str = "",
+        key_passphrase: str = "",
+    ):
         self.host = host
         self.port = port
         self.username = username
         self.password = password
+        # Parsed HERE and not in connect(): a malformed key / wrong passphrase
+        # then fails before any network I/O, so it can't be mistaken for a
+        # connectivity problem (and a retried reconnect re-uses the parsed key).
+        self._client_key = _import_key(private_key, key_passphrase) if private_key else None
         self._conn: Optional[asyncssh.SSHClientConnection] = None
 
     async def connect(self, timeout: int = 30) -> None:
+        # Key auth wins when a key was supplied; `password=None` disables
+        # password auth entirely (asyncssh's own default for "not supplied").
+        auth: dict = (
+            {"client_keys": [self._client_key], "password": None}
+            if self._client_key is not None
+            else {"password": self.password}
+        )
         self._conn = await asyncio.wait_for(
             asyncssh.connect(
                 self.host,
                 port=self.port,
                 username=self.username,
-                password=self.password,
+                **auth,
                 known_hosts=None,
                 server_host_key_algs=["ssh-rsa", "ecdsa-sha2-nistp256", "ssh-ed25519"],
                 # Keep-alive so long-running installs don't disconnect

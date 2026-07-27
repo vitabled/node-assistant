@@ -137,6 +137,25 @@ class HaproxyConfig(BaseModel):
     admin_token_enc: str = ""  # remote mode: Fernet ciphertext of PANEL_ADMIN_TOKEN
 
 
+class CloudflareConfig(BaseModel):
+    """Wave-9 Plan B — connection to a Cloudflare account for the billing/domains
+    sections. The API token needs billing/registrar scopes, so it is an
+    account-control secret → Fernet-encrypted (`api_token_enc`), never returned to
+    the client (only `has_token`), like the MCP/haproxy vaults.
+
+    ⚠️ This is NOT `deploy_defaults.cloudflare_api_key`: that one is a DNS-edit
+    token the deploy pipeline uses for A-records and stays untouched here — the
+    scopes don't overlap, so the two connections are deliberately separate.
+
+    `default_contact` is the registrant contact prefilled into a domain purchase:
+    PII, not a secret → plain JSON, so a restored account keeps its contact."""
+
+    enabled: bool = False
+    account_id: str = ""
+    api_token_enc: str = ""  # Fernet ciphertext (base64); never plaintext
+    default_contact: dict = {}
+
+
 class AppearanceConfig(BaseModel):
     """Per-account mirror of the UI appearance prefs (Wave-5 Plan B) so the look
     follows the account across devices. No secrets → plain JSON, no Fernet.
@@ -175,6 +194,7 @@ class AppSettings(BaseModel):
     mcp: McpConfig = McpConfig()
     ai: AiConfig = AiConfig()
     haproxy: HaproxyConfig = HaproxyConfig()
+    cloudflare: CloudflareConfig = CloudflareConfig()
     appearance: AppearanceConfig = AppearanceConfig()
     auto_backup: AutoBackupConfig = AutoBackupConfig()
 

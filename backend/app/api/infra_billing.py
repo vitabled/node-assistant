@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field, field_validator
 from app.services import storage
 from app.services import infra_billing_store as store
 from app.services import infra_notify
+from app.services import provider_sync
+from app.services.hosting_providers import registry
 from app.models.settings import AppSettings
 from app.services.remnawave_client import RemnavaveClient, RemnavaveError
 
@@ -60,6 +62,11 @@ class ProviderCreate(BaseModel):
     currency: str = Field(default="RUB", min_length=1, max_length=8)
     low_balance_threshold: float = Field(default=0, ge=0)
     api_token_id: str = ""
+    # Wave-9: pull the balance from the vendor API instead of typing it in.
+    # Credentials live in the vault (many providers need 2-5 fields), so only an
+    # opaque entry id is stored here.
+    adapter_kind: str = ""
+    vault_entry_id: str = ""
 
 
 class ProviderUpdate(BaseModel):
@@ -70,6 +77,8 @@ class ProviderUpdate(BaseModel):
     currency: Optional[str] = None
     low_balance_threshold: Optional[float] = Field(default=None, ge=0)
     api_token_id: Optional[str] = None
+    adapter_kind: Optional[str] = None
+    vault_entry_id: Optional[str] = None
 
 
 class ProjectBody(BaseModel):
@@ -218,8 +227,21 @@ async def list_providers():
             "lowBalanceThreshold": m.get("low_balance_threshold", 0),
             "status": m.get("status", "active"),
             "apiTokenId": tid, "apiTokenName": tokens.get(tid, {}).get("name", ""),
+            "adapterKind": m.get("adapter_kind", ""),
+            "vaultEntryId": m.get("vault_entry_id", ""),
+            "balanceSyncedAt": m.get("balance_synced_at", 0),
+            "lastError": m.get("last_error", ""),
         })
     return out
+
+
+@router.get("/adapters")
+async def list_adapters():
+    """Vendor API adapters available in this build + their credential form.
+
+    The frontend renders the credential fields from this, so adding an adapter
+    needs no frontend change."""
+    return registry.schemas()
 
 
 @router.post("/providers", status_code=201)
@@ -232,7 +254,8 @@ async def create_provider(body: ProviderCreate):
         raise _wrap_rw(exc)
     await store.upsert_provider_meta(
         created["uuid"], balance=_money(body.balance), currency=body.currency,
-        low_balance_threshold=_money(body.low_balance_threshold), api_token_id=body.api_token_id)
+        low_balance_threshold=_money(body.low_balance_threshold), api_token_id=body.api_token_id,
+        adapter_kind=body.adapter_kind, vault_entry_id=body.vault_entry_id)
     return {"ok": True, "uuid": created["uuid"]}
 
 
@@ -249,7 +272,8 @@ async def update_provider(uuid: str, body: ProviderUpdate):
         balance=_money(body.balance) if body.balance is not None else None,
         currency=body.currency,
         low_balance_threshold=_money(body.low_balance_threshold) if body.low_balance_threshold is not None else None,
-        api_token_id=body.api_token_id)
+        api_token_id=body.api_token_id,
+        adapter_kind=body.adapter_kind, vault_entry_id=body.vault_entry_id)
     return {"ok": True}
 
 
@@ -268,6 +292,44 @@ async def delete_provider(uuid: str, force: bool = False):
         raise _wrap_rw(exc)
     await store.delete_provider_meta(uuid)
     return {"ok": True}
+
+
+@router.post("/providers/{uuid}/sync")
+async def sync_provider(uuid: str):
+    """Pull balance (+ live service list) from the vendor API for one provider.
+
+    Adapters never raise, so a vendor outage or wrong credentials comes back as
+    {ok: false, error} — 200, not 502: the row stays on screen with its error."""
+    return await provider_sync.sync_one(uuid)
+
+
+@router.post("/providers/{uuid}/import-services")
+async def import_provider_services(uuid: str):
+    """Create local `services` rows from the vendor's live listing.
+
+    Explicit button, never automatic: the user may already track these by hand,
+    and we don't want a sync to fork their bookkeeping. Existing rows matched by
+    name are left alone (no update — the local cost may be intentional)."""
+    res = await provider_sync.sync_one(uuid, want_services=True)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "синхронизация не удалась")
+    remote = res.get("services") or []
+    if not remote:
+        return {"ok": True, "created": 0, "skipped": 0}
+    have = {(s.get("name") or "").strip().lower() for s in await store.services()}
+    created = 0
+    for item in remote:
+        name = (item.get("name") or item.get("id") or "").strip()
+        if not name or name.lower() in have:
+            continue
+        await store.create_service(
+            name=name[:120], kind=item.get("kind") or "vps",
+            node_uuid="", provider_uuid=uuid, project_id="",
+            billing_type="fixed", cost=_money(item.get("cost") or 0),
+            next_billing_at=item.get("paid_till") or "")
+        have.add(name.lower())
+        created += 1
+    return {"ok": True, "created": created, "skipped": len(remote) - created}
 
 
 # ═══════════════════════════════════════════════════════════════

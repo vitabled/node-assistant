@@ -1,0 +1,11 @@
+{
+  "status": "success",
+  "answer": {
+    "status": "success",
+    "result": {
+      "user_balance": 512.4,
+      "plan_name": "Noble",
+      "user_domains": 3
+    }
+  }
+}

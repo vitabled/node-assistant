@@ -1,0 +1,25 @@
+{
+  "servers": [
+    {
+      "virtual_server_id": 51001,
+      "user_comment": "  ams-node-1  ",
+      "status": "active",
+      "datacenter": 3,
+      "payment_period": 5,
+      "paid_till": "2026-09-01T00:00:00+03:00",
+      "network_v4": [
+        {"ip_address": "203.0.113.10", "netmask": 32}
+      ]
+    },
+    {
+      "virtual_server_id": 51002,
+      "user_comment": "",
+      "status": "stopped",
+      "datacenter": 9,
+      "payment_period": 0,
+      "paid_till": null,
+      "network_v4": []
+    }
+  ],
+  "pagination": {"page": 1, "per_page": 100, "total": 2, "next_page": null}
+}

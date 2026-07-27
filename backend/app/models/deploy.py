@@ -1,16 +1,17 @@
 import re
 from typing import Literal, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
+
+from app.models.ssh_creds import SshCreds
 
 
-class DeployRequest(BaseModel):
+class DeployRequest(SshCreds):
     # Deploy mode — "remnanode" (default, full Xray/Remnawave stack) or "haproxy"
     # (isolated TCP relay; reuses step slot 10, skips pipeline steps 11–14).
     mode: Literal["remnanode", "haproxy"] = Field(default="remnanode")
 
-    ip: str = Field(..., description="Server IPv4 address")
-    ssh_user: str = Field(default="root")
-    ssh_password: str = Field(..., min_length=1)
+    # ip / ssh_user / ssh_password / ssh_key_ref come from SshCreds (password OR
+    # a Хранилище key ref — one of them is required by its model validator).
     # domain/email/cloudflare are required only in remnanode mode (validated below)
     domain: str = Field(default="", description="Node domain, e.g. node1.example.com")
     # Certificate issuer: cloudflare (DNS-01, acme.sh) | letsencrypt (HTTP-01) |
@@ -170,12 +171,9 @@ class DeployRequest(BaseModel):
         return ",".join(ports)
 
 
-class DeployCertRequest(BaseModel):
+class DeployCertRequest(SshCreds):
     """Deploy (issue + install) a cert onto a live node via the chosen provider —
     the «Управление SSL» section (Ф10). Reuses the pipeline's per-FQDN SSL logic."""
-    ip: str
-    ssh_user: str = "root"
-    ssh_password: str
     ssh_port: int = 22
     domain: str
     email: str = ""                       # required for letsencrypt/zerossl (ACME/EAB)

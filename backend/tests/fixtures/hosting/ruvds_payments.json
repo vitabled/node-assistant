@@ -1,0 +1,19 @@
+{
+  "payments": [
+    {
+      "dt": "2026-07-01T12:00:00+03:00",
+      "amount": 3000,
+      "currency": 1,
+      "direction": 1,
+      "pay_source": "card"
+    },
+    {
+      "dt": "2026-07-02T00:05:00+03:00",
+      "amount": 450.5,
+      "currency": 1,
+      "direction": 2,
+      "pay_source": "server 51001"
+    }
+  ],
+  "pagination": {"page": 1, "per_page": 100, "total": 2, "next_page": null}
+}

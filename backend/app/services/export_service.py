@@ -24,7 +24,7 @@ _JSON_FILES = [
     "settings.json", "templates.json", "traffic_rules.json", "subscriptions.json",
     "domains.json", "hosts.json", "checkers.json", "rules.json", "testservers.json",
     "certwarden.json", "hostings.json", "panel_groups.json", "config_templates.json",
-    "prompt_presets.json", "stat_widgets.json",
+    "prompt_presets.json", "stat_widgets.json", "vault.json",
 ]
 # Excluded when secrets are stripped (opaque credential vault file).
 _SECRET_EXCLUDE = {"netbird.json"}
@@ -45,8 +45,11 @@ def _strip_secrets(name: str, data):
         xc = data.get("xray_checker")
         if isinstance(xc, dict):
             xc["subscription_url"] = ""
-        for k in ("mcp", "ai"):
-            sub = data.get(k)
+        # Sweep EVERY section for Fernet ciphertext instead of naming sections:
+        # the named list ("mcp", "ai") silently stopped covering new modules as
+        # they landed (haproxy.admin_token_enc, auto_backup.bot_token_enc,
+        # cloudflare.api_token_enc were all being exported).
+        for sub in data.values():
             if isinstance(sub, dict):
                 for f in list(sub):
                     if f.endswith("_enc"):
@@ -56,6 +59,13 @@ def _strip_secrets(name: str, data):
             for p in reg.get("panels") or []:
                 if isinstance(p, dict):
                     p["api_token"] = ""
+    if name == "vault.json" and isinstance(data, dict):
+        # Keep the inventory (names/resources/kinds) so a restore shows WHICH
+        # secrets have to be re-entered, but never ship the ciphertext: the key
+        # is derived from ENCRYPTION_KEY, which an archive recipient may know.
+        for entry in data.get("entries") or []:
+            if isinstance(entry, dict):
+                entry["fields_enc"] = ""
     return data
 
 

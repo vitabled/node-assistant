@@ -30,6 +30,12 @@ import { Backup }                          from "./components/rw/Backup";
 import { HostingsCatalog }                from "./components/hostings/HostingsCatalog";
 import { HostingsMap }                     from "./components/hostings/HostingsMap";
 import { SubscriptionAnalyze }             from "./components/SubscriptionAnalyze";
+import { Vault }                           from "./components/vault/Vault";
+import { CfOverview }                      from "./components/cloudflare/CfOverview";
+import { CfSubscriptions }                 from "./components/cloudflare/CfSubscriptions";
+import { CfUsage }                         from "./components/cloudflare/CfUsage";
+import { CfPayments }                      from "./components/cloudflare/CfPayments";
+import { CfDomains }                       from "./components/cloudflare/CfDomains";
 import { HaproxyOverview }                 from "./components/haproxy/HaproxyOverview";
 import { HaproxyNodes }                    from "./components/haproxy/HaproxyNodes";
 import { HaproxyRoutes }                   from "./components/haproxy/HaproxyRoutes";
@@ -113,6 +119,12 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "hostings-list":   ["Справка", "Хостинги"],
   "subscription-analyze": ["Справка", "Анализ подписки"],
   "library":         ["Справка", "Библиотека"],
+  "vault":           ["Справка", "Хранилище"],
+  "cf-overview":      ["Cloudflare", "Обзор"],
+  "cf-subscriptions": ["Cloudflare", "Подписки"],
+  "cf-usage":         ["Cloudflare", "Использование"],
+  "cf-payments":      ["Cloudflare", "Платежи"],
+  "cf-domains":       ["Cloudflare", "Домены"],
   "infra-dashboard": ["Инфра-биллинг", "Dashboard"],
   "infra-providers": ["Инфра-биллинг", "Провайдеры"],
   "infra-projects":  ["Инфра-биллинг", "Проекты"],
@@ -298,6 +310,13 @@ export default function App() {
           {tab === "hostings-list" && <HostingsCatalog />}
           {tab === "subscription-analyze" && <SubscriptionAnalyze />}
           {tab === "library" && <Library />}
+          {tab === "vault" && <Vault />}
+
+          {tab === "cf-overview" && <CfOverview />}
+          {tab === "cf-subscriptions" && <CfSubscriptions />}
+          {tab === "cf-usage" && <CfUsage />}
+          {tab === "cf-payments" && <CfPayments />}
+          {tab === "cf-domains" && <CfDomains />}
 
           {tab === "infra-dashboard" && <InfraDashboard />}
           {tab === "infra-providers" && <InfraProviders />}

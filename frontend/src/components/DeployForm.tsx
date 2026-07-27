@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
-import { Rocket, Loader2, Eye, EyeOff, AlertCircle, ChevronDown, Zap } from "lucide-react";
+import { Rocket, Loader2, Eye, EyeOff, AlertCircle, ChevronDown, Zap, KeyRound, X } from "lucide-react";
 import { type SelectOption } from "./MultiSelect";
 import { CountrySelect } from "./CountrySelect";
+import { VaultPicker } from "./vault/VaultPicker";
 
 export type DeployMode = "remnanode" | "haproxy";
 
@@ -10,6 +11,9 @@ export interface FormData {
   ip:                  string;
   ssh_user:            string;
   ssh_password:        string;
+  // Вход по SSH-ключу из Хранилища: сюда едет ТОЛЬКО id записи волта — приватный
+  // ключ разрешает бэкенд (services/ssh_auth.py), в localStorage он не попадает.
+  ssh_key_ref:         string;
   domain:              string;
   cert_provider:       string;   // cloudflare | letsencrypt | zerossl
   cloudflare_api_key:  string;
@@ -80,6 +84,7 @@ export const FORM_DEFAULT: FormData = {
   ip:                  "",
   ssh_user:            "root",
   ssh_password:        "",
+  ssh_key_ref:         "",
   domain:              "",
   cert_provider:       "cloudflare",
   cloudflare_api_key:  "",
@@ -149,7 +154,11 @@ export function validateForm(f: FormData): Partial<Record<keyof FormData, string
   // ── Shared fields (both modes) ──
   if (!IPv4.test(f.ip) || f.ip.split(".").some(o => parseInt(o) > 255)) e.ip = "Неверный IPv4";
   if (!f.ssh_user.trim())  e.ssh_user  = "Обязательное поле";
-  if (!f.ssh_password)     e.ssh_password = "Обязательное поле";
+  // Пароль обязателен ТОЛЬКО когда не выбран ключ из Хранилища (бэкенд требует
+  // ровно одно из двух — models/ssh_creds.py). `|| ""` — страховка на старые
+  // savedForm из localStorage, где поля ssh_key_ref ещё нет.
+  if (!f.ssh_password && !(f.ssh_key_ref || "").trim())
+    e.ssh_password = "Укажите пароль или выберите ключ из Хранилища";
   const portsErr = validatePorts(f.open_ports);
   if (portsErr) e.open_ports = portsErr;
   const cur = parseInt(f.current_ssh_port, 10);
@@ -327,6 +336,9 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
   const [touched,    setTouched]    = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [apiError,   setApiError]   = useState<string | null>(null);
+  // Имя выбранной записи Хранилища — только для подписи. В форме живёт id
+  // (`ssh_key_ref`); при открытии на редактирование имени нет, показываем id.
+  const [keyLabel,   setKeyLabel]   = useState("");
 
   // Collapsible section open-state. Required-field sections default open;
   // optional ones (Remnawave, Оптимизация) default collapsed.

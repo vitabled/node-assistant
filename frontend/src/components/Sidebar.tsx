@@ -5,6 +5,7 @@ import {
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
   Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen, FileJson,
   LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package, ScanSearch,
+  Lock, Cloud, Globe,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -15,7 +16,8 @@ export type Tab =
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
   | "haproxy-overview" | "haproxy-nodes" | "haproxy-routes" | "haproxy-traffic"
   | "haproxy-firewall" | "haproxy-releases"
-  | "hostings-map" | "hostings-list" | "subscription-analyze" | "library"
+  | "hostings-map" | "hostings-list" | "subscription-analyze" | "library" | "vault"
+  | "cf-overview" | "cf-subscriptions" | "cf-usage" | "cf-payments" | "cf-domains"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
@@ -73,6 +75,18 @@ const HOSTINGS_TABS: NavItemDef[] = [
   { tab: "hostings-list",        label: "Хостинги",        Icon: Server     },
   { tab: "subscription-analyze", label: "Анализ подписки", Icon: ScanSearch },
   { tab: "library",              label: "Библиотека",      Icon: BookOpen   },
+  // Хранилище секретов (Волна 9): пароли/API-ключи/SSH-ключи от внешних ресурсов.
+  { tab: "vault",                label: "Хранилище",       Icon: Lock       },
+];
+
+// Группа «CLOUDFLARE» — биллинг подключённого аккаунта + покупка доменов.
+// Подключение живёт в Настройки → «Cloudflare» (как у HAProxy), группа операционная.
+const CF_TABS: NavItemDef[] = [
+  { tab: "cf-overview",      label: "Обзор",          Icon: Cloud       },
+  { tab: "cf-subscriptions", label: "Подписки",       Icon: ReceiptText },
+  { tab: "cf-usage",         label: "Использование",  Icon: Gauge       },
+  { tab: "cf-payments",      label: "Платежи",        Icon: CreditCard  },
+  { tab: "cf-domains",       label: "Домены",         Icon: Globe       },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
@@ -157,6 +171,10 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Справка</p>
         {HOSTINGS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
+
+        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
+        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Cloudflare</p>
+        {CF_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
 
         <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
         <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Инфра-биллинг</p>

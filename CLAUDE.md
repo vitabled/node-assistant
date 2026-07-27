@@ -1081,3 +1081,131 @@ Any exception → `task.finish(FAILED)` and re-raise → node card shows FAILED 
 - **⚠️ Покрытие ревью НЕполное:** 3 из 12 агентов упали с API-ошибками (линзы **security** и **installer**
   целиком, + верификатор uppercase-домена). Линза security не отработала — при следующем заходе прогнать её
   отдельно.
+
+## 15. Волна 9 — «Хранилище» секретов · SSH по ключу · группа Cloudflare · адаптеры хостингов
+> Планы `docs/superpowers/plans/2026-07-27-wave9-{a,b,c}-*.md` + зонтичный индекс. Решения из 2 раундов Q&A:
+> волт = менеджер **с автоподстановкой**; CF = **зеркало биллинга + Домены**; покупка домена — **настоящая**;
+> адаптеры — **баланс + список услуг**; креды провайдеров — **в едином Хранилище**; обновление балансов —
+> по открытию + кнопка + **фоновый луп**.
+
+### 15a. Хранилище (`Справка → Хранилище`)
+- **`services/vault_store.py` — JSON, НЕ SQLite:** `accounts/<id>/vault.json` (`{"entries":[…]}`), атомарная
+  запись + `threading.Lock` (идиома `hostings_store`). Причина выбора JSON: `export_service` умеет только
+  JSON-сторы, объём — десятки записей, схемы/миграций нет.
+- Запись: `{id,name,kind,resource,username,note,tags[],fields_enc,created_at,updated_at,revealed_at}`.
+  `kind ∈ api_key|ssh_password|ssh_key|login|provider_creds|note`. **Секрет — ОДИН Fernet-блоб над JSON-объектом
+  полей** (не строка): кредам провайдеров нужно 2-5 полей (Oracle — 5, OpenStack — 5, Beget — 2), и запись на
+  поле была бы мусором. Ключ Fernet — общий `sha256(encryption_key)`.
+- Лимиты: 500 записей, секрет ≤64 KiB, name ≤80, resource ≤200, ≤10 тегов по ≤24 симв.
+- **`_decode_fields` различает три состояния:** `{}` = секрета нет, `None` = не расшифровывается (сменили
+  `ENCRYPTION_KEY`) → `list_entries` помечает `broken:true` и НЕ бросает (один битый секрет не должен ломать
+  страницу).
+- **`api/vault.py`:** `GET/POST /api/vault`, `PUT/DELETE /{id}`, **`POST /{id}/reveal`** (именно POST: id в URL
+  уходит в access-логи nginx и историю браузера, а GET подвержен префетчу), `GET /{id}/download` (только
+  `ssh_key`, `octet-stream`+`attachment`+`nosniff`), `GET /schemas` (объявлен ДО `/{entry_id}`, иначе перехват).
+  **Reveal записи без секрета → 404 с текстом «введите его заново»**, а не пустая панель (так выглядит запись,
+  вернувшаяся из импорта).
+- **Правило размещения секретов в проекте:** один секрет на модуль → `AppSettings.<модуль>.<имя>_enc`
+  (mcp/ai/haproxy/cloudflare/auto_backup); много однотипных пользовательских секретов → **Хранилище**.
+- ⚠️ **Смена посыла:** до этой волны SSH-креды на сервере не хранились НИКОГДА. Теперь — хранятся, **если
+  пользователь сам их туда положил** (осознанный выбор, module-scoped override как §4c).
+
+### 15b. Экспорт секретов — исправленный дефект (важно)
+`export_service._strip_secrets` понимал **только `settings.json`**, и внутри — только секции `mcp`/`ai`. Поэтому
+добавление `vault.json` в экспорт отправило бы наружу шифротексты всех паролей/ключей, а токены
+`haproxy.admin_token_enc` / `auto_backup.bot_token_enc` / `cloudflare.api_token_enc` **не стрипались ещё с
+Волны 8**. Теперь: (а) `*_enc` вычищается **сквозным проходом по всем секциям** (перечисление секций молча
+отставало от новых модулей), (б) у `vault.json` зануляется `fields_enc` у каждой записи — **инвентарь
+сохраняется** (видно, какие секреты завести заново), шифротекст не уезжает. Регрессия:
+`test_export_io.py::test_vault_ciphertext_never_leaves_in_an_export` + `test_settings_enc_sections_are_all_swept`.
+
+### 15c. SSH-авторизация по приватному ключу
+- До волны проект умел **только пароль** (`asyncssh.connect(password=…)`, `ssh_password` обязателен).
+- `SSHSession.__init__(host, port, username, password="", private_key="", key_passphrase="")` — `password`
+  остался **4-м позиционным** (его так передают ~20 call-site'ов). Ключ импортируется в `__init__`
+  (`_import_key`), чтобы негодный ключ падал ДО сети; текст ошибки — фиксированная русская фраза **без
+  материала ключа**.
+- **`models/ssh_creds.py::SshCreds`** — миксин (`ip/ssh_user/ssh_password/ssh_key_ref`) + `model_validator`:
+  ни пароля, ни ключа → 422 с внятным текстом (раньше это давал `Field(..., min_length=1)`).
+- **`services/ssh_auth.py::resolve(req, account_id=None)`** → `{"password":…}` либо
+  `{"private_key":…, "key_passphrase":…}`. Duck-typing (`getattr`), а не общий базовый класс: ~20 моделей
+  объявлены инлайн в своих роутерах. Ключ читается из волта **на каждый resolve** (отзыв записи действует сразу).
+  Любая проблема с ref → один и тот же 400 (какая именно — не подсказываем: это зондировало бы чужие id).
+- **Переведены (Ф3):** `services/pipeline.py` (резолв ОДИН раз, дальше `creds` передаётся вниз — в т.ч. в
+  `step_ssh_dualport_verify`/`_try_ssh_connect`, чтобы реконнекты после перезагрузки не дёргали волт),
+  `api/node_ops.py`, `api/stats.py`. **НЕ переведены (Ф4/Ф5, осознанно отложено):** `panel_deploy`,
+  `panel_pipeline`, `panel_metrics`, `panel_sync`, `backup`, `subpages`, `replace_domain`, `certs`, `certwarden`,
+  `netbird`, `migrate`, `speedtest`, `testservers`, `xray_checker` — там по-прежнему только пароль.
+- ⚠️ **Приватный ключ НЕ подставляется значением в форму** (отклонение от «автоподстановки» с обоснованием):
+  `savedForm` карточки деплоя целиком персистится в localStorage → ключ лёг бы туда навсегда. В форму едет
+  только `ssh_key_ref`. Пароли/API-ключи подставляются значением. Гарантия покрыта тестом
+  `VaultPicker.test.tsx` («picking an SSH KEY … never calls reveal»).
+
+### 15d. Группа разделов «Cloudflare»
+- `CloudflareConfig{enabled, account_id, api_token_enc(Fernet), default_contact}` на `AppSettings`.
+  ⚠️ `deploy_defaults.cloudflare_api_key` — **другой** токен (DNS-edit для деплоя), не пересекается.
+- `services/cf_client.py` — конверт `{result,success,errors}`, `CfError`, `_redact` токена во всех сообщениях;
+  хост фиксированный → SSRF-гард не нужен (в отличие от `nodeflow_client`).
+- `api/cloudflare.py`: `GET/POST /config`, `POST /test`, `GET /accounts`, `GET /billing/summary` (**упавшая
+  под-ручка не роняет ответ — её имя уходит в `degraded`**, это частичные права токена), `/subscriptions`,
+  `/usage`, `/zones`; кэш `_CACHE[(account,key)]` TTL 15 мин + `?refresh=1`.
+- **Домены:** `GET /domains`, `POST /domains/{search,check}`, `PATCH /domains/{name}`,
+  **`POST /domains/register`** — гейты по порядку: `confirm` → наличие способа оплаты (`billing/profile`) →
+  свежий `domain_check` → **сверка `expected_price/expected_currency` (расхождение >0.01 → 409)** → цена
+  неизвестна → **отказ (fail closed)**; `auto_renew` по умолчанию false (CF трактует true как разрешение
+  списывать при продлении). Валидация FQDN `_DOMAIN_RE.fullmatch`.
+- ⚠️ **Истории платежей у CF в публичном API НЕТ** (user-level `/user/billing/history` отсутствует, account-level
+  аналога не заявлено). Раздел «Платежи» показывает расход `paygo-usage` + предстоящие списания подписок и
+  честную плашку со ссылкой в dash.cloudflare.com. Не выдумывать ledger.
+- ⚠️ Формы ответов `billing/profile`, `paygo-usage`, `domain-check` **на живом аккаунте не снимались** — парсеры
+  защитные (`_profile_view`, `_norm_check`, `normalizeUsage` читают несколько вариантов написания ключей и
+  показывают сырой JSON, если формат неизвестен). Ф0-разведка (`scripts/probe_cloudflare.py`) не проводилась.
+- Фронт: группа «Cloudflare» в сайдбаре (Обзор/Подписки/Использование/Платежи/Домены), подключение — вкладка
+  **Настройки → «Cloudflare»** (как HAProxy), гейт `cloudflare/gate.tsx`.
+
+### 15e. Адаптеры API хостинг-провайдеров
+- `services/hosting_providers/`: `base.py` (`ProviderAdapter` + `CredField/Balance/ServiceItem` + `redact`
+  (маскирует и percent-encoded форму — Beget шлёт креды в query!) + `map_http_error`; **ни один метод не
+  бросает**), `registry.py` (**защищённые импорты** — битый/отсутствующий адаптер пропускается с warning, не
+  роняет реестр; отдаёт инстансы; дубликат `KIND` → первый выигрывает), 8 kind:
+
+| kind | авторизация | баланс | услуги | платежи |
+|---|---|---|---|---|
+| `ruvds` | Bearer | ✅ `/v2/balance` | ✅ `/v2/servers` | ✅ `/v2/payments` (direction 1=приход/2=списание) |
+| `beget` | login+password (в query!) | ✅ `getAccountInfo.user_balance` (двойной конверт) | — | — |
+| `veesp` | Basic | ✅ `/balance` | — (ручка не задокументирована) | ✅ `/invoice` |
+| `regru_cloudvps` | Bearer | ❌ нет в API | ✅ `/v1/reglets` | — |
+| `regru_account` | username+password, **только POST form-data** | ✅ `user/get_balance` | — | — |
+| `yandex` | SA-ключ → JWT **PS256** → IAM-токен (кэш 55 мин) | ✅ `billingAccounts` (balance — СТРОКА) | ✅ Compute | ✅ |
+| `openstack` (VK/Procloud) | Keystone v3 → `X-Subject-Token`, эндпоинты из service catalog | ❌ публичного API нет | ✅ Nova | — |
+| `oracle` | подпись draft-cavage RSA-SHA256, keyId `tenancy/user/fingerprint` | ❌ у OCI нет «баланса» | ✅ Compute | ✅ usageapi |
+
+  Новых pip-зависимостей нет: JWT PS256 и подпись OCI собраны на `cryptography` (уже в проекте).
+  ⚠️ `openstack.auth_url` **пользовательский** → `net_guard.is_safe_url` и при verify, и перед каждым запросом.
+  ⚠️ Oracle: расхождение часов >5 минут → 401.
+- **Проводка в инфра-биллинг:** `provider_meta` получила **идемпотентными `ALTER TABLE`** колонки
+  `adapter_kind`, `vault_entry_id`, `balance_synced_at`, `last_error` (приём из `metrics_store`/`server_monitor`).
+  `GET /api/infra-billing/adapters`, `POST /providers/{uuid}/sync`, `POST /providers/{uuid}/import-services`
+  (импорт услуг — **только по кнопке**: живой список у провайдера, локальные `services` — учёт пользователя).
+  Синхронизация пишет в **существующее поле `provider_meta.balance`** → total/burn-rate/days-left и
+  уведомление о низком балансе заработали без изменений в дешборде.
+- **`services/provider_sync.py`:** `sync_one()` (ручка) + `loop()` (гейт `worker_lease.MONITORING`, per-account
+  explicit `account_id`, интервал из существующей billing-настройки `refresh_interval` ≥300 c). Провайдер с
+  `auth_error` уходит на **экспоненциальный backoff** (900 c → 6 ч): неверные креды сами не починятся, а долбить
+  auth чужого API — путь к бану. **Тумблер `auto_sync` в billing_settings, по умолчанию ВЫКЛ** — фоновые
+  обращения чужими кредами должны включаться осознанно.
+- Фронт `infra/InfraProviders.tsx`: селектор адаптера + выбор записи Хранилища через `VaultPicker` с
+  **`pickRefOnly`** (значение секрета браузеру не нужно — креды читает бэкенд), кнопки «Синхронизировать» и
+  «Импортировать услуги», строка «API: kind · обновлён N мин назад» / «баланс вручную» / `lastError`.
+  ⚠️ `/sync` отвечает **200 даже при сбое** (адаптеры не бросают) — UI решает по флагу `ok`, не по статусу.
+
+### 15f. Верификация Волны 9
+- Backend: **`python -m pytest` → 955 passed, 1 failed** — единственный фейл `test_haproxy.py::
+  test_deploy_reports_images_not_built` **пре-существующий и environment-sensitive** (на этой машине образы
+  NodeFlow собраны → `started=True`); в Волне 8 он падал так же. База была 869 → +86 тестов
+  (`test_vault` 11, `test_hosting_providers` 16, `test_hosting_providers_heavy`, `test_cloudflare` 21,
+  `test_ssh_auth` 6, `test_export_io` +2).
+- Frontend: `tsc --noEmit` чисто (Docker `ni-frontend-test`); vitest `contrast.test.ts` (гейт хардкод-цветов)
+  + `DeployForm.test.tsx` + `Settings.test.tsx` = 23 зелёных, `VaultPicker.test.tsx` = 4 зелёных.
+- **Не проверено вживую:** ни один адаптер хостинга (нет кредов), покупка домена (реальные деньги), read-ручки
+  CF (нет аккаунта с Registrar). В этих местах парсеры защитные, а тесты — на записанных фикстурах.
