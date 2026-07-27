@@ -123,3 +123,17 @@ def test_asns_roundtrip():
     # negative ASN rejected
     assert client.post("/api/hostings", headers=a,
                        json={"name": "X", "asns": [{"number": -1}]}).status_code == 422
+
+
+def test_media_ids_round_trip():
+    """Hosting cards carry ids from the shared media store, never the bytes."""
+    h = _auth()
+    r = client.post("/api/hostings", headers=h,
+                    json={"name": "WithPics", "media": ["abc123", "def456"]})
+    assert r.status_code == 201, r.text
+    hid = r.json()["id"]
+    got = client.get("/api/hostings", headers=h).json()[0]
+    assert got["media"] == ["abc123", "def456"]
+
+    client.put(f"/api/hostings/{hid}", headers=h, json={"name": "WithPics", "media": []})
+    assert client.get("/api/hostings", headers=h).json()[0]["media"] == []

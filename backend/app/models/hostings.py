@@ -42,6 +42,9 @@ class HostingBody(BaseModel):
     # Account-level free-form tags (Wave-8 §1). Normalised: trimmed, CR/LF-free,
     # ≤24 chars each, deduped, ≤10 per hosting.
     tags: list[str] = Field(default_factory=list)
+    # Ids in the shared media store (services/media_store.py) — screenshots of the
+    # panel, a price list, a network map. Only ids: the bytes live in one place.
+    media: list[str] = Field(default_factory=list)
     tariffs: list[Tariff] = Field(default_factory=list)
     locations: list[Location] = Field(default_factory=list)
     asns: list[AsnRef] = Field(default_factory=list)

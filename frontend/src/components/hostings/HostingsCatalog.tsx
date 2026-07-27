@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Server, Plus, Loader2, Pencil, Trash2, RefreshCw, ExternalLink,
-  MapPin, Tag, X, Globe, Wand2, Network,
+  MapPin, Tag, X, Globe, Wand2, Network, FileText, Images,
 } from "lucide-react";
 import {
   hostingsApi, type Hosting, type HostingBody, type Tariff, type HostingLocation, type AsnRef,
@@ -10,6 +10,9 @@ import {
 import { TagInput } from "./TagInput";
 import { resolveCoords } from "./geo";
 import { CountrySelect } from "../CountrySelect";
+import {
+  MediaDrop, Lightbox, MediaImg, downloadMedia, fetchMediaMeta, fmtSize, type MediaItem,
+} from "../common/MediaDrop";
 import { Page, PageHeader, Field, Modal, fmtNum } from "../infra/ui";
 import { toast } from "../infra/Toast";
 
@@ -23,12 +26,57 @@ function Flag({ code, size = 16 }: { code: string; size?: number }) {
   }} />;
 }
 
+/** Thumbnails for a record's attachments, resolved from a metadata map the page
+ *  loads once (never per render — `fetchMediaMeta` pulls the whole index).
+ *
+ *  Only raster images get an `<img>`: the backend serves everything else as an
+ *  opaque attachment, so an SVG/PDF/video is a download link instead.
+ *
+ *  Every click is stopped here — the hosting card behind this strip is itself a
+ *  button that opens the full view, and opening a picture must not also open it. */
+function MediaStrip({ ids, meta, size = 56, max }: {
+  ids: string[]; meta: Map<string, MediaItem>; size?: number; max?: number;
+}) {
+  const [zoom, setZoom] = useState<MediaItem | null>(null);
+  const items = ids.map(id => meta.get(id)).filter((m): m is MediaItem => !!m);
+  if (items.length === 0) return null;
+  const shown = max ? items.slice(0, max) : items;
+  const rest = items.length - shown.length;
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" onClick={e => e.stopPropagation()}>
+      {shown.map(m => (m.inline ? (
+        <MediaImg key={m.id} item={m} title={`${m.name} · ${fmtSize(m.size)}`}
+          onClick={e => { e.stopPropagation(); setZoom(m); }}
+          style={{
+            width: size, height: size, objectFit: "cover", display: "block", cursor: "zoom-in",
+            borderRadius: 8, border: "1px solid var(--line-soft)",
+          }} />
+      ) : (
+        <button key={m.id} type="button" title={`${m.name} · ${fmtSize(m.size)} — скачать`}
+          onClick={e => { e.stopPropagation(); void downloadMedia(m); }}
+          className="flex flex-col items-center justify-center gap-0.5 text-[10px]"
+          style={{
+            width: size, height: size, borderRadius: 8, padding: 4,
+            border: "1px solid var(--line-soft)", background: "var(--bg3)", color: "var(--t-low)",
+          }}>
+          <FileText size={15} />
+          <span className="trunc" style={{ maxWidth: size - 10 }}>{m.name}</span>
+        </button>
+      )))}
+      {rest > 0 && <span className="text-[11px] text-[var(--t-faint)]">+{rest}</span>}
+      {zoom && <Lightbox item={zoom} onClose={() => setZoom(null)} />}
+    </div>
+  );
+}
+
 export function HostingsCatalog() {
   const [rows, setRows] = useState<Hosting[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<null | { edit?: Hosting }>(null);
   const [details, setDetails] = useState<Hosting | null>(null);
   const [tagFilter, setTagFilter] = useState<string>("");
+  const [media, setMedia] = useState<Map<string, MediaItem>>(new Map());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,6 +85,19 @@ export function HostingsCatalog() {
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Resolve every attachment of every card in ONE request (fetchMediaMeta reads
+  // the whole index anyway — doing it per card would be N requests per page).
+  // `rows` only changes on load/save, so this is not a per-render fetch.
+  useEffect(() => {
+    const ids = Array.from(new Set(rows.flatMap(h => h.media || [])));
+    if (ids.length === 0) { setMedia(new Map()); return; }
+    let alive = true;
+    void fetchMediaMeta(ids).then(items => {
+      if (alive) setMedia(new Map(items.map(m => [m.id, m])));
+    });
+    return () => { alive = false; };
+  }, [rows]);
 
   const shown = tagFilter ? rows.filter(h => (h.tags || []).includes(tagFilter)) : rows;
 
@@ -114,6 +175,8 @@ export function HostingsCatalog() {
                   </div>
                 )}
 
+                <MediaStrip ids={h.media || []} meta={media} size={56} max={4} />
+
                 {h.locations.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5">
                     {h.locations.slice(0, 6).map((l, i) => (
@@ -139,7 +202,7 @@ export function HostingsCatalog() {
 
       {modal && <HostingModal edit={modal.edit} onClose={() => setModal(null)} onSaved={() => { setModal(null); load(); }} />}
       {details && (
-        <HostingDetails h={details} onClose={() => setDetails(null)}
+        <HostingDetails h={details} meta={media} onClose={() => setDetails(null)}
           onEdit={() => { setModal({ edit: details }); setDetails(null); }} />
       )}
     </Page>
@@ -147,8 +210,13 @@ export function HostingsCatalog() {
 }
 
 /** Read-only full view of one hosting: every tariff (with channel width) and
- *  every location. Editing stays in `HostingModal`. */
-function HostingDetails({ h, onClose, onEdit }: { h: Hosting; onClose: () => void; onEdit: () => void }) {
+ *  every location. Editing stays in `HostingModal`.
+ *
+ *  `meta` is the page-level media index — reused rather than re-fetched, so
+ *  opening a card costs no extra request. */
+function HostingDetails({ h, meta, onClose, onEdit }: {
+  h: Hosting; meta: Map<string, MediaItem>; onClose: () => void; onEdit: () => void;
+}) {
   return (
     <Modal title={h.name} onClose={onClose} wide
       footer={<>
@@ -174,6 +242,15 @@ function HostingDetails({ h, onClose, onEdit }: { h: Hosting; onClose: () => voi
                 <Tag size={10} /> {t}
               </span>
             ))}
+          </div>
+        )}
+
+        {/* Guarded on RESOLVED ids, not on the raw list: an id whose file was
+            removed from the shared store would otherwise leave a bare header. */}
+        {(h.media || []).some(id => meta.has(id)) && (
+          <div>
+            <p className="label mb-1 flex items-center gap-1"><Images size={12} /> Медиа</p>
+            <MediaStrip ids={h.media || []} meta={meta} size={72} />
           </div>
         )}
 
@@ -258,6 +335,8 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
   const [features, setFeatures] = useState(edit?.features ?? "");
   const [notes, setNotes] = useState(edit?.notes ?? "");
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
+  // Records saved before the field existed come back without the key.
+  const [media, setMedia] = useState<string[]>(edit?.media ?? []);
   const [tariffs, setTariffs] = useState<Tariff[]>(edit?.tariffs?.length ? edit.tariffs : [emptyTariff()]);
   const [locations, setLocations] = useState<HostingLocation[]>(edit?.locations ?? []);
   const [asns, setAsns] = useState<AsnRef[]>(edit?.asns ?? []);
@@ -289,7 +368,7 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
     const cleanAsns = asns.filter(a => a.number > 0 || a.name.trim() || a.website.trim());
     const body: HostingBody = {
       name: name.trim(), website: website.trim(), features: features.trim(), notes: notes.trim(),
-      tags, tariffs: cleanTariffs, locations: cleanLocs, asns: cleanAsns,
+      tags, media, tariffs: cleanTariffs, locations: cleanLocs, asns: cleanAsns,
       provider_ref: edit?.provider_ref ?? null,
     };
     setSaving(true);
@@ -314,6 +393,9 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
       <Field label="Примечания" value={notes} onChange={setNotes} placeholder="Личные заметки" />
 
       <TagInput label="Теги" value={tags} onChange={setTags} />
+
+      <MediaDrop value={media} onChange={setMedia}
+        hint="Скриншоты панели, прайс, схема сети. До 15 МБ на файл." />
 
       {/* Tariffs */}
       <div className="flex flex-col gap-2">
