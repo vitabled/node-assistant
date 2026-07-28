@@ -281,7 +281,9 @@ function CredsModal({ edit, adapters, usedKinds, onClose, onSaved }: {
     const extra = usedKinds
       .filter(k => !known.has(k) && !LEGACY_LABELS[k])
       .map(k => ({ v: k, l: `${k} (адаптер недоступен)` }));
-    return [...LEGACY_KINDS, ...extra];
+    // Провайдер, у которого ПОЯВИЛСЯ адаптер, уходит из этой группы сам —
+    // иначе он двоился бы в селекторе (и в «с синхронизацией», и здесь).
+    return [...LEGACY_KINDS.filter(k => !known.has(k.v)), ...extra];
   }, [adapters, usedKinds]);
 
   // Нет адаптера — значит хостинг из второй группы: одно поле-секрет.

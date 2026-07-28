@@ -1,0 +1,15 @@
+{
+  "status": "ok",
+  "status_msg": "Ok",
+  "data": {
+    "id": 40122,
+    "email": "me@example.com",
+    "created": "2025-01-10 12:00:00",
+    "balance": {
+      "real": "735.10",
+      "bonus": "50.00",
+      "partner": "0.00"
+    },
+    "can_add_server": true
+  }
+}

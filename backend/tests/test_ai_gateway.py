@@ -115,3 +115,43 @@ def test_models_endpoint_no_longer_gated_on_gateway(monkeypatch):
     assert client.get("/api/ai/models", headers=h).json() == {
         "models": ["claude-opus-4-8", "claude-haiku-4-5"]
     }
+
+
+# ── Через шлюз провайдерский ключ не нужен ────────────────────
+def test_gateway_supplies_the_key_instead_of_the_provider_api_key():
+    """Регрессия: после успешного OAuth-входа ассистент всё равно требовал
+    API-ключ, потому что `run_agent` смотрел только на `api_key_enc`."""
+    from app.models.settings import AiConfig
+    from app.services import ai_agent, cliproxy_server
+
+    cfg = AiConfig(gateway="cliproxy", cliproxy_enabled=True, api_key_enc="",
+                   cliproxy_master_key_enc=cliproxy_server.encrypt("master-xyz"))
+    eff, key = ai_agent.effective_target(cfg)
+
+    assert key == "master-xyz", "авторизуемся мастер-ключом шлюза"
+    # `/v1` обязателен: тёрны собирают `{base_url}/chat/completions`.
+    assert eff.base_url == cliproxy_server.internal_base_url().rstrip("/") + "/v1"
+
+
+def test_without_a_gateway_nothing_changes():
+    from app.models.settings import AiConfig
+    from app.services import ai_agent
+
+    cfg = AiConfig(gateway="none", api_key_enc=ai_agent.encrypt_key("sk-plain"))
+    eff, key = ai_agent.effective_target(cfg)
+    assert key == "sk-plain" and eff.base_url == cfg.base_url
+
+    assert ai_agent.effective_target(AiConfig(gateway="none", api_key_enc=""))[1] == ""
+
+
+def test_external_gateway_falls_back_to_the_users_key():
+    """Чужой шлюз пускает по своему ключу — его кладут в поле API-ключа."""
+    from app.models.settings import AiConfig
+    from app.services import ai_agent
+
+    cfg = AiConfig(gateway="cliproxy", cliproxy_enabled=False, gateway_internal=False,
+                   base_url="https://gw.example.com/v1",
+                   api_key_enc=ai_agent.encrypt_key("client-key"))
+    eff, key = ai_agent.effective_target(cfg)
+    assert key == "client-key"
+    assert eff.base_url == "https://gw.example.com/v1", "внешний адрес не подменяем"

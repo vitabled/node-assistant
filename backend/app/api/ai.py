@@ -53,8 +53,21 @@ class AiConfigBody(BaseModel):
         return v
 
 
+class Attachment(BaseModel):
+    """Вложение чата. Файлы НЕ персистятся: они относятся к одному вопросу, а не
+    к аккаунту, поэтому едут в теле запроса и живут ровно столько же."""
+    name: str = Field("", max_length=200)
+    mime: str = Field("", max_length=100)
+    # Текстовый файл — как есть; картинка — base64 (форму блока выбирает
+    # ai_agent.build_user_content, она у провайдеров разная).
+    text: str = Field("", max_length=ai_agent.MAX_TEXT_CHARS)
+    data_b64: str = Field("", max_length=6_000_000)
+
+
 class ChatBody(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8000)
+    attachments: list[Attachment] = Field(default_factory=list,
+                                          max_length=ai_agent.MAX_ATTACHMENTS)
 
 
 def _public(account_id: str | None = None) -> dict:
@@ -70,6 +83,10 @@ def _public(account_id: str | None = None) -> dict:
         "gateway": cfg.gateway,
         "use_mcp": cfg.use_mcp,
         "has_key": bool(cfg.api_key_enc),  # never the key itself
+        # Есть ли ЧЕМ авторизоваться: через CLIProxyAPI ключ провайдера не нужен,
+        # доступ даёт OAuth-аккаунт внутри шлюза. Фронт гейтит композер по этому
+        # полю, а не по `has_key`.
+        "auth_ready": bool(ai_agent.effective_target(cfg)[1]),
     }
 
 
@@ -111,8 +128,8 @@ async def list_models() -> dict:
 
     Никогда не ошибается: пустой список = «вводите модель вручную»."""
     cfg = ai_agent._cfg()
-    key = ai_agent.decrypt_key(cfg.api_key_enc)
-    return {"models": await ai_agent.list_models(cfg, key or "")}
+    _, key = ai_agent.effective_target(cfg)
+    return {"models": await ai_agent.list_models(cfg, key)}
 
 
 @router.post("/chat")
@@ -124,7 +141,10 @@ async def chat(body: ChatBody) -> StreamingResponse:
         if not cfg.enabled:
             yield json.dumps({"type": "error", "message": "ИИ-агент выключен."}) + "\n"
             return
-        async for event in ai_agent.run_agent(body.prompt, cfg, account_id):
+        async for event in ai_agent.run_agent(
+            body.prompt, cfg, account_id,
+            attachments=[a.model_dump() for a in body.attachments],
+        ):
             yield json.dumps(event, ensure_ascii=False) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")

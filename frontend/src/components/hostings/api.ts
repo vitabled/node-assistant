@@ -17,6 +17,21 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export interface Tariff {
   name: string; specs: string; bandwidth: string;
   price: number; currency: string; period: string;
+  // Заметка о тарифе (темы нет — сам тариф и есть тема). Как и прочие поздние
+  // поля, у старых записей ключа нет вовсе — читать `(t.note || "")`.
+  note?: string;
+}
+/** Заметка хостинга: тема + текст. Список вместо одного блоба `notes` —
+ *  замечания ведут по темам (оплата, поддержка, ограничения). */
+export interface NoteField { topic: string; text: string }
+
+/** Строка таблицы «БС подсети». Все поля — свободный текст (см. models/hostings.py). */
+export interface BsSubnet {
+  network: string;
+  asn: string;
+  org: string;
+  checked_at: string;
+  response: string;
 }
 export interface HostingLocation {
   city: string; country_code: string; lat: number; lng: number; note: string;
@@ -43,6 +58,13 @@ export interface Hosting {
   tariffs: Tariff[]; locations: HostingLocation[]; asns: AsnRef[];
   // Как и media/tags: старые записи приходят без ключа — читать `(h.metrics || {})`.
   metrics?: HostingMetrics;
+  // Тоже без ключа у старых записей — читать `(h.note_fields || [])`.
+  note_fields?: NoteField[];
+  // Тоже отсутствует у карточек с прошлых волн — читать `(h.bs_subnets || [])`.
+  bs_subnets?: BsSubnet[];
+  // Трёхсостоянийное: `null`/отсутствие ключа — «неизвестно», и это обязано
+  // отличаться от явного «нет».
+  has_api?: boolean | null;
   provider_ref?: string | null; created_at: number;
 }
 

@@ -1,0 +1,6 @@
+{
+  "services_cost": [
+    {"id": 3312, "cost": 640.0, "type": "server"},
+    {"id": 9999, "cost": 100.0, "type": "database"}
+  ]
+}

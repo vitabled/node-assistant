@@ -30,8 +30,46 @@ _JSON_FILES = [
 _SECRET_EXCLUDE = {"netbird.json"}
 
 
+# Разделы settings.json, которые можно выбирать по отдельности: «только HAProxy»
+# или «только Remnawave» — это секции ОДНОГО файла, а не отдельные сторы.
+SETTINGS_SECTIONS = [
+    "remnawave", "remnawave_registry", "deploy_defaults", "optimization",
+    "xray_checker", "mcp", "ai", "haproxy", "cloudflare", "appearance", "auto_backup",
+]
+
+# Префикс виртуального стора для секции настроек.
+SECTION_PREFIX = "settings:"
+
+
 def available_stores() -> list[str]:
     return list(_JSON_FILES)
+
+
+def available_sections() -> list[str]:
+    return list(SETTINGS_SECTIONS)
+
+
+def _wanted(stores: Optional[list[str]]) -> tuple[Optional[set[str]], Optional[set[str]]]:
+    """`(файлы, секции настроек)`; None = «всё» (обратная совместимость).
+
+    Секции приходят как `settings:haproxy`; выбор хотя бы одной секции включает
+    settings.json в архив, но урезанный — иначе «только HAProxy» утащил бы и
+    остальную конфигурацию аккаунта.
+    """
+    if stores is None:
+        return None, None
+    files = {x for x in stores if not x.startswith(SECTION_PREFIX)}
+    sections = {x[len(SECTION_PREFIX):] for x in stores if x.startswith(SECTION_PREFIX)}
+    if sections:
+        files.add("settings.json")
+    return files, (sections or None)
+
+
+def _slice_settings(data, sections: Optional[set[str]]):
+    """Оставить в settings.json только выбранные секции."""
+    if sections is None or not isinstance(data, dict):
+        return data
+    return {k: v for k, v in data.items() if k in sections}
 
 
 def _strip_secrets(name: str, data):
@@ -75,8 +113,9 @@ def build_archive(account_id: str, stores: Optional[list[str]] = None,
     included: list[str] = []
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        want_files, want_sections = _wanted(stores)
         for name in _JSON_FILES:
-            if stores and name not in stores:
+            if want_files is not None and name not in want_files:
                 continue
             if not include_secrets and name in _SECRET_EXCLUDE:
                 continue
@@ -87,6 +126,8 @@ def build_archive(account_id: str, stores: Optional[list[str]] = None,
                 data = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 continue
+            if name == "settings.json":
+                data = _slice_settings(data, want_sections)
             if not include_secrets:
                 data = _strip_secrets(name, data)
             raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
@@ -112,29 +153,43 @@ def build_archive(account_id: str, stores: Optional[list[str]] = None,
 _SETTINGS_SECRET_SECTIONS = ("remnawave", "remnawave_registry", "deploy_defaults", "xray_checker", "mcp", "ai")
 
 
-def _merge_settings(target, incoming):
-    """Import non-secret settings while keeping the target's credential sections
-    intact (the export is stripped, so importing them would blank the target)."""
+def _merge_settings(target, incoming, sections=None, with_secrets: bool = False):
+    """Слить входящие настройки с текущими.
+
+    Два правила, и оба про «не потерять то, чего пользователь не выбирал»:
+    - `sections` задан → накладываем ТОЛЬКО эти секции поверх существующих
+      (выбор «только HAProxy» не должен трогать Remnawave);
+    - архив без секретов (`with_secrets=False`) → секции с учётными данными
+      НИКОГДА не перезаписываются: в архиве они обнулены, и импорт стёр бы
+      рабочие токены цели.
+    """
     if not isinstance(incoming, dict):
         return incoming
     try:
         existing = json.loads(target.read_text(encoding="utf-8")) if target.exists() else {}
     except Exception:
         existing = {}
-    merged = dict(incoming)
-    for k in _SETTINGS_SECRET_SECTIONS:
-        if k in existing:
-            merged[k] = existing[k]
+
+    if sections is None:
+        merged = dict(incoming)
+    else:
+        merged = dict(existing)
+        for k in sections:
+            if k in incoming:
+                merged[k] = incoming[k]
+
+    if not with_secrets:
+        for k in _SETTINGS_SECRET_SECTIONS:
+            if k in existing:
+                merged[k] = existing[k]
     return merged
 
 
-def restore_archive(account_id: str, blob: bytes) -> dict:
-    """Restore an archive into the account (replace-per-store; settings.json merges
-    to preserve existing secrets). Unknown stores are skipped (forward-compat)."""
-    d = accounts.data_dir(account_id)
-    d.mkdir(parents=True, exist_ok=True)
-    applied: dict[str, int] = {}
-    skipped: list[str] = []
+def peek_archive(blob: bytes) -> dict:
+    """Что лежит в архиве, БЕЗ записи на диск — чтобы выбирать осознанно, а не
+    вслепую по списку известных сторов."""
+    out: list[str] = []
+    sections: list[str] = []
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
         try:
             mf = tar.extractfile("manifest.json")
@@ -147,6 +202,46 @@ def restore_archive(account_id: str, blob: bytes) -> dict:
             if not (member.name.startswith("data/") and member.name.endswith(".json")):
                 continue
             name = member.name[len("data/"):]
+            out.append(name)
+            if name == "settings.json":
+                f = tar.extractfile(member)
+                try:
+                    data = json.loads(f.read().decode("utf-8")) if f else {}
+                except Exception:
+                    data = {}
+                if isinstance(data, dict):
+                    sections = [k for k in SETTINGS_SECTIONS if k in data]
+    return {"stores": out, "settings_sections": sections,
+            "include_secrets": bool(manifest.get("include_secrets")),
+            "exported_at": manifest.get("exported_at")}
+
+
+def restore_archive(account_id: str, blob: bytes,
+                    stores: Optional[list[str]] = None) -> dict:
+    """Restore an archive into the account (replace-per-store; settings.json merges
+    to preserve existing secrets). Unknown stores are skipped (forward-compat).
+
+    `stores` = None → применить всё, что есть в архиве (прежнее поведение)."""
+    d = accounts.data_dir(account_id)
+    d.mkdir(parents=True, exist_ok=True)
+    applied: dict[str, int] = {}
+    skipped: list[str] = []
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+        try:
+            mf = tar.extractfile("manifest.json")
+            manifest = json.loads(mf.read().decode("utf-8")) if mf else {}
+        except KeyError:
+            raise ValueError("Архив без manifest.json")
+        if manifest.get("format_version") != FORMAT_VERSION:
+            raise ValueError("Неподдерживаемая версия формата архива")
+        want_files, want_sections = _wanted(stores)
+        with_secrets = bool(manifest.get("include_secrets"))
+        for member in tar.getmembers():
+            if not (member.name.startswith("data/") and member.name.endswith(".json")):
+                continue
+            name = member.name[len("data/"):]
+            if want_files is not None and name not in want_files:
+                continue
             if name not in _JSON_FILES:
                 skipped.append(name)
                 continue
@@ -160,7 +255,7 @@ def restore_archive(account_id: str, blob: bytes) -> dict:
                 continue
             target = d / name
             if name == "settings.json":
-                incoming = _merge_settings(target, incoming)
+                incoming = _merge_settings(target, incoming, want_sections, with_secrets)
             target.write_text(json.dumps(incoming, ensure_ascii=False, indent=2), encoding="utf-8")
             applied[name] = 1
     return {"applied": applied, "skipped": skipped}

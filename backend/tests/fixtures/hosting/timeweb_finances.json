@@ -1,0 +1,12 @@
+{
+  "finances": {
+    "balance": 2450.9,
+    "currency": "RUB",
+    "discount_end_date_at": null,
+    "discount_percent": 0,
+    "hours_left": 720,
+    "monthly_cost": 1200.0,
+    "total_paid": 15000
+  },
+  "response_id": "e3a1"
+}

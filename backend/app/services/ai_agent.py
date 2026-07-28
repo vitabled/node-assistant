@@ -296,12 +296,48 @@ class AgentError(Exception):
 _INTERNAL_GATEWAY_HOSTS = {"node-installer-cliproxy", "cli-proxy"}
 
 
+def _gateway_is_ours(config: AiConfig) -> bool:
+    """Шлюз — НАШ контейнер (его поднимает `cliproxy_enabled`).
+
+    Исторически на это указывал отдельный флаг `gateway_internal`, но включение
+    шлюза в UI ставит `cliproxy_enabled`, а флаг оставался выключенным — поэтому
+    смотрим на оба.
+    """
+    return bool(getattr(config, "cliproxy_enabled", False)
+                or getattr(config, "gateway_internal", False))
+
+
+def effective_target(config: AiConfig) -> tuple[AiConfig, str]:
+    """`(конфиг с рабочим base_url, ключ для авторизации)`.
+
+    ⚠️ Через CLIProxyAPI провайдерский API-ключ НЕ нужен: доступ к моделям даёт
+    OAuth-аккаунт внутри шлюза, а нас самих шлюз пускает по своему клиентскому
+    мастер-ключу. Раньше агент требовал `api_key_enc` независимо от режима, и
+    после успешного OAuth-входа ассистент всё равно просил ключ.
+    """
+    if getattr(config, "gateway", "none") != "cliproxy":
+        return config, decrypt_key(config.api_key_enc) or ""
+
+    from app.services import cliproxy_server
+
+    key = cliproxy_server.decrypt(getattr(config, "cliproxy_master_key_enc", "") or "") or ""
+    # Внешний (не наш) шлюз пускает по своему ключу — его кладут в поле API-ключа.
+    if not key:
+        key = decrypt_key(config.api_key_enc) or ""
+    if _gateway_is_ours(config):
+        # `/v1` дописываем здесь: `internal_base_url()` отдаёт корень контейнера,
+        # а тёрны собирают `{base_url}/chat/completions`.
+        base = cliproxy_server.internal_base_url().rstrip("/") + "/v1"
+        return config.model_copy(update={"base_url": base}), key
+    return config, key
+
+
 def _check_base_url(config: AiConfig) -> None:
     """SSRF guard on the account-supplied base_url, re-run every turn (DNS
     rebinding). Exemption: an INTERNAL CLIProxyAPI gateway on our
     node-assistant-net is reached by container-name and is unroutable externally
     — trusted, same posture as xray_checker._get_json for the local checker."""
-    if getattr(config, "gateway", "none") == "cliproxy" and getattr(config, "gateway_internal", False):
+    if getattr(config, "gateway", "none") == "cliproxy" and _gateway_is_ours(config):
         host = (urlparse(config.base_url).hostname or "").lower()
         if host in _INTERNAL_GATEWAY_HOSTS:
             return
@@ -318,6 +354,9 @@ async def list_models(config: AiConfig, key: str) -> list[str]:
 
     Never raises — returns [] on any failure, so the UI falls back to free-text.
     """
+    # Через шлюз ключ провайдера не нужен — авторизует мастер-ключ шлюза.
+    config, resolved = effective_target(config)
+    key = key or resolved
     # Без ключа сети быть не должно: свежий аккаунт открывает вкладку настроек,
     # и запрос всё равно вернул бы 401. Ранний выход держит эндпоинт бесплатным
     # и оставляет тесты сетенезависимыми.
@@ -532,23 +571,76 @@ def build_system(account_id: str, config: AiConfig) -> str:
     return f"{text or _SYSTEM}\n\n{_TOOLING_SUFFIX}"
 
 
+# ── Вложения чата ─────────────────────────────────────────────
+MAX_ATTACHMENTS = 5
+MAX_TEXT_CHARS = 40_000          # на файл: дальше промпт вытесняет сам вопрос
+_IMAGE_MIME = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+
+def build_user_content(prompt: str, attachments: Optional[list[dict]], provider: str):
+    """Первое сообщение пользователя с учётом вложений.
+
+    Текстовые файлы вклеиваются В ТЕКСТ промпта: так они работают у любого
+    провайдера и любой модели, включая те, что за шлюзом не умеют vision.
+    Картинки уходят блоками контента, и вот их форма у провайдеров РАЗНАЯ —
+    поэтому собираем здесь, а не в тёрне.
+
+    Без картинок возвращается обычная строка: старый путь не меняется.
+    """
+    items = (attachments or [])[:MAX_ATTACHMENTS]
+    texts = [a for a in items if not (a.get("mime") or "") in _IMAGE_MIME]
+    images = [a for a in items if (a.get("mime") or "") in _IMAGE_MIME]
+
+    text = prompt
+    for a in texts:
+        body = (a.get("text") or "")[:MAX_TEXT_CHARS]
+        if not body:
+            continue
+        name = (a.get("name") or "файл").replace("`", "'")
+        text += f"\n\n--- Вложение: {name} ---\n{body}"
+
+    if not images:
+        return text
+
+    if provider == "anthropic":
+        blocks: list[dict] = [{"type": "text", "text": text}]
+        for a in images:
+            blocks.append({"type": "image", "source": {
+                "type": "base64", "media_type": a.get("mime"), "data": a.get("data_b64") or "",
+            }})
+        return blocks
+
+    blocks = [{"type": "text", "text": text}]
+    for a in images:
+        url = f"data:{a.get('mime')};base64,{a.get('data_b64') or ''}"
+        blocks.append({"type": "image_url", "image_url": {"url": url}})
+    return blocks
+
+
 async def run_agent(
-    prompt: str, config: AiConfig, account_id: str, key: Optional[str] = None
+    prompt: str, config: AiConfig, account_id: str, key: Optional[str] = None,
+    attachments: Optional[list[dict]] = None,
 ) -> AsyncIterator[dict]:
     """Drive the tool-calling loop, yielding events. Never raises — errors become
     an {"type":"error"} event."""
-    key = key if key is not None else decrypt_key(config.api_key_enc)
+    config, resolved = effective_target(config)
+    key = key if key is not None else resolved
     if not key:
-        yield {"type": "error", "message": "API-ключ провайдера не задан."}
+        yield {"type": "error", "message": (
+            "Шлюз CLIProxyAPI не запущен — включите его в Настройках → AI."
+            if getattr(config, "gateway", "none") == "cliproxy"
+            else "API-ключ провайдера не задан."
+        )}
         return
 
     system = build_system(account_id, config)
+    content = build_user_content(prompt, attachments, config.provider)
     if config.provider == "anthropic":
-        messages: list[dict] = [{"role": "user", "content": prompt}]
+        messages: list[dict] = [{"role": "user", "content": content}]
     else:
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": content},
         ]
 
     # Fetched ONCE per conversation, not per turn: tools/list is a round-trip and

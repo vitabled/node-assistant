@@ -11,9 +11,11 @@ Remnawave errors surface as HTTP errors → toasts on the client.
 """
 from __future__ import annotations
 
+import dataclasses
+import logging
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -22,11 +24,14 @@ from app.services import storage
 from app.services import infra_billing_store as store
 from app.services import infra_notify
 from app.services import provider_sync
+from app.services import vault_store
 from app.services.hosting_providers import registry
 from app.models.settings import AppSettings
 from app.services.remnawave_client import RemnavaveClient, RemnavaveError
 
 router = APIRouter(prefix="/api/infra-billing")
+
+log = logging.getLogger("infra_billing")
 
 
 def _client() -> RemnavaveClient:
@@ -133,6 +138,29 @@ class ApiTokenCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     provider_kind: str = "generic"
     secret: str = Field(..., min_length=1)
+
+
+class OrderBody(BaseModel):
+    """Server purchase request. THIS SPENDS MONEY AND CREATES A REAL SERVER.
+
+    The gates mirror the Cloudflare domain purchase (api/cloudflare.py): `confirm`
+    proves the click was deliberate, `expected_price`/`expected_currency` prove the
+    user saw the price the vendor charges RIGHT NOW — the server re-reads it from
+    `order_options` and refuses on any drift."""
+
+    plan_id: str = ""
+    region: str = ""
+    image: str = ""
+    name: str = Field(..., min_length=1, max_length=120)
+    # Constructor values (providers whose `order_options.custom` is set); the
+    # adapter decides what it does with them.
+    cpu: Optional[int] = Field(default=None, ge=1)
+    ram_gb: Optional[float] = Field(default=None, ge=0)
+    disk_gb: Optional[float] = Field(default=None, ge=0)
+    period: str = ""
+    confirm: bool = False
+    expected_price: Optional[float] = None
+    expected_currency: str = ""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -330,6 +358,177 @@ async def import_provider_services(uuid: str):
         have.add(name.lower())
         created += 1
     return {"ok": True, "created": created, "skipped": len(remote) - created}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 2b. Ordering  (vendor API — SPENDS MONEY)
+# ═══════════════════════════════════════════════════════════════
+async def _order_ctx(uuid: str) -> tuple[Any, dict]:
+    """Adapter + credentials for an ordering route, or a 400 the user can act on."""
+    meta = (await store.provider_meta_all()).get(uuid) or {}
+    kind = (meta.get("adapter_kind") or "").strip()
+    if not kind:
+        raise HTTPException(400, "У провайдера не выбран адаптер API — заказ недоступен")
+    adapter = registry.get(kind)
+    if adapter is None:
+        raise HTTPException(400, f"Адаптер «{kind}» недоступен в этой сборке")
+    # `hasattr` as well as CAPS: the ordering methods are non-abstract defaults on
+    # the base contract, so an adapter from an older build can claim the cap
+    # without carrying the methods — that must be a 400, not an AttributeError 500.
+    if "order" not in (adapter.CAPS or set()) or not hasattr(adapter, "order_options"):
+        raise HTTPException(400, f"«{getattr(adapter, 'TITLE', '') or kind}» не поддерживает заказ через API")
+    ref = (meta.get("vault_entry_id") or "").strip()
+    creds = await vault_store.a_read_fields(ref) if ref else None
+    if not creds:
+        raise HTTPException(400, "Креды провайдера из Хранилища недоступны — проверьте запись")
+    return adapter, creds
+
+
+def _as_dict(obj: Any) -> dict:
+    """`OrderOptions` is a dataclass in the contract; accept a plain dict too, so
+    an adapter that assembles the answer by hand still works."""
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return dataclasses.asdict(obj)
+    return obj if isinstance(obj, dict) else {}
+
+
+async def _order_options(adapter: Any, creds: dict) -> dict:
+    try:
+        raw = await adapter.order_options(creds)
+    except Exception:
+        # Adapters are contractually silent; if one still raises we do NOT echo the
+        # exception — vendors that authenticate in the query string (Beget) hand the
+        # credential back inside httpx error strings.
+        raise HTTPException(502, "Провайдер не отдал варианты заказа")
+    data = _as_dict(raw)
+    return {
+        "plans": [p for p in (data.get("plans") or []) if isinstance(p, dict)],
+        "regions": [r for r in (data.get("regions") or []) if isinstance(r, dict)],
+        "images": [i for i in (data.get("images") or []) if isinstance(i, dict)],
+        "custom": data.get("custom") or None,
+    }
+
+
+@router.get("/providers/{uuid}/order-options")
+async def provider_order_options(uuid: str):
+    """Plans / regions / images / constructor ranges the vendor offers right now."""
+    adapter, creds = await _order_ctx(uuid)
+    opts = await _order_options(adapter, creds)
+    if not opts["plans"] and not opts["custom"]:
+        raise HTTPException(400, "Провайдер не вернул ни тарифов, ни конструктора")
+    return opts
+
+
+def _order_spec(body: "OrderBody", plan: Optional[dict]) -> dict:
+    return {
+        "plan_id": body.plan_id, "region": body.region, "image": body.image,
+        "name": body.name.strip(), "cpu": body.cpu, "ram_gb": body.ram_gb,
+        "disk_gb": body.disk_gb,
+        "period": body.period or str((plan or {}).get("period") or ""),
+    }
+
+
+async def _order_quote(adapter, creds: dict, spec: dict) -> Optional[dict]:
+    """Предварительный расчёт стоимости. Молчит при любой проблеме: цена просто
+    остаётся неизвестной, а неизвестная цена — это отказ выше по маршруту."""
+    try:
+        quote = await adapter.quote_order(creds, spec)
+    except Exception as exc:
+        log.warning("order quote failed: %s", str(exc)[:200])
+        return None
+    if not isinstance(quote, dict):
+        return None
+    try:
+        return {"price": _money(float(quote.get("price"))),
+                "currency": str(quote.get("currency") or "")}
+    except (TypeError, ValueError):
+        return None
+
+
+@router.post("/providers/{uuid}/order-quote")
+async def provider_order_quote(uuid: str, body: OrderBody):
+    """Сколько будет стоить конфигурация — БЕЗ создания сервера.
+
+    Нужен конструкторам: пользователь должен увидеть сумму до подтверждения, а
+    маршрут покупки — сверить её с тем, что показали."""
+    adapter, creds = await _order_ctx(uuid)
+    opts = await _order_options(adapter, creds)
+    plan = next((p for p in opts["plans"] if str(p.get("id") or "") == body.plan_id), None)
+    quote = await _order_quote(adapter, creds, _order_spec(body, plan))
+    if not quote:
+        raise HTTPException(400, "Провайдер не рассчитал стоимость этой конфигурации")
+    return quote
+
+
+@router.post("/providers/{uuid}/order")
+async def provider_order(uuid: str, body: OrderBody):
+    """Buy a server. THIS SPENDS MONEY — gates in order, see OrderBody."""
+    if not body.confirm:
+        raise HTTPException(400, "Покупка не подтверждена")
+    adapter, creds = await _order_ctx(uuid)
+
+    # The price is re-read from the vendor and never taken from the request.
+    opts = await _order_options(adapter, creds)
+    plan = next((p for p in opts["plans"] if str(p.get("id") or "") == body.plan_id), None)
+    try:
+        raw_price = (plan or {}).get("price")
+        price = _money(float(raw_price)) if raw_price is not None else None
+    except (TypeError, ValueError):
+        price = None
+    currency = str((plan or {}).get("currency") or "")
+
+    spec = _order_spec(body, plan)
+    if price is None:
+        # У конструкторов (RuVDS) «тариф» — прайс-лист, готовой суммы у плана нет.
+        # Спрашиваем стоимость у вендора расчётом: он ничего не создаёт, но даёт
+        # цену, которую можно сверить с показанной пользователю.
+        quote = await _order_quote(adapter, creds, spec)
+        if quote:
+            price, currency = quote["price"], quote["currency"] or currency
+    if price is None:
+        # Fail closed, like the domain purchase: without a price from the vendor we
+        # cannot prove the user agreed to what will actually be charged.
+        raise HTTPException(400, "Провайдер не сообщил цену выбранной конфигурации — "
+                                 "заказ через панель выполнить нельзя, оформите его у провайдера")
+    if body.expected_price is None or abs(price - body.expected_price) > 0.01 \
+            or (body.expected_currency and currency
+                and body.expected_currency.upper() != currency.upper()):
+        raise HTTPException(409, f"Цена изменилась: сейчас {price} {currency}. "
+                                 "Обновите варианты и подтвердите заново")
+
+    try:
+        res = await adapter.create_order(creds, spec)
+    except Exception:
+        # NO RETRY, ever: the request may already have reached the vendor and a
+        # second attempt would buy a second server.
+        raise HTTPException(502, "Провайдер не ответил на заказ. НЕ повторяйте покупку — "
+                                 "проверьте панель провайдера, сервер мог быть создан")
+    res = res if isinstance(res, dict) else {}
+    if not res.get("ok"):
+        raise HTTPException(400, str(res.get("error") or "Провайдер отклонил заказ"))
+
+    try:
+        cost = _money(float(res["price"])) if res.get("price") is not None else price
+    except (TypeError, ValueError):
+        cost = price
+    name = str(res.get("name") or spec["name"])[:120]
+    service_id = ""
+    try:
+        service_id = await store.create_service(
+            name=name, kind="vps", node_uuid="", provider_uuid=uuid, project_id="",
+            billing_type="fixed", cost=cost, next_billing_at="")
+    except Exception as exc:
+        # The money is already spent. A bookkeeping failure must not come back as a
+        # failed purchase — the user would read that as "nothing happened" and buy twice.
+        log.warning("order: услуга не заведена локально: %s", str(exc)[:200])
+    return {
+        "ok": True,
+        "id": str(res.get("id") or ""),
+        "name": name,
+        "price": cost,
+        "currency": str(res.get("currency") or currency),
+        "service_id": service_id,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════

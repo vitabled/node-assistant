@@ -209,3 +209,131 @@ def test_metrics_fairuse_hidden_persists():
         "name": "NoFairuse", "metrics": {"price": 60, "fairuse": 30},
     })
     assert client.get("/api/hostings", headers=a).json()[0]["metrics"]["fairuse_hidden"] is False
+
+
+# ── Произвольные заметки хостинга + заметка тарифа + признак API ──
+def test_note_fields_roundtrip():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Noted",
+        "note_fields": [{"topic": "Оплата", "text": "Только карты РФ"},
+                        {"topic": "", "text": "без темы"},
+                        {"topic": "только тема", "text": ""}],
+    })
+    assert r.status_code == 201, r.text
+    nf = r.json()["note_fields"]
+    assert nf == [{"topic": "Оплата", "text": "Только карты РФ"},
+                  {"topic": "", "text": "без темы"},
+                  {"topic": "только тема", "text": ""}]
+    assert client.get("/api/hostings", headers=a).json()[0]["note_fields"][0]["topic"] == "Оплата"
+
+
+def test_empty_note_field_is_dropped():
+    """An untouched «добавить поле» row must not be persisted."""
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Blanks",
+        "note_fields": [{"topic": "  ", "text": " \n "}, {"topic": "Ок", "text": ""}],
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["note_fields"] == [{"topic": "Ок", "text": ""}]
+
+
+def test_note_fields_capped_at_30():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Many",
+        "note_fields": [{"topic": f"t{i}", "text": "x"} for i in range(40)],
+    })
+    assert r.status_code == 201, r.text
+    nf = r.json()["note_fields"]
+    assert len(nf) == 30 and nf[-1]["topic"] == "t29"
+
+
+def test_note_field_lengths_trimmed():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Long",
+        "note_fields": [{"topic": "т" * 200, "text": "x" * 6000}],
+    })
+    assert r.status_code == 201, r.text
+    nf = r.json()["note_fields"][0]
+    assert len(nf["topic"]) == 80 and len(nf["text"]) == 5000
+
+
+def test_note_field_keeps_line_breaks():
+    """Unlike a tag, a note is multi-line — CR/LF inside the text survive, while
+    the single-line topic collapses them."""
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Multiline",
+        "note_fields": [{"topic": "Под\r\nдержка", "text": "  первая\nвторая\n\nтретья  "}],
+    })
+    assert r.status_code == 201, r.text
+    nf = r.json()["note_fields"][0]
+    assert nf["topic"] == "Под держка"
+    assert nf["text"] == "первая\nвторая\n\nтретья"
+
+
+def test_tariff_note_roundtrip():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "WithTariffNote",
+        "tariffs": [{"name": "CX22", "price": 5.5, "note": " берут\nтолько год  "},
+                    {"name": "CX32", "price": 9}],
+    })
+    assert r.status_code == 201, r.text
+    t = r.json()["tariffs"]
+    assert t[0]["note"] == "берут\nтолько год"     # trimmed, line break kept
+    assert t[1]["note"] == ""                       # not given → empty
+    assert len(client.post("/api/hostings", headers=a, json={
+        "name": "LongNote", "tariffs": [{"name": "X", "note": "n" * 3000}],
+    }).json()["tariffs"][0]["note"]) == 2000
+
+
+def test_has_api_tristate():
+    a = _auth()
+    for value in (True, False, None):
+        r = client.post("/api/hostings", headers=a, json={"name": "Api", "has_api": value})
+        assert r.status_code == 201, r.text
+        assert r.json()["has_api"] is value
+
+
+def test_record_without_the_new_keys_reads_with_defaults():
+    """Cards stored before these fields existed have no such keys — the store
+    hands the raw JSON back, so the model must default instead of 422-ing."""
+    legacy = {"name": "Old", "website": "", "tariffs": [{"name": "legacy", "price": 3}],
+              "locations": []}
+    parsed = HostingBody(**legacy)
+    assert parsed.note_fields == [] and parsed.has_api is None
+    assert parsed.tariffs[0].note == ""
+
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json=legacy)
+    assert r.status_code == 201, r.text
+    assert r.json()["note_fields"] == [] and r.json()["has_api"] is None
+
+
+def test_bs_subnets_round_trip_and_pruning():
+    """Таблица «БС подсети»: строки сохраняются, пустая от нетронутого
+    «Добавить» отсеивается, ячейка остаётся однострочной."""
+    h = _auth()
+    body = {"name": "BS", "bs_subnets": [
+        {"network": "10.0.0.0/24", "asn": "AS12345", "org": "Пример  ЛТД",
+         "checked_at": "2026-07-01", "response": "отвечает,\n20 ms"},
+        {"network": "", "asn": "", "org": "", "checked_at": "", "response": ""},
+    ]}
+    r = client.post("/api/hostings", headers=h, json=body)
+    assert r.status_code == 201, r.text
+
+    rows = client.get("/api/hostings", headers=h).json()[0]["bs_subnets"]
+    assert len(rows) == 1, "пустая строка не должна сохраняться"
+    assert rows[0]["network"] == "10.0.0.0/24" and rows[0]["asn"] == "AS12345"
+    assert rows[0]["org"] == "Пример ЛТД"          # пробелы схлопнуты
+    assert rows[0]["response"] == "отвечает, 20 ms"  # перевод строки — тоже
+
+
+def test_bs_subnets_default_for_old_records():
+    h = _auth()
+    client.post("/api/hostings", headers=h, json={"name": "Без таблицы"})
+    assert client.get("/api/hostings", headers=h).json()[0]["bs_subnets"] == []

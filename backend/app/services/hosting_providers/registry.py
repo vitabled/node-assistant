@@ -24,7 +24,13 @@ log = logging.getLogger("hosting.registry")
 # Module order = the order the UI lists the providers in, so it is stable and not
 # dict-insertion luck. One module may export several kinds (regru: cloudvps API
 # token + control-panel account are different credentials entirely).
-_MODULES = ("ruvds", "beget", "veesp", "regru", "yandex", "openstack", "oracle")
+_MODULES = ("ruvds", "beget", "veesp", "regru", "yandex", "openstack", "oracle",
+            "aeza", "timeweb", "vdsina", "netangels",
+            "digitalocean", "hetzner", "selectel",
+            # Волна биллинг-адаптеров: ЕС, большие облака, хостеры со счетами.
+            "ionos", "ovhcloud", "infomaniak", "latitude",
+            "aws", "alibaba", "cloudru",
+            "ishosting", "hostkey", "billmanager", "servers_com")
 
 
 def _exports(mod) -> list:

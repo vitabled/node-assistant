@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Send, Bot, Wrench, AlertCircle } from "lucide-react";
+import { Loader2, Send, Bot, Wrench, AlertCircle, Paperclip, X, FileText, Image as ImageIcon } from "lucide-react";
 
 /** Только то, что нужно чату: гейт композера. Форма настроек живёт в
  *  «Настройки → Ассистент» (`settings/AiSettingsTab.tsx`) — эта страница НИЧЕГО
@@ -7,6 +7,37 @@ import { Loader2, Send, Bot, Wrench, AlertCircle } from "lucide-react";
 interface AiChatConfig {
   enabled: boolean;
   has_key: boolean;
+  /** Есть ЧЕМ авторизоваться: через шлюз CLIProxyAPI ключ провайдера не нужен —
+   *  доступ даёт OAuth-аккаунт внутри шлюза. Старый бэкенд поля не отдаёт,
+   *  поэтому читаем с откатом на `has_key`. */
+  auth_ready?: boolean;
+}
+
+/** Вложение живёт ровно один вопрос: файлы не персистятся, они относятся к
+ *  сообщению, а не к аккаунту (см. api/ai.py::Attachment). */
+interface Attachment { name: string; mime: string; text: string; data_b64: string }
+
+const MAX_FILES = 5;
+const MAX_TEXT_CHARS = 40_000;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/** Читаем файл ЗДЕСЬ, а не грузим в хранилище медиа: вложение чата эфемерно,
+ *  складывать его в общую библиотеку значило бы засорять её. */
+async function readFile(f: File): Promise<Attachment | string> {
+  const mime = f.type || "";
+  if (IMAGE_MIME.includes(mime)) {
+    if (f.size > MAX_IMAGE_BYTES) return `${f.name}: картинка больше 4 МБ`;
+    const buf = new Uint8Array(await f.arrayBuffer());
+    let bin = "";
+    for (const b of buf) bin += String.fromCharCode(b);
+    return { name: f.name, mime, text: "", data_b64: btoa(bin) };
+  }
+  // Всё остальное считаем текстом: логи, конфиги, куски кода. Бинарь тоже
+  // прочитается, но пользы от него модели не будет — предупреждаем размером.
+  const text = await f.text();
+  if (!text.trim()) return `${f.name}: пустой или нечитаемый файл`;
+  return { name: f.name, mime: mime || "text/plain", text: text.slice(0, MAX_TEXT_CHARS), data_b64: "" };
 }
 
 type Msg =
@@ -17,6 +48,10 @@ export function AiChat() {
   const [cfg, setCfg] = useState<AiChatConfig | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
+  const [attach, setAttach] = useState<Attachment[]>([]);
+  const [attachErr, setAttachErr] = useState("");
+  const [over, setOver] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadErr, setLoadErr] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -32,11 +67,33 @@ export function AiChat() {
   }, []);
   useEffect(() => { scrollRef.current?.scrollTo?.(0, scrollRef.current.scrollHeight); }, [msgs]);
 
+  const addFiles = async (files: FileList | File[]) => {
+    const list = Array.from(files);
+    if (!list.length) return;
+    const room = MAX_FILES - attach.length;
+    if (room <= 0) { setAttachErr(`Не больше ${MAX_FILES} файлов`); return; }
+    const out: Attachment[] = [];
+    const errs: string[] = [];
+    for (const f of list.slice(0, room)) {
+      const r = await readFile(f);
+      typeof r === "string" ? errs.push(r) : out.push(r);
+    }
+    if (out.length) setAttach(a => [...a, ...out]);
+    setAttachErr(errs.join("; "));
+  };
+
   const send = async () => {
     const prompt = input.trim();
     if (!prompt || busy) return;
+    const files = attach;
     setInput("");
-    setMsgs(m => [...m, { role: "user", text: prompt }, { role: "assistant", text: "", tools: [] }]);
+    setAttach([]); setAttachErr("");
+    const shown = files.length
+      ? `${prompt}
+
+📎 ${files.map(f => f.name).join(", ")}`
+      : prompt;
+    setMsgs(m => [...m, { role: "user", text: shown }, { role: "assistant", text: "", tools: [] }]);
     setBusy(true);
 
     // Pure updater: replace the last assistant message with a NEW object (no
@@ -55,7 +112,7 @@ export function AiChat() {
     try {
       const res = await fetch("/api/ai/chat", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }), signal: ac.signal,
+        body: JSON.stringify({ prompt, attachments: files }), signal: ac.signal,
       });
       if (!res.ok || !res.body) throw new Error("stream failed");
       const reader = res.body.getReader();
@@ -106,9 +163,10 @@ export function AiChat() {
           <AlertCircle size={14} /> Агент выключен — включите его в «Настройки → Ассистент».
         </div>
       )}
-      {cfg.enabled && !cfg.has_key && (
+      {cfg.enabled && !(cfg.auth_ready ?? cfg.has_key) && (
         <div className="shrink-0 mx-4 mb-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--warn-dim)] border border-[var(--warn-line)] text-[var(--warn)] text-xs">
-          <AlertCircle size={14} /> Не задан API-ключ — добавьте его в «Настройки → Ассистент».
+          <AlertCircle size={14} /> Нечем авторизоваться — добавьте API-ключ или войдите через
+          CLIProxyAPI в «Настройки → AI».
         </div>
       )}
 
@@ -135,14 +193,50 @@ export function AiChat() {
         ))}
       </div>
 
-      <div className="shrink-0 flex items-center gap-2 p-4">
-        <input className="input flex-1" value={input} disabled={busy || !cfg.enabled}
-          placeholder="Сообщение агенту..." onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") send(); }} />
+      <div className="shrink-0 flex flex-col gap-2 p-4"
+        onDragOver={e => { e.preventDefault(); setOver(true); }}
+        onDragLeave={() => setOver(false)}
+        onDrop={e => { e.preventDefault(); setOver(false); void addFiles(e.dataTransfer.files); }}
+        style={over ? { outline: "1px dashed var(--accent)", outlineOffset: -6, borderRadius: 12 } : undefined}>
+
+        {(attach.length > 0 || attachErr) && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {attach.map((a, i) => (
+              <span key={i} title={a.name}
+                className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg max-w-[220px]"
+                style={{ background: "var(--bg3)", border: "1px solid var(--line-soft)", color: "var(--t-mid)" }}>
+                {a.data_b64 ? <ImageIcon size={11} /> : <FileText size={11} />}
+                <span className="truncate">{a.name}</span>
+                <button onClick={() => setAttach(list => list.filter((_, j) => j !== i))}
+                  className="text-[var(--t-low)] hover:text-[var(--err)]"><X size={11} /></button>
+              </span>
+            ))}
+            {attachErr && <span className="text-[11px] text-[var(--err)]">{attachErr}</span>}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <input ref={fileRef} type="file" multiple hidden
+            onChange={e => { void addFiles(e.target.files || []); e.target.value = ""; }} />
+          <button title="Прикрепить файл" disabled={busy || !cfg.enabled}
+            onClick={() => fileRef.current?.click()}
+            className="p-2.5 rounded-lg text-[var(--t-low)] hover:text-[var(--accent-hi)] disabled:opacity-40">
+            <Paperclip size={16} />
+          </button>
+          <input className="input flex-1" value={input} disabled={busy || !cfg.enabled}
+            placeholder={over ? "Отпустите файлы здесь" : "Сообщение агенту..."}
+            onChange={e => setInput(e.target.value)}
+            onPaste={e => {
+              // Скриншот из буфера — самый частый способ приложить картинку.
+              const files = Array.from(e.clipboardData.files || []);
+              if (files.length) { e.preventDefault(); void addFiles(files); }
+            }}
+            onKeyDown={e => { if (e.key === "Enter") send(); }} />
         <button onClick={send} disabled={busy || !cfg.enabled || !input.trim()}
           className="p-2.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] disabled:opacity-40">
           {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-        </button>
+          </button>
+        </div>
       </div>
     </div>
   );

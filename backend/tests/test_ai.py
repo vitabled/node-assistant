@@ -338,3 +338,49 @@ def test_malformed_provider_body_raises_agent_error(monkeypatch):
 def test_redact_masks_api_key():
     assert "sk-abcdef123456" not in ai_agent.redact("boom sk-abcdef123456 oops")
     assert "supersecret" not in ai_agent.redact("x supersecret y", "supersecret")
+
+
+# ── Вложения чата ─────────────────────────────────────────────
+def test_text_attachment_is_inlined_into_the_prompt():
+    """Текстовый файл вклеивается в промпт: так он работает у любой модели,
+    включая те за шлюзом, что не умеют vision."""
+    from app.services.ai_agent import build_user_content
+
+    out = build_user_content("разбери лог", [
+        {"name": "app.log", "mime": "text/plain", "text": "ERROR boom"},
+    ], "openai")
+    assert isinstance(out, str)
+    assert "app.log" in out and "ERROR boom" in out and out.startswith("разбери лог")
+
+
+def test_image_attachment_uses_the_provider_specific_block():
+    from app.services.ai_agent import build_user_content
+
+    img = [{"name": "s.png", "mime": "image/png", "data_b64": "AAA"}]
+    oa = build_user_content("что тут", img, "openai")
+    an = build_user_content("что тут", img, "anthropic")
+
+    assert oa[0]["type"] == "text" and oa[1]["type"] == "image_url"
+    assert oa[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    # Anthropic принимает картинку иначе — форма блока разная, и это причина
+    # собирать первое сообщение здесь, а не в общем тёрне.
+    assert an[1]["type"] == "image" and an[1]["source"]["media_type"] == "image/png"
+
+
+def test_no_attachments_keeps_the_plain_string():
+    """Старый путь не должен меняться: без вложений сообщение — строка."""
+    from app.services.ai_agent import build_user_content
+    assert build_user_content("привет", [], "openai") == "привет"
+    assert build_user_content("привет", None, "anthropic") == "привет"
+
+
+def test_attachment_limits_are_enforced():
+    from app.services.ai_agent import build_user_content, MAX_ATTACHMENTS, MAX_TEXT_CHARS
+
+    many = [{"name": f"f{i}.txt", "mime": "text/plain", "text": f"tail{i}"}
+            for i in range(MAX_ATTACHMENTS + 3)]
+    out = build_user_content("q", many, "openai")
+    assert f"f{MAX_ATTACHMENTS}.txt" not in out, "лишние вложения отбрасываются"
+
+    huge = [{"name": "big.txt", "mime": "text/plain", "text": "x" * (MAX_TEXT_CHARS + 500)}]
+    assert len(build_user_content("q", huge, "openai")) < MAX_TEXT_CHARS + 200

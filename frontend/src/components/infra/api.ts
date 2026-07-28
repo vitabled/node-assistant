@@ -36,6 +36,23 @@ export interface ProviderSyncResult {
   services?: { id: string; name: string; kind: string; cost: number | null; currency: string;
                period: string; status: string; ip: string; region: string; paid_till: string }[];
 }
+/** One purchasable plan (GET /providers/{uuid}/order-options). `price: null` means
+ *  the vendor didn't quote it — the backend then refuses the order (fail closed). */
+export interface OrderPlan {
+  id: string; name: string; specs?: unknown;
+  price: number | null; currency: string; period: string; region: string;
+}
+export interface OrderRange { min: number; max: number; step: number }
+export interface OrderOptions {
+  plans: OrderPlan[];
+  // Region/image shapes differ per vendor — read defensively in the UI.
+  regions: Record<string, unknown>[];
+  images: Record<string, unknown>[];
+  custom: { cpu?: OrderRange; ram_gb?: OrderRange; disk_gb?: OrderRange } | null;
+}
+export interface OrderResult {
+  ok: boolean; id: string; name: string; price: number | null; currency: string; service_id: string;
+}
 export interface Project {
   id: string; name: string; description: string; node_uuids: string[];
   nodeCount: number; monthlyCost: number; created_at: number;
@@ -73,6 +90,10 @@ export const infraApi = {
   syncProvider: (uuid: string) => req<ProviderSyncResult>(`/providers/${uuid}/sync`, { method: "POST" }),
   importProviderServices: (uuid: string) =>
     req<{ ok: boolean; created: number; skipped: number }>(`/providers/${uuid}/import-services`, { method: "POST" }),
+  orderOptions: (uuid: string) => req<OrderOptions>(`/providers/${uuid}/order-options`),
+  // SPENDS MONEY. The caller must never retry this automatically.
+  createOrder: (uuid: string, b: unknown) =>
+    req<OrderResult>(`/providers/${uuid}/order`, { method: "POST", body: JSON.stringify(b) }),
 
   listProjects: () => req<Project[]>("/projects"),
   createProject: (b: unknown) => req("/projects", { method: "POST", body: JSON.stringify(b) }),
