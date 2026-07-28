@@ -1,12 +1,17 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Server, Plus, Loader2, Pencil, Trash2, RefreshCw, ExternalLink,
   MapPin, Tag, X, Globe, Wand2, Network, FileText, Images,
+  SlidersHorizontal, ChevronDown, RotateCcw, Gauge,
 } from "lucide-react";
 import {
   hostingsApi, type Hosting, type HostingBody, type Tariff, type HostingLocation, type AsnRef,
+  type HostingMetrics, type MetricKey,
   CURRENCIES, PERIODS, periodLabel, minTariff,
 } from "./api";
+import {
+  METRIC_DEFS, metricColor, avgScore, scoreOf, metricsOf, fmtScore, type MetricDef,
+} from "./metrics";
 import { TagInput } from "./TagInput";
 import { resolveCoords } from "./geo";
 import { CountrySelect } from "../CountrySelect";
@@ -70,6 +75,141 @@ function MediaStrip({ ids, meta, size = 56, max }: {
   );
 }
 
+/** Компактная строка оценок для карточки: только заполненные, цифра в цвете. */
+function MetricsRow({ m }: { m: HostingMetrics }) {
+  const items = METRIC_DEFS
+    .map(d => ({ d, v: scoreOf(m, d.key) }))
+    .filter((x): x is { d: MetricDef; v: number } => x.v !== null);
+  if (items.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+      {items.map(({ d, v }) => (
+        <span key={d.key} className="flex items-baseline gap-1 text-[10px] text-[var(--t-low)]">
+          <span className="text-[12px] font-semibold tabular-nums" style={{ color: metricColor(v) }}>{fmtScore(v)}</span>
+          {d.short}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ── Фильтр и сортировка ───────────────────────────────────────
+
+const NO_MINS: Record<MetricKey, number> = {
+  price: 0, quality: 0, loyalty: 0, fairuse: 0, panel: 0, ru_access: 0,
+};
+
+const SORT_GENERAL: { v: string; l: string }[] = [
+  // «По умолчанию» = порядок добавления с сервера: это состояние каталога до
+  // появления фильтра, и сбрасываться надо именно в него.
+  { v: "default", l: "По умолчанию" },
+  { v: "name", l: "По названию" },
+  { v: "avg:desc", l: "Средний балл ↓" },
+  { v: "avg:asc", l: "Средний балл ↑" },
+  { v: "tariff:asc", l: "Цена тарифа ↑" },
+  { v: "tariff:desc", l: "Цена тарифа ↓" },
+];
+
+/** Значение сортировки; `null` — «не оценено»/«без цены».
+ *  ⚠️ Цены тарифов не приводятся к одной валюте (курсов здесь нет) — сортировка
+ *  по цене честна лишь внутри одной валюты. */
+function sortValue(h: Hosting, key: string): number | null {
+  if (key === "avg") return avgScore(metricsOf(h));
+  if (key === "tariff") return minTariff(h)?.price ?? null;
+  return scoreOf(metricsOf(h), key as MetricKey);
+}
+
+function sortHostings(list: Hosting[], sort: string): Hosting[] {
+  const byName = (a: Hosting, b: Hosting) => a.name.localeCompare(b.name, "ru");
+  if (sort === "default") return list;
+  if (sort === "name") return [...list].sort(byName);
+  const [key, dir] = sort.split(":");
+  return [...list].sort((a, b) => {
+    const av = sortValue(a, key), bv = sortValue(b, key);
+    // Незаполненные всегда внизу, независимо от направления — иначе сортировка
+    // «по возрастанию» начиналась бы с карточек вообще без оценок.
+    if (av === null || bv === null) return av === bv ? byName(a, b) : (av === null ? 1 : -1);
+    return (dir === "asc" ? av - bv : bv - av) || byName(a, b);
+  });
+}
+
+function FilterBar({ mins, onMin, sort, onSort, onlyScored, onOnlyScored, onReset, shown, total }: {
+  mins: Record<MetricKey, number>; onMin: (k: MetricKey, v: number) => void;
+  sort: string; onSort: (v: string) => void;
+  onlyScored: boolean; onOnlyScored: (v: boolean) => void;
+  onReset: () => void; shown: number; total: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const active = METRIC_DEFS.filter(d => mins[d.key] > 0).length
+    + (onlyScored ? 1 : 0) + (sort !== "default" ? 1 : 0);
+
+  return (
+    <div className="card mb-4">
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-[var(--bg3)] rounded-[inherit]">
+        <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-[var(--t-low)]">
+          <SlidersHorizontal size={13} /> Фильтр и сортировка
+          {active > 0 && (
+            <span className="rounded-full px-1.5 py-0.5 text-[10px] normal-case tracking-normal bg-[var(--accent-dim)] text-[var(--accent-hi)] border border-[var(--accent-line)]">
+              {active}
+            </span>
+          )}
+        </span>
+        <span className="flex items-center gap-2 text-[11px] text-[var(--t-low)]">
+          {shown} из {total}
+          <ChevronDown size={14} className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+
+      {open && (
+        <div className="border-t border-[var(--line-soft)] px-3 pt-3 pb-3 flex flex-col gap-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
+              <label className="label">Сортировка</label>
+              <select value={sort} onChange={e => onSort(e.target.value)} className="selectbox">
+                <optgroup label="Общее">
+                  {SORT_GENERAL.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+                </optgroup>
+                <optgroup label="Оценки">
+                  {METRIC_DEFS.flatMap(d => [
+                    <option key={`${d.key}:desc`} value={`${d.key}:desc`}>{d.label} ↓</option>,
+                    <option key={`${d.key}:asc`} value={`${d.key}:asc`}>{d.label} ↑</option>,
+                  ])}
+                </optgroup>
+              </select>
+            </div>
+            <label className="flex items-center gap-2 py-2 text-xs text-[var(--t-mid)] cursor-pointer">
+              <input type="checkbox" checked={onlyScored} onChange={e => onOnlyScored(e.target.checked)}
+                style={{ accentColor: "var(--accent)" }} />
+              Только с оценками
+            </label>
+            <button type="button" onClick={onReset}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] bg-[var(--bg3)] text-[var(--t-mid)] hover:text-[var(--accent-hi)]">
+              <RotateCcw size={12} /> Сбросить
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
+            {METRIC_DEFS.map(d => (
+              <div key={d.key} className="flex items-center gap-2">
+                <span className="text-[11px] text-[var(--t-low)] w-[124px] shrink-0">{d.label}</span>
+                <input type="range" min={0} max={100} step={1} value={mins[d.key]}
+                  onChange={e => onMin(d.key, parseInt(e.target.value, 10))}
+                  title="Минимальная оценка" className="flex-1 min-w-0"
+                  style={{ accentColor: "var(--accent)" }} />
+                <span className="text-[11px] tabular-nums w-9 text-right"
+                  style={{ color: mins[d.key] ? metricColor(mins[d.key]) : "var(--t-faint)" }}>
+                  {mins[d.key] ? `${mins[d.key]}+` : "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function HostingsCatalog() {
   const [rows, setRows] = useState<Hosting[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,6 +217,9 @@ export function HostingsCatalog() {
   const [details, setDetails] = useState<Hosting | null>(null);
   const [tagFilter, setTagFilter] = useState<string>("");
   const [media, setMedia] = useState<Map<string, MediaItem>>(new Map());
+  const [mins, setMins] = useState<Record<MetricKey, number>>({ ...NO_MINS });
+  const [sort, setSort] = useState("default");
+  const [onlyScored, setOnlyScored] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,7 +242,21 @@ export function HostingsCatalog() {
     return () => { alive = false; };
   }, [rows]);
 
-  const shown = tagFilter ? rows.filter(h => (h.tags || []).includes(tagFilter)) : rows;
+  // Фильтр по метрикам ложится ПОВЕРХ фильтра по тегу, порядок значения не имеет.
+  const shown = useMemo(() => {
+    const list = rows.filter(h => {
+      if (tagFilter && !(h.tags || []).includes(tagFilter)) return false;
+      const m = metricsOf(h);
+      if (onlyScored && avgScore(m) === null) return false;
+      return METRIC_DEFS.every(d => {
+        const min = mins[d.key];
+        if (!min) return true;
+        const v = scoreOf(m, d.key);
+        return v !== null && v >= min;
+      });
+    });
+    return sortHostings(list, sort);
+  }, [rows, tagFilter, mins, onlyScored, sort]);
 
   const del = async (h: Hosting) => {
     if (!confirm(`Удалить хостинг «${h.name}»?`)) return;
@@ -123,8 +280,14 @@ export function HostingsCatalog() {
             <Tag size={11} /> {tagFilter}
             <button onClick={() => setTagFilter("")} className="hover:text-[var(--t-hi)]" title="Сбросить"><X size={11} /></button>
           </span>
-          <span className="text-[var(--t-faint)]">{shown.length} из {rows.length}</span>
         </div>
+      )}
+
+      {rows.length > 0 && (
+        <FilterBar mins={mins} onMin={(k, v) => setMins(p => ({ ...p, [k]: v }))}
+          sort={sort} onSort={setSort} onlyScored={onlyScored} onOnlyScored={setOnlyScored}
+          onReset={() => { setMins({ ...NO_MINS }); setSort("default"); setOnlyScored(false); }}
+          shown={shown.length} total={rows.length} />
       )}
 
       {loading ? (
@@ -132,7 +295,9 @@ export function HostingsCatalog() {
       ) : rows.length === 0 ? (
         <div className="card p-8 text-center text-[var(--t-faint)] text-sm">Хостингов пока нет. Добавьте первый — его локации появятся на «Карте».</div>
       ) : shown.length === 0 ? (
-        <div className="card p-8 text-center text-[var(--t-faint)] text-sm">Нет хостингов с тегом «{tagFilter}».</div>
+        <div className="card p-8 text-center text-[var(--t-faint)] text-sm">
+          Ничего не найдено — ослабьте фильтр{tagFilter ? ` или снимите тег «${tagFilter}»` : ""}.
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {shown.map(h => {
@@ -162,6 +327,8 @@ export function HostingsCatalog() {
                 </div>
 
                 {h.features && <p className="text-xs text-[var(--t-low)] line-clamp-2">{h.features}</p>}
+
+                <MetricsRow m={metricsOf(h)} />
 
                 {(h.tags || []).length > 0 && (
                   <div className="flex flex-wrap gap-1">
@@ -217,6 +384,8 @@ export function HostingsCatalog() {
 function HostingDetails({ h, meta, onClose, onEdit }: {
   h: Hosting; meta: Map<string, MediaItem>; onClose: () => void; onEdit: () => void;
 }) {
+  const m = metricsOf(h);
+  const avg = avgScore(m);
   return (
     <Modal title={h.name} onClose={onClose} wide
       footer={<>
@@ -244,6 +413,30 @@ function HostingDetails({ h, meta, onClose, onEdit }: {
             ))}
           </div>
         )}
+
+        <div>
+          <p className="label mb-1 flex items-center gap-1">
+            <Gauge size={12} /> Оценки
+            {avg !== null && (
+              <span className="normal-case tracking-normal text-[11px] text-[var(--t-low)]">
+                · средний <span className="tabular-nums font-semibold" style={{ color: metricColor(avg) }}>{fmtScore(avg)}</span>
+              </span>
+            )}
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
+            {METRIC_DEFS.filter(d => !(d.key === "fairuse" && m.fairuse_hidden)).map(d => {
+              const v = scoreOf(m, d.key);
+              return (
+                <p key={d.key} className="flex items-baseline justify-between gap-2 text-xs text-[var(--t-low)]">
+                  {d.label}
+                  <span className="tabular-nums font-semibold" style={{ color: metricColor(v) }}>
+                    {v === null ? "—" : fmtScore(v)}
+                  </span>
+                </p>
+              );
+            })}
+          </div>
+        </div>
 
         {/* Guarded on RESOLVED ids, not on the raw list: an id whose file was
             removed from the shared store would otherwise leave a bare header. */}
@@ -337,6 +530,7 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
   const [tags, setTags] = useState<string[]>(edit?.tags ?? []);
   // Records saved before the field existed come back without the key.
   const [media, setMedia] = useState<string[]>(edit?.media ?? []);
+  const [metrics, setMetrics] = useState<HostingMetrics>(edit?.metrics ?? {});
   const [tariffs, setTariffs] = useState<Tariff[]>(edit?.tariffs?.length ? edit.tariffs : [emptyTariff()]);
   const [locations, setLocations] = useState<HostingLocation[]>(edit?.locations ?? []);
   const [asns, setAsns] = useState<AsnRef[]>(edit?.asns ?? []);
@@ -348,6 +542,8 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
     setLocations(ls => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const setAsn = (i: number, patch: Partial<AsnRef>) =>
     setAsns(as => as.map((a, j) => (j === i ? { ...a, ...patch } : a)));
+  const setMetric = (k: MetricKey, v: number | null) =>
+    setMetrics(p => { const next: HostingMetrics = { ...p }; next[k] = v; return next; });
 
   // Fill lat/lng from the city+country gazetteer.
   const autoCoords = (i: number) => {
@@ -359,6 +555,14 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
 
   const submit = async () => {
     if (!name.trim()) { toast("Укажите название хостинга", "error"); return; }
+    // Бэкенд отвечает 422 на выход из диапазона — ловим здесь, чтобы человек
+    // увидел, КАКАЯ метрика виновата.
+    for (const d of METRIC_DEFS) {
+      const v = metrics[d.key];
+      if (v != null && !(v >= 1 && v <= 100)) {
+        toast(`«${d.label}»: оценка должна быть от 1.0 до 100.0`, "error"); return;
+      }
+    }
     // Drop fully-empty tariff/location rows.
     // `bandwidth` counts as content too — otherwise a tariff that only records a
     // channel width would be silently discarded on save.
@@ -368,7 +572,7 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
     const cleanAsns = asns.filter(a => a.number > 0 || a.name.trim() || a.website.trim());
     const body: HostingBody = {
       name: name.trim(), website: website.trim(), features: features.trim(), notes: notes.trim(),
-      tags, media, tariffs: cleanTariffs, locations: cleanLocs, asns: cleanAsns,
+      tags, media, metrics, tariffs: cleanTariffs, locations: cleanLocs, asns: cleanAsns,
       provider_ref: edit?.provider_ref ?? null,
     };
     setSaving(true);
@@ -393,6 +597,43 @@ function HostingModal({ edit, onClose, onSaved }: { edit?: Hosting; onClose: () 
       <Field label="Примечания" value={notes} onChange={setNotes} placeholder="Личные заметки" />
 
       <TagInput label="Теги" value={tags} onChange={setTags} />
+
+      {/* Метрики */}
+      <div className="flex flex-col gap-2">
+        <label className="label flex items-center gap-1"><Gauge size={12} /> Метрики</label>
+        <p className="text-[11px] text-[var(--t-faint)]">Субъективные оценки от 1.0 до 100.0. Пустое поле — «не оценено».</p>
+        {METRIC_DEFS.map(d => {
+          const hidden = d.key === "fairuse" && !!metrics.fairuse_hidden;
+          const v = metrics[d.key] ?? null;
+          return (
+            <div key={d.key} className="flex items-center gap-2">
+              <span className="text-xs text-[var(--t-mid)] w-[136px] shrink-0">{d.label}</span>
+              {hidden ? (
+                <span className="flex-1 text-[11px] text-[var(--t-faint)]">Не применимо у этого провайдера</span>
+              ) : (
+                <>
+                  <input type="number" min={1} max={100} step="0.1"
+                    value={v ?? ""} placeholder="—" className="input w-24"
+                    onChange={e => {
+                      const n = parseFloat(e.target.value);
+                      setMetric(d.key, Number.isFinite(n) ? n : null);
+                    }} />
+                  <span className="text-xs tabular-nums font-semibold w-10" style={{ color: metricColor(v) }}>
+                    {v === null ? "—" : fmtScore(v)}
+                  </span>
+                </>
+              )}
+              {d.key === "fairuse" && (
+                <label className="flex items-center gap-1.5 text-[11px] text-[var(--t-low)] cursor-pointer ml-auto">
+                  <input type="checkbox" checked={hidden} style={{ accentColor: "var(--accent)" }}
+                    onChange={e => setMetrics(p => ({ ...p, fairuse_hidden: e.target.checked }))} />
+                  Не применимо
+                </label>
+              )}
+            </div>
+          );
+        })}
+      </div>
 
       <MediaDrop value={media} onChange={setMedia}
         hint="Скриншоты панели, прайс, схема сети. До 15 МБ на файл." />

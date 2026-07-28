@@ -5,8 +5,11 @@ import {
 } from "lucide-react";
 import { toast } from "./infra/Toast";
 import { fmtSize } from "./common/MediaDrop";
-import { libraryApi, folderList, normFolder, type Graph, type LibItem, type LibNote } from "./library/api";
-import { NoteTree, notesOf } from "./library/NoteTree";
+import {
+  libraryApi, normFolder, parentFolder,
+  type Graph, type LibItem, type LibNote, type ReorderRow,
+} from "./library/api";
+import { NoteTree, notesOf, foldersOf } from "./library/NoteTree";
 import { NoteEditor } from "./library/NoteEditor";
 import { Backlinks } from "./library/Backlinks";
 import type { NoteRef } from "./library/markdown";
@@ -90,32 +93,67 @@ export function Library() {
     }
   }, [note, load]);
 
+  /** Follow a moved subtree with the OPEN note: the editor takes the folder from
+   *  its prop on every save, so patching it here (instead of re-fetching) keeps
+   *  the next autosave from writing the note back to the old path. Mirrors the
+   *  store's `_move_subtree`. */
+  const rebaseOpenNote = useCallback((src: string, dst: string) => {
+    setNote(cur => {
+      if (!cur) return cur;
+      const at = cur.folder || "";
+      if (at !== src && !at.startsWith(src + "/")) return cur;
+      return { ...cur, folder: normFolder(dst + at.slice(src.length)) };
+    });
+  }, []);
+
+  const createFolder = useCallback(async (path: string) => {
+    try {
+      await libraryApi.createFolder(path);
+      await load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Не удалось создать папку", "error");
+    }
+  }, [load]);
+
   const renameFolder = useCallback(async (src: string, dst: string) => {
     try {
-      const res = await libraryApi.renameFolder(src, dst);
-      toast(`Перемещено заметок: ${res.moved}`, "success");
+      await libraryApi.renameFolder(src, dst);
+      rebaseOpenNote(src, dst);
       await load();
-      if (note && (note.folder === src || note.folder.startsWith(src + "/"))) await openNote(note.id);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Не удалось переименовать", "error");
     }
-  }, [load, note, openNote]);
+  }, [load, rebaseOpenNote]);
 
-  const moveNote = useCallback(async (id: string, folder: string) => {
-    // The open note is edited live and autosaves its own folder field — writing
-    // it from here would race that save and could resurrect the old folder.
-    if (note?.id === id) {
-      toast("Открытая заметка переносится полем «Папка»", "info");
-      return;
-    }
+  const deleteFolder = useCallback(async (f: { id: string | null; path: string }) => {
+    const up = parentFolder(f.path);
     try {
-      const full = await libraryApi.getNote(id);
-      await libraryApi.updateNote(id, { name: full.name, text: full.text, folder });
+      // Папка без своей записи существует только за счёт заметок внутри —
+      // поднять их в родителя и ЕСТЬ её удаление, отдельного id тут нет.
+      if (f.id) await libraryApi.remove(f.id);
+      else await libraryApi.renameFolder(f.path, up);
+      rebaseOpenNote(f.path, up);
+      await load();
+      toast("Папка удалена", "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Не удалось удалить папку", "error");
+    }
+  }, [load, rebaseOpenNote]);
+
+  const reorder = useCallback(async (rows: ReorderRow[]) => {
+    try {
+      await libraryApi.reorder(rows);
+      setNote(cur => {
+        if (!cur) return cur;
+        const row = rows.find(r => r.id === cur.id);
+        if (!row || row.folder === undefined || row.folder === cur.folder) return cur;
+        return { ...cur, folder: row.folder };
+      });
       await load();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Не удалось перенести", "error");
     }
-  }, [note, load]);
+  }, [load]);
 
   const upload = async (f: File) => {
     setBusy(true);
@@ -154,12 +192,12 @@ export function Library() {
   // Memoised: `noteRefs` is a render dependency of the markdown pipeline, so a
   // fresh array on every keystroke would re-render the preview for nothing.
   const noteRefs = useMemo<NoteRef[]>(
-    () => (items ?? []).filter(i => i.kind === "note").map(i => ({ id: i.id, name: i.name })),
+    () => (items ?? []).filter(i => i.kind === "note").map(i => ({ id: i.id, name: i.name || "" })),
     [items],
   );
   const names = useMemo(() => new Map(noteRefs.map(n => [n.id, n.name])), [noteRefs]);
   const treeNotes = useMemo(() => notesOf(items ?? []), [items]);
-  const folders = useMemo(() => folderList(items ?? []), [items]);
+  const treeFolders = useMemo(() => foldersOf(items ?? []), [items]);
   const files = (items ?? []).filter(i => i.kind === "file");
 
   const aside = (
@@ -174,10 +212,13 @@ export function Library() {
             <Loader2 size={14} className="animate-spin" /> Загрузка…
           </div>
         ) : (
-          <NoteTree notes={treeNotes} activeId={note?.id ?? null} onOpen={id => { void openNote(id); }}
-            onCreate={folder => { void createNote("Новая заметка", folder); }}
+          <NoteTree notes={treeNotes} folders={treeFolders} activeId={note?.id ?? null}
+            onOpen={id => { void openNote(id); }}
+            onCreateNote={folder => { void createNote("Новая заметка", folder); }}
+            onCreateFolder={path => { void createFolder(path); }}
             onRenameFolder={(src, dst) => { void renameFolder(src, dst); }}
-            onMoveNote={(id, folder) => { void moveNote(id, folder); }} />
+            onDeleteFolder={f => { void deleteFolder(f); }}
+            onReorder={rows => { void reorder(rows); }} />
         )}
       </div>
 
@@ -263,10 +304,10 @@ export function Library() {
         }}>
           {note ? (
             <>
-              {/* Keyed by id AND folder: a folder rename re-opens the note with a
-                  new path, and the editor holds the folder in its own state — a
-                  plain id key would keep showing (and re-saving) the old one. */}
-              <NoteEditor key={`${note.id}:${note.folder}`} note={note} notes={noteRefs} folders={folders}
+              {/* Keyed by id only: the folder now travels as a prop the editor
+                  re-reads on every save, so a move must NOT remount (a remount
+                  would flush the outgoing instance with the pre-move path). */}
+              <NoteEditor key={note.id} note={note} notes={noteRefs}
                 onSaved={onSaved} onOpenNote={id => { void openNote(id); }}
                 onCreateNote={createFromLink} onDelete={() => { void deleteNote(); }} />
               <Backlinks graph={graph} noteId={note.id} names={names}

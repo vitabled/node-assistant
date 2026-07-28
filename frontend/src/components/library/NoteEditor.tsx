@@ -1,16 +1,22 @@
-// One note: title + folder + markdown source, with a live preview and media
-// dropped/pasted straight into the text at the caret.
+// One note: title + markdown source, with a live preview and media dropped/pasted
+// straight into the text at the caret.
+//
+// The folder is NOT edited here — it is the note's position in the tree. It still
+// rides along on every PUT (the store treats a missing folder as «в корень»), and
+// it is read from the prop through a ref at save time: dragging the OPEN note into
+// another folder updates the prop, and a stale captured value would put the note
+// straight back where it was.
 //
 // Saving is debounced (800 ms) and also flushed on unmount, because switching
 // notes remounts this component — without the flush the last keystrokes before a
 // click on another note would be lost.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Pencil, Eye, Columns2, ImagePlus, Loader2, Save, Trash2, Check, AlertTriangle, Folder,
+  Pencil, Eye, Columns2, ImagePlus, Loader2, Save, Trash2, Check, AlertTriangle,
 } from "lucide-react";
 import { toast } from "../infra/Toast";
 import { uploadMedia } from "../common/MediaDrop";
-import { libraryApi, normFolder, type LibItem, type LibNote } from "./api";
+import { libraryApi, type LibItem, type LibNote } from "./api";
 import { cacheMedia, type NoteRef } from "./markdown";
 import { MarkdownView } from "./MarkdownView";
 
@@ -30,17 +36,15 @@ function embedSnippet(id: string, name: string): string {
   return caption ? `![[${id}|${caption}]]` : `![[${id}]]`;
 }
 
-export function NoteEditor({ note, notes, folders, onSaved, onOpenNote, onCreateNote, onDelete }: {
+export function NoteEditor({ note, notes, onSaved, onOpenNote, onCreateNote, onDelete }: {
   note: LibNote;
   notes: NoteRef[];
-  folders: string[];
   onSaved: (item: LibItem) => void;
   onOpenNote: (id: string) => void;
   onCreateNote: (name: string) => void;
   onDelete: () => void;
 }) {
   const [name, setName] = useState(note.name);
-  const [folder, setFolder] = useState(note.folder || "");
   const [text, setText] = useState(note.text || "");
   const [mode, setMode] = useState<Mode>("split");
   const [state, setState] = useState<SaveState>("saved");
@@ -49,14 +53,16 @@ export function NoteEditor({ note, notes, folders, onSaved, onOpenNote, onCreate
 
   const ta = useRef<HTMLTextAreaElement | null>(null);
   const filePick = useRef<HTMLInputElement | null>(null);
-  const stored = useRef({ name: note.name, folder: note.folder || "", text: note.text || "" });
+  const stored = useRef({ name: note.name, text: note.text || "" });
   const latest = useRef(stored.current);
-  latest.current = { name, folder, text };
+  latest.current = { name, text };
+  const folderRef = useRef(note.folder || "");
+  folderRef.current = note.folder || "";
 
   const save = useCallback(async () => {
     const cur = latest.current;
     const prev = stored.current;
-    if (cur.name === prev.name && cur.folder === prev.folder && cur.text === prev.text) {
+    if (cur.name === prev.name && cur.text === prev.text) {
       // Nothing to write — also the path StrictMode's double-mount takes, and
       // the one where the user undid their edit; both must clear the badge.
       setState("saved");
@@ -66,7 +72,7 @@ export function NoteEditor({ note, notes, folders, onSaved, onOpenNote, onCreate
     setState("saving");
     try {
       const item = await libraryApi.updateNote(note.id, {
-        name: cur.name.trim(), text: cur.text, folder: cur.folder,
+        name: cur.name.trim(), text: cur.text, folder: folderRef.current,
       });
       stored.current = { ...cur, name: cur.name.trim() };
       setState("saved");
@@ -87,11 +93,11 @@ export function NoteEditor({ note, notes, folders, onSaved, onOpenNote, onCreate
     // StrictMode mounts twice, and a flag would report a freshly opened note as
     // dirty on the second mount.
     const prev = stored.current;
-    if (name === prev.name && folder === prev.folder && text === prev.text) return;
+    if (name === prev.name && text === prev.text) return;
     setState("dirty");
     const t = setTimeout(() => { void saveRef.current(); }, 800);
     return () => clearTimeout(t);
-  }, [name, folder, text]);
+  }, [name, text]);
 
   useEffect(() => () => { void saveRef.current(); }, []);
 
@@ -182,22 +188,10 @@ export function NoteEditor({ note, notes, folders, onSaved, onOpenNote, onCreate
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-      {/* Title + folder */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <input className="input" value={name} onChange={e => setName(e.target.value)}
-          placeholder="Название заметки"
-          style={{ flex: "1 1 220px", fontSize: 14.5, fontWeight: 600, color: "var(--t-hi)" }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 1 220px" }}>
-          <Folder size={13} style={{ color: "var(--t-low)", flex: "none" }} />
-          <input className="input" value={folder} list="lib-folders"
-            onChange={e => setFolder(e.target.value)}
-            onBlur={() => setFolder(f => normFolder(f))}
-            placeholder="Папка (Инфра/Провайдеры)" style={{ fontSize: 12.5 }} />
-          <datalist id="lib-folders">
-            {folders.map(f => <option key={f} value={f} />)}
-          </datalist>
-        </div>
-      </div>
+      {/* Title */}
+      <input className="input" value={name} onChange={e => setName(e.target.value)}
+        placeholder="Название заметки"
+        style={{ fontSize: 14.5, fontWeight: 600, color: "var(--t-hi)" }} />
 
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

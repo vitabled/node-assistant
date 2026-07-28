@@ -34,6 +34,31 @@ class AsnRef(BaseModel):
     website: str = ""
 
 
+class HostingMetrics(BaseModel):
+    """Subjective 1..100 scores for a hosting. Every score is Optional on purpose:
+    `None` means «не оценено» and must stay distinguishable from a low score."""
+    price: Optional[float] = None
+    quality: Optional[float] = None
+    loyalty: Optional[float] = None
+    fairuse: Optional[float] = None
+    panel: Optional[float] = None       # удобство панели
+    ru_access: Optional[float] = None   # доступность в РФ
+    # Fair-use policy is not a thing at every provider — the card hides the row
+    # rather than showing a metric that will never be scored.
+    fairuse_hidden: bool = False
+
+    @field_validator("price", "quality", "loyalty", "fairuse", "panel", "ru_access")
+    @classmethod
+    def _score(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return None
+        # Chained comparison rather than two `or`-ed checks: NaN and ±inf fail it
+        # too (NaN compares False against everything).
+        if not 1.0 <= v <= 100.0:
+            raise ValueError("Оценка должна быть числом от 1.0 до 100.0")
+        return round(v, 1)
+
+
 class HostingBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     website: str = ""
@@ -48,6 +73,9 @@ class HostingBody(BaseModel):
     tariffs: list[Tariff] = Field(default_factory=list)
     locations: list[Location] = Field(default_factory=list)
     asns: list[AsnRef] = Field(default_factory=list)
+    # Records written before this field existed have no `metrics` key (the store
+    # returns raw JSON), so it must default instead of being required.
+    metrics: HostingMetrics = Field(default_factory=HostingMetrics)
     # Optional link to an infra-billing provider (kept loose — independent module).
     provider_ref: Optional[str] = None
 

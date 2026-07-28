@@ -16,12 +16,17 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-/** List row — the backend never ships the note body here. */
+/** List row — the backend never ships the note body here.
+ *  A `folder` row is the store's way of keeping an EMPTY folder alive: a folder
+ *  is otherwise only implied by the notes inside it, so a freshly created one
+ *  would vanish on the next reload. Its path lives in `path`, not `name`. */
 export interface LibItem {
   id: string;
-  kind: "note" | "file";
-  name: string;
+  kind: "note" | "file" | "folder";
+  name?: string;
   folder?: string;
+  order?: number;
+  path?: string;
   filename?: string;
   mime?: string;
   size?: number;
@@ -56,6 +61,13 @@ export interface GraphNode {
 }
 export type Graph = Record<string, GraphNode>;
 
+/** One line of a `/reorder` call. `folder` omitted → leave the note where it is. */
+export interface ReorderRow {
+  id: string;
+  folder?: string;
+  order: number;
+}
+
 export const libraryApi = {
   list: () => req<LibItem[]>(""),
   graph: () => req<Graph>("/graph"),
@@ -63,9 +75,17 @@ export const libraryApi = {
   createNote: (b: NoteBody) => req<LibItem>("/notes", { method: "POST", body: JSON.stringify(b) }),
   updateNote: (id: string, b: NoteBody) =>
     req<LibItem>(`/notes/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+  createFolder: (path: string) =>
+    req<LibItem>("/folders", { method: "POST", body: JSON.stringify({ path }) }),
   renameFolder: (src: string, dst: string) =>
     req<{ ok: boolean; moved: number }>("/folders/rename", {
       method: "POST", body: JSON.stringify({ src, dst }),
+    }),
+  /** One call carries the WHOLE recomputed order of the touched folder — sending
+   *  deltas would leave the list wrong if any single row failed to apply. */
+  reorder: (items: ReorderRow[]) =>
+    req<{ ok: boolean; moved: number }>("/reorder", {
+      method: "POST", body: JSON.stringify({ items }),
     }),
   remove: (id: string) => req<void>(`/${id}`, { method: "DELETE" }),
 
@@ -88,7 +108,7 @@ export const libraryApi = {
     const url = URL.createObjectURL(await res.blob());
     const a = document.createElement("a");
     a.href = url;
-    a.download = item.filename || item.name;
+    a.download = item.filename || item.name || "file";
     a.click();
     URL.revokeObjectURL(url);
   },
@@ -108,16 +128,8 @@ export function normFolder(folder: string): string {
   return parts.slice(0, MAX_FOLDER_DEPTH).join("/").slice(0, 300);
 }
 
-/** Every folder path present in the note set, sorted — for datalist hints. */
-export function folderList(items: LibItem[]): string[] {
-  const out = new Set<string>();
-  for (const it of items) {
-    if (it.kind !== "note") continue;
-    const f = normFolder(it.folder || "");
-    if (!f) continue;
-    // Intermediate folders count too: «А/Б» implies «А».
-    const parts = f.split("/");
-    for (let i = 1; i <= parts.length; i++) out.add(parts.slice(0, i).join("/"));
-  }
-  return [...out].sort((a, b) => a.localeCompare(b, "ru"));
+/** Parent of a folder path («Инфра/Провайдеры» → «Инфра», верхний уровень → «»). */
+export function parentFolder(path: string): string {
+  const cut = path.lastIndexOf("/");
+  return cut < 0 ? "" : path.slice(0, cut);
 }

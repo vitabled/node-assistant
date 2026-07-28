@@ -24,6 +24,15 @@ export interface HostingLocation {
 export interface AsnRef {
   number: number; name: string; website: string;
 }
+export type MetricKey = "price" | "quality" | "loyalty" | "fairuse" | "panel" | "ru_access";
+/** Субъективные оценки 1.0..100.0. `null`/отсутствие ключа = «не оценено» —
+ *  это состояние обязано отличаться от низкой оценки, поэтому не 0. */
+export interface HostingMetrics {
+  price?: number | null; quality?: number | null; loyalty?: number | null;
+  fairuse?: number | null; panel?: number | null; ru_access?: number | null;
+  // Fair-use политики есть не у всех — тогда метрика прячется, а не занижается.
+  fairuse_hidden?: boolean;
+}
 export interface Hosting {
   id: string; name: string; website: string; notes: string; features: string;
   tags: string[];
@@ -32,6 +41,8 @@ export interface Hosting {
   // `(h.media || [])` everywhere, same as tags/asns.
   media?: string[];
   tariffs: Tariff[]; locations: HostingLocation[]; asns: AsnRef[];
+  // Как и media/tags: старые записи приходят без ключа — читать `(h.metrics || {})`.
+  metrics?: HostingMetrics;
   provider_ref?: string | null; created_at: number;
 }
 

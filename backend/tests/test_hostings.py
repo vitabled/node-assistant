@@ -4,6 +4,7 @@ import uuid
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.hostings import HostingBody
 
 client = TestClient(app)
 
@@ -137,3 +138,74 @@ def test_media_ids_round_trip():
 
     client.put(f"/api/hostings/{hid}", headers=h, json={"name": "WithPics", "media": []})
     assert client.get("/api/hostings", headers=h).json()[0]["media"] == []
+
+
+# ── Метрики хостинга (1..100, каждая опциональна) ──────────────
+def test_metrics_roundtrip():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Scored",
+        "metrics": {"price": 80, "quality": 92.5, "loyalty": 70,
+                    "fairuse": 55, "panel": 40, "ru_access": 12.5},
+    })
+    assert r.status_code == 201, r.text
+    m = r.json()["metrics"]
+    assert m == {"price": 80.0, "quality": 92.5, "loyalty": 70.0, "fairuse": 55.0,
+                 "panel": 40.0, "ru_access": 12.5, "fairuse_hidden": False}
+    assert client.get("/api/hostings", headers=a).json()[0]["metrics"]["quality"] == 92.5
+
+
+def test_metrics_bounds():
+    a = _auth()
+    ok = client.post("/api/hostings", headers=a, json={
+        "name": "Edges", "metrics": {"price": 1.0, "quality": 100.0},
+    })
+    assert ok.status_code == 201, ok.text
+    assert ok.json()["metrics"]["price"] == 1.0
+    assert ok.json()["metrics"]["quality"] == 100.0
+    # not-scored stays not-scored, it is not a zero
+    assert ok.json()["metrics"]["loyalty"] is None
+
+    for bad in ({"price": 0.9}, {"quality": 100.1}):
+        assert client.post("/api/hostings", headers=a,
+                           json={"name": "Bad", "metrics": bad}).status_code == 422
+
+
+def test_metrics_rounded_to_one_decimal():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "Rounded", "metrics": {"price": 73.46, "quality": 12.34},
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["metrics"]["price"] == 73.5
+    assert r.json()["metrics"]["quality"] == 12.3
+
+
+def test_metrics_default_for_a_record_without_them():
+    """Cards stored before metrics existed have no such key — the store hands the
+    raw JSON back, so the model must default instead of 422-ing."""
+    legacy = {"name": "Old", "website": "", "tariffs": [], "locations": []}
+    assert HostingBody(**legacy).metrics.price is None
+
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json=legacy)
+    assert r.status_code == 201, r.text
+    assert r.json()["metrics"] == {"price": None, "quality": None, "loyalty": None,
+                                   "fairuse": None, "panel": None, "ru_access": None,
+                                   "fairuse_hidden": False}
+
+
+def test_metrics_fairuse_hidden_persists():
+    a = _auth()
+    r = client.post("/api/hostings", headers=a, json={
+        "name": "NoFairuse", "metrics": {"price": 60, "fairuse_hidden": True},
+    })
+    assert r.status_code == 201, r.text
+    hid = r.json()["id"]
+    got = client.get("/api/hostings", headers=a).json()[0]["metrics"]
+    assert got["fairuse_hidden"] is True and got["fairuse"] is None
+
+    client.put(f"/api/hostings/{hid}", headers=a, json={
+        "name": "NoFairuse", "metrics": {"price": 60, "fairuse": 30},
+    })
+    assert client.get("/api/hostings", headers=a).json()[0]["metrics"]["fairuse_hidden"] is False

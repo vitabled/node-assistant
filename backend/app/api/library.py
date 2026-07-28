@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -23,6 +24,21 @@ class NoteBody(BaseModel):
 class FolderRename(BaseModel):
     src: str = Field(..., min_length=1, max_length=300)
     dst: str = Field("", max_length=300)
+
+
+class FolderBody(BaseModel):
+    path: str = Field(..., min_length=1, max_length=300)
+
+
+class ReorderItem(BaseModel):
+    id: str = Field(..., max_length=64)
+    # None → папку не трогать (перестановка внутри текущей).
+    folder: Optional[str] = Field(None, max_length=300)
+    order: int = 0
+
+
+class ReorderBody(BaseModel):
+    items: list[ReorderItem] = Field(default_factory=list, max_length=store.MAX_ITEMS)
 
 
 @router.get("")
@@ -69,6 +85,15 @@ async def graph():
     return store.graph()
 
 
+# `/folders` и `/reorder` объявлены ДО путей с `{item_id}` — иначе перехват.
+@router.post("/folders", status_code=201)
+async def create_folder(body: FolderBody):
+    try:
+        return store.add_folder(body.path)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/folders/rename")
 async def rename_folder(body: FolderRename):
     try:
@@ -76,6 +101,11 @@ async def rename_folder(body: FolderRename):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "moved": moved}
+
+
+@router.post("/reorder")
+async def reorder(body: ReorderBody):
+    return {"ok": True, "moved": store.reorder([i.model_dump() for i in body.items])}
 
 
 @router.get("/files/{item_id}")
