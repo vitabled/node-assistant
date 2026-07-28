@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import abc
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 import httpx
@@ -28,7 +28,9 @@ _TIMEOUT = 20
 
 # Adapters advertise their capabilities so the UI can tell «no API balance, enter
 # it by hand» from «sync failed» (VK/Procloud/Oracle have no balance endpoint).
-CAPS_ALL = {"balance", "services", "payments"}
+# «order» is advertised ONLY by adapters that really create a server through the
+# public API — a button that silently does nothing is worse than no button.
+CAPS_ALL = {"balance", "services", "payments", "order"}
 
 
 @dataclass
@@ -62,6 +64,43 @@ class ServiceItem:
     ip: str = ""
     region: str = ""
     paid_till: str = ""
+
+
+@dataclass
+class OrderPlan:
+    """Одна позиция каталога заказа.
+
+    `price` — Optional, потому что «тариф» у разных вендоров значит разное: у DO
+    и Hetzner это готовая конфигурация с ценой, а у RuVDS — ПРАЙС-ЛИСТ (цена за
+    ядро и за гигабайт), и итоговой суммы у него нет до сборки конфигурации."""
+
+    id: str
+    name: str
+    specs: str = ""
+    price: Optional[float] = None
+    currency: str = ""
+    period: str = "month"
+    region: str = ""
+
+
+@dataclass
+class OrderOptions:
+    """Каталог для формы заказа.
+
+    `regions` и `images` — списки словарей вида `{"id": …, "name": …}`; адаптер
+    вправе доложить свои ключи (например минимальные требования образа), фронт
+    читает эти два.
+
+    `custom` — описание КОНСТРУКТОРА:
+    `{"cpu": {"min","max","step"}, "ram_gb": {…}, "disk_gb": {…}}` либо None,
+    если у провайдера только фиксированные размеры. `max: None` внутри значит
+    «вендор не публикует верхнюю границу», а не «безлимит»: последнее слово
+    всё равно за валидацией провайдера."""
+
+    plans: list[OrderPlan] = field(default_factory=list)
+    regions: list[dict] = field(default_factory=list)
+    images: list[dict] = field(default_factory=list)
+    custom: Optional[dict] = None
 
 
 def _client() -> httpx.AsyncClient:
@@ -140,3 +179,35 @@ class ProviderAdapter(abc.ABC):
 
     async def payments(self, creds: dict) -> list[dict]:
         return []
+
+    async def order_options(self, creds: dict) -> Optional[OrderOptions]:
+        """Каталог для формы заказа, либо None — «этот вендор заказ не умеет».
+
+        Дефолт None, поэтому адаптеры без заказа менять не нужно."""
+        return None
+
+    async def quote_order(self, creds: dict, spec: dict) -> Optional[dict]:
+        """Стоимость КОНКРЕТНОЙ конфигурации, ничего не создавая: `{"price", "currency"}`.
+
+        Нужен там, где «тариф» — это прайс-лист, а не готовая позиция с ценой
+        (RuVDS: цена считается от ядер/памяти/диска). Без такого расчёта маршрут
+        покупки обязан отказать: подтвердить цену, которой никто не назвал, нельзя.
+        Дефолт None — «вендор предварительный расчёт не умеет»."""
+        return None
+
+    async def create_order(self, creds: dict, spec: dict) -> dict:
+        """⚠️ ТРАТИТ ДЕНЬГИ ПОЛЬЗОВАТЕЛЯ и создаёт реальный сервер.
+
+        `spec` = `{"plan_id", "region", "image", "name", "cpu", "ram_gb",
+        "disk_gb", "period"}` (лишние ключи адаптер вправе читать, отсутствующие
+        — подставить по умолчанию).
+
+        Возврат: `{"ok": bool, "id": str, "name": str, "price": float|None,
+        "currency": str, "error": str}`.
+
+        Правило реализации, обязательное для всех: **ровно один создающий
+        запрос, никаких ретраев**. Таймаут или разорванное соединение НЕ значат,
+        что сервер не создан — повтор рискует оплатить второй сервер, поэтому
+        неопределённость возвращается пользователю текстом, а не «чинится»
+        повтором."""
+        return {"ok": False, "error": "Провайдер не поддерживает заказ"}

@@ -54,14 +54,20 @@ def _write(account_id: Optional[str], items: list[dict]) -> None:
 
 
 def list_items(account_id: Optional[str] = None) -> list[dict]:
-    # Never expose the note body / stored path in the list view.
     out = []
     for it in _read(account_id):
+        if it.get("kind") == "folder":
+            # A folder row's `path` is the folder itself, not a name on disk —
+            # unlike a file's, it is exactly what the tree renders.
+            out.append(dict(it))
+            continue
+        # Never expose the note body / stored path in the list view.
         row = {k: v for k, v in it.items() if k not in ("text", "path")}
-        # Notes written before folders existed have no `folder` key; default it
-        # here so the tree never has to reason about undefined.
+        # Notes written before folders/ordering existed have no `folder`/`order`
+        # key; default them here so the tree never has to reason about undefined.
         if row.get("kind") == "note":
             row.setdefault("folder", "")
+            row.setdefault("order", 0)
             row.setdefault("updated_at", row.get("created_at", 0))
         out.append(row)
     return out
@@ -149,24 +155,107 @@ def graph(account_id: Optional[str] = None) -> dict:
     return out
 
 
+def _move_subtree(items: list[dict], src: str, dst: str) -> int:
+    """Re-parent everything under `src` to `dst` (`dst=""` → the root).
+
+    Notes carry the folder in `folder`, empty-folder rows in `path` — both have to
+    move, or renaming a folder would leave its own row behind under the old name.
+    """
+    moved = 0
+    for it in items:
+        kind = it.get("kind")
+        if kind == "note":
+            cur = it.get("folder") or ""
+        elif kind == "folder":
+            cur = it.get("path") or ""
+        else:
+            continue
+        if cur != src and not cur.startswith(src + "/"):
+            continue
+        new = norm_folder(dst + cur[len(src):]) if dst else norm_folder(cur[len(src):])
+        it["folder" if kind == "note" else "path"] = new
+        moved += 1
+    return moved
+
+
+def _prune_folders(items: list[dict]) -> list[dict]:
+    """Drop folder rows a move left path-less (moved to the root — the folder is
+    gone as a name) or duplicated (a subtree can land on top of an existing one)."""
+    seen: set[str] = set()
+    out = []
+    for it in items:
+        if it.get("kind") == "folder":
+            p = it.get("path") or ""
+            if not p or p in seen:
+                continue
+            seen.add(p)
+        out.append(it)
+    return out
+
+
+def add_folder(path: str, account_id: Optional[str] = None) -> dict:
+    """Create an empty folder as a row of its own.
+
+    A folder is otherwise only implied by the notes inside it, so a freshly
+    created empty one would vanish on the next reload.
+    """
+    p = norm_folder(path)
+    if not p:
+        raise ValueError("Не указана папка")
+    with _LOCK:
+        items = _read(account_id)
+        existing = next((x for x in items if x.get("kind") == "folder" and x.get("path") == p), None)
+        if existing is not None:
+            return dict(existing)
+        if len(items) >= MAX_ITEMS:
+            raise ValueError(f"Достигнут лимит ({MAX_ITEMS})")
+        entry = {"id": uuid.uuid4().hex[:12], "kind": "folder", "path": p,
+                 "created_at": int(time.time())}
+        items.append(entry)
+        _write(account_id, items)
+    return dict(entry)
+
+
 def rename_folder(src: str, dst: str, account_id: Optional[str] = None) -> int:
-    """Move a folder subtree. Returns how many notes moved."""
+    """Move a folder subtree. Returns how many notes and folders moved."""
     src, dst = norm_folder(src), norm_folder(dst)
     if not src:
         raise ValueError("Не указана исходная папка")
-    moved = 0
     with _LOCK:
         items = _read(account_id)
-        for it in items:
-            if it.get("kind") != "note":
-                continue
-            cur = it.get("folder") or ""
-            if cur == src or cur.startswith(src + "/"):
-                it["folder"] = norm_folder(dst + cur[len(src):]) if dst else norm_folder(cur[len(src):])
-                moved += 1
+        moved = _move_subtree(items, src, dst)
         if moved:
-            _write(account_id, items)
+            _write(account_id, _prune_folders(items))
     return moved
+
+
+def reorder(rows: list[dict], account_id: Optional[str] = None) -> int:
+    """Apply `{id, folder, order}` to notes; returns how many were applied.
+
+    One entry point serves both dragging a note into another folder and changing
+    its position — the frontend knows both at drop time. `folder=None` leaves the
+    note where it is; an id that no longer exists is skipped rather than failing
+    the whole move (it may have been deleted in another tab).
+    """
+    changed = 0
+    with _LOCK:
+        items = _read(account_id)
+        by_id = {x["id"]: x for x in items if x.get("kind") == "note" and x.get("id")}
+        for row in rows or []:
+            it = by_id.get(str(row.get("id") or ""))
+            if it is None:
+                continue
+            folder = row.get("folder")
+            if folder is not None:
+                it["folder"] = norm_folder(folder)
+            try:
+                it["order"] = int(row.get("order") or 0)
+            except (TypeError, ValueError):
+                it["order"] = 0
+            changed += 1
+        if changed:
+            _write(account_id, items)
+    return changed
 
 
 def add_file(name: str, content: bytes, mime: str, account_id: Optional[str] = None) -> dict:
@@ -197,7 +286,7 @@ def add_note(name: str, text: str, folder: str = "", account_id: Optional[str] =
             raise ValueError(f"Достигнут лимит ({MAX_ITEMS})")
         now = int(time.time())
         entry = {"id": uuid.uuid4().hex[:12], "kind": "note", "name": name or "Заметка",
-                 "folder": norm_folder(folder), "text": text or "",
+                 "folder": norm_folder(folder), "order": 0, "text": text or "",
                  "created_at": now, "updated_at": now}
         items.append(entry)
         _write(account_id, items)
@@ -254,5 +343,12 @@ def delete_item(item_id: str, account_id: Optional[str] = None) -> bool:
                 (_dir(account_id) / "files" / it["path"]).unlink(missing_ok=True)
             except Exception:
                 pass
-        _write(account_id, [x for x in items if x.get("id") != item_id])
+        if it.get("kind") == "folder":
+            # Deleting a folder must not take its contents with it — silently
+            # dropping someone's notes is not an option, so the subtree is lifted
+            # into the parent folder instead.
+            path = it.get("path") or ""
+            _move_subtree(items, path, path.rsplit("/", 1)[0] if "/" in path else "")
+        rest = [x for x in items if x.get("id") != item_id]
+        _write(account_id, _prune_folders(rest))
     return True

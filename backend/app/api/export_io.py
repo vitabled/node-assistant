@@ -20,7 +20,20 @@ class ExportBody(BaseModel):
 
 @router.get("/export/stores")
 async def export_stores():
-    return {"stores": export_service.available_stores()}
+    return {"stores": export_service.available_stores(),
+            "settings_sections": export_service.available_sections()}
+
+
+@router.post("/import/peek")
+async def import_peek(file: UploadFile = File(...)):
+    """Что внутри архива — до записи на диск, чтобы выбирать осознанно."""
+    blob = await file.read()
+    try:
+        return export_service.peek_archive(blob)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception:
+        raise HTTPException(422, "Некорректный архив.")
 
 
 @router.post("/export")
@@ -38,12 +51,16 @@ async def export_data(body: ExportBody):
 
 
 @router.post("/import")
-async def import_data(file: UploadFile = File(...), confirm: bool = Form(False)):
+async def import_data(file: UploadFile = File(...), confirm: bool = Form(False),
+                      stores: str = Form("")):
+    """`stores` — список через запятую (в т.ч. `settings:<секция>`); пусто = всё."""
     if not confirm:
         raise HTTPException(400, "Импорт перезаписывает данные аккаунта — требуется confirm=true.")
     blob = await file.read()
+    picked = [x.strip() for x in stores.split(",") if x.strip()] or None
     try:
-        return export_service.restore_archive(accounts.current_account.get() or "", blob)
+        return export_service.restore_archive(
+            accounts.current_account.get() or "", blob, picked)
     except ValueError as e:
         raise HTTPException(422, str(e))
     except Exception:

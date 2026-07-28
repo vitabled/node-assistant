@@ -1,0 +1,22 @@
+{
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "amount": 3000,
+        "currency": "rub",
+        "type": "topup",
+        "createdAt": 1785974400000,
+        "description": "Пополнение картой"
+      },
+      {
+        "id": 2,
+        "amount": -890.5,
+        "currency": "rub",
+        "type": "payment",
+        "createdAt": "2026-07-05T10:00:00Z",
+        "description": "Оплата fra-node-1"
+      }
+    ]
+  }
+}

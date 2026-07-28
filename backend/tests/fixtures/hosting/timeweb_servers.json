@@ -1,0 +1,34 @@
+{
+  "servers": [
+    {
+      "id": 3312,
+      "name": "spb-relay",
+      "status": "on",
+      "location": "ru-1",
+      "cpu": 2,
+      "ram": 4096,
+      "networks": [
+        {
+          "type": "local",
+          "ips": [{"type": "ipv4", "ip": "10.0.0.5", "is_main": false}]
+        },
+        {
+          "type": "public",
+          "ips": [
+            {"type": "ipv4", "ip": "203.0.113.90", "is_main": false},
+            {"type": "ipv4", "ip": "203.0.113.91", "is_main": true},
+            {"type": "ipv6", "ip": "2001:db8::1", "is_main": false}
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3313,
+      "name": "",
+      "status": "off",
+      "location": "nl-1",
+      "networks": []
+    }
+  ],
+  "meta": {"total": 2}
+}

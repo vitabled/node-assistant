@@ -23,8 +23,17 @@ _FIX = pathlib.Path(__file__).parent / "fixtures" / "hosting"
 # All eight kinds the registry is supposed to publish; a module that fails to
 # import is allowed to be absent (that is the point of the guard), so the tests
 # assert a subset — but the three dependency-free adapters must always be there.
+# Каждый kind, который реестр вправе опубликовать. Модуль, который не
+# импортировался, может отсутствовать (ради этого и гард), поэтому тесты
+# проверяют ПОДмножество — но лишнего kind появиться не должно.
 _ALL_KINDS = {"ruvds", "beget", "veesp", "regru_cloudvps", "regru_account",
-              "yandex", "openstack", "oracle"}
+              "yandex", "openstack", "oracle",
+              # Волна биллинг-адаптеров.
+              "aeza", "timeweb", "vdsina", "netangels",
+              "digitalocean", "hetzner", "selectel",
+              "ionos", "ovhcloud", "infomaniak", "latitude",
+              "aws", "alibaba", "cloudru",
+              "ishosting", "hostkey", "billmanager", "servers_com"}
 
 
 def _fx(name: str):
@@ -254,7 +263,8 @@ def test_registry_schemas_shape():
     for s in schemas:
         assert s["title"]
         assert s["caps"] == sorted(s["caps"])
-        assert set(s["caps"]) <= {"balance", "services", "payments"}
+        # `order` — возможность заказа ресурса (волна покупки).
+        assert set(s["caps"]) <= {"balance", "services", "payments", "order"}
         assert all(set(f) == {"key", "label", "kind", "required"} for f in s["fields"])
         assert all(f["kind"] in ("text", "password", "textarea") for f in s["fields"])
     by_kind = {s["kind"]: s for s in schemas}

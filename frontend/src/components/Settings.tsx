@@ -15,6 +15,7 @@ import { CheckerRegistry } from "./monitoring/CheckerRegistry";
 import { TestServers } from "./settings/TestServers";
 import { McpTab } from "./settings/McpTab";
 import { AiSettingsTab } from "./settings/AiSettingsTab";
+import { CliProxyAuth } from "./settings/CliProxyAuth";
 import { InfraTab } from "./settings/InfraTab";
 import { ApiTokensTab } from "./settings/ApiTokensTab";
 import { DataTransfer } from "./settings/DataTransfer";
@@ -782,7 +783,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "mcp" | "assistant" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "cloudflare" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "ai" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "cloudflare" | "theme";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -793,8 +794,7 @@ export function Settings() {
     { id: "optimization", label: "Оптимизация ОС" },
     { id: "monitoring",  label: "Мониторинг" },
     { id: "testservers", label: "Сервера для тестирования" },
-    { id: "mcp",         label: "MCP" },
-    { id: "assistant",   label: "Ассистент" },
+    { id: "ai",          label: "AI" },
     { id: "tokens",      label: "Токены API" },
     { id: "transfer",    label: "Экспорт/импорт" },
     { id: "updates",     label: "Обновления" },
@@ -826,8 +826,17 @@ export function Settings() {
         {sub === "optimization" && <OptimizationTab />}
         {sub === "monitoring"   && <MonitoringTab />}
         {sub === "testservers"  && <TestServersTab />}
-        {sub === "mcp"          && <div className="flex flex-col gap-4 max-w-2xl"><McpTab /></div>}
-        {sub === "assistant"    && <div className="flex flex-col gap-4 max-w-2xl"><AiSettingsTab /></div>}
+        {/* Ассистент, вход в провайдеров и MCP — одна вкладка: это части одной
+            подсистемы, и раньше настройка одного требовала прыгать в другую. */}
+        {sub === "ai" && (
+          <div className="flex flex-col gap-4 max-w-2xl">
+            <AiSettingsTab />
+            <div style={{ height: 1, background: "var(--line-soft)" }} />
+            <CliProxyAuth />
+            <div style={{ height: 1, background: "var(--line-soft)" }} />
+            <McpTab />
+          </div>
+        )}
         {sub === "tokens"       && <ApiTokensTab />}
         {sub === "transfer"     && <DataTransfer />}
         {sub === "updates"      && <UpdatesTab />}

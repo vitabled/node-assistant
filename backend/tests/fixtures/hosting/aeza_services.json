@@ -1,0 +1,27 @@
+{
+  "data": {
+    "total": 2,
+    "items": [
+      {
+        "id": 90210,
+        "name": "  fra-node-1  ",
+        "status": "active",
+        "ip": "203.0.113.42",
+        "location": "fra",
+        "summaryPrice": 890.0,
+        "currency": "rub",
+        "paymentTerm": "month",
+        "expiresAt": 1788220800,
+        "product": {"name": "Standard", "type": "vps"}
+      },
+      {
+        "id": 90211,
+        "status": "suspended",
+        "ips": [{"ip": "198.51.100.7"}],
+        "paymentTerm": "Год",
+        "product": {"name": "Storage"}
+      },
+      "мусорная строка"
+    ]
+  }
+}

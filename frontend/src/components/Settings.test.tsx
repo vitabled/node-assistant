@@ -60,7 +60,7 @@ describe("Settings › ThemeTab", () => {
 describe("Settings › tab bar", () => {
   const TABS = [
     "Remnawave", "Деплой (умолчания)", "Оптимизация ОС", "Мониторинг",
-    "Сервера для тестирования", "MCP", "Ассистент", "Токены API",
+    "Сервера для тестирования", "AI", "Токены API",
     "Экспорт/импорт", "Инфраструктура", "Тема",
   ];
 
@@ -75,6 +75,15 @@ describe("Settings › tab bar", () => {
   it("renders every tab", async () => {
     render(<Settings />);
     for (const label of TABS) expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it("ассистент, вход в провайдеров и MCP живут на одной вкладке", async () => {
+    // Раньше это были две вкладки, и настройка одного требовала прыгать в другое.
+    render(<Settings />);
+    fireEvent.click(screen.getByText("AI"));
+    await waitFor(() => expect(screen.getByText(/Вход через CLIProxyAPI/)).toBeInTheDocument());
+    expect(screen.queryByText("Ассистент")).not.toBeInTheDocument();
+    expect(screen.queryByText("MCP")).not.toBeInTheDocument();
   });
 
   it("wraps onto multiple rows instead of scrolling horizontally", () => {

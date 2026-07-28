@@ -13,9 +13,10 @@ def _auth():
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
-def _export(h) -> bytes:
-    r = client.post("/api/export", headers=h, json={})
-    assert r.status_code == 200
+def _export(h, **body) -> bytes:
+    """`_export(h)` — весь аккаунт; `_export(h, stores=[...])` — выбранное."""
+    r = client.post("/api/export", headers=h, json=body)
+    assert r.status_code == 200, r.text
     return r.content
 
 
@@ -108,3 +109,60 @@ def test_isolation():
     # importing into B did not touch A
     assert len(client.get("/api/hosts", headers=a).json()) == 1
     assert len(client.get("/api/hosts", headers=b).json()) == 1
+
+
+# ── Выборочный экспорт/импорт ─────────────────────────────────
+def _import_sel(h, blob, stores=""):
+    return client.post("/api/import", headers=h,
+                       files={"file": ("e.tar.gz", blob, "application/gzip")},
+                       data={"confirm": "true", "stores": stores})
+
+
+def test_export_only_selected_stores():
+    a = _auth()
+    client.post("/api/hostings", headers=a, json={"name": "H1"})
+    client.post("/api/hosts", headers=a, json={"remark": "R1", "address": "n.example.com", "port": 443})
+
+    blob = _export(a, stores=["hostings.json"])
+    peek = client.post("/api/import/peek", headers=a,
+                       files={"file": ("e.tar.gz", blob, "application/gzip")}).json()
+    assert peek["stores"] == ["hostings.json"], "лишние сторы в архив не попали"
+
+
+def test_export_only_one_settings_section():
+    """«Только HAProxy» не должен утащить остальную конфигурацию аккаунта."""
+    a = _auth()
+    client.post("/api/settings/remnawave", headers=a,
+                json={"panel_url": "https://p", "api_token": "T"})
+
+    blob = _export(a, stores=["settings:haproxy"])
+    peek = client.post("/api/import/peek", headers=a,
+                       files={"file": ("e.tar.gz", blob, "application/gzip")}).json()
+    assert peek["stores"] == ["settings.json"]
+    assert peek["settings_sections"] == ["haproxy"], "секция ровно одна"
+
+
+def test_import_applies_only_selected_stores():
+    a = _auth()
+    client.post("/api/hostings", headers=a, json={"name": "Только я"})
+    client.post("/api/hosts", headers=a, json={"remark": "Не я", "address": "n.example.com", "port": 443})
+    blob = _export(a)   # полный архив
+
+    b = _auth()
+    rep = _import_sel(b, blob, stores="hostings.json")
+    assert rep.status_code == 200 and list(rep.json()["applied"]) == ["hostings.json"]
+    assert len(client.get("/api/hostings", headers=b).json()) == 1
+    assert client.get("/api/hosts", headers=b).json() == [], "невыбранный стор не применяется"
+
+
+def test_selected_section_does_not_touch_the_rest_of_settings():
+    a = _auth()
+    client.post("/api/settings/deploy-defaults", headers=a, json={"ssh_user": "from-source"})
+    blob = _export(a)
+
+    b = _auth()
+    client.post("/api/settings/deploy-defaults", headers=b, json={"ssh_user": "target-value"})
+    _import_sel(b, blob, stores="settings:appearance")
+
+    dd = client.get("/api/settings", headers=b).json()["deploy_defaults"]
+    assert dd["ssh_user"] == "target-value", "невыбранная секция настроек не тронута"

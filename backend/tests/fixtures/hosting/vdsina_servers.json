@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "status_msg": "Ok",
+  "data": [
+    {
+      "id": 8801,
+      "name": "ams-edge",
+      "status": "active",
+      "created": "2026-01-05 10:00:00",
+      "end": "2026-08-05 10:00:00",
+      "ip": [{"ip": "203.0.113.200", "netmask": 24}],
+      "datacenter": {"id": 2, "name": "Амстердам", "country": "NL"},
+      "server-plan": {"id": 11, "name": "VDS-4", "cost": 550, "period": "month"}
+    },
+    {
+      "id": 8802,
+      "name": "",
+      "status": "blocked",
+      "ip": [],
+      "datacenter": {"id": 3, "name": "Москва"},
+      "server-plan": {}
+    },
+    "мусор"
+  ]
+}

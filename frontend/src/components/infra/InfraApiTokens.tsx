@@ -5,6 +5,11 @@
 // полей строится из `GET /api/infra-billing/adapters` — у адаптеров от 2 до 5
 // полей, и новый адаптер на бэкенде появляется здесь без правок фронтенда.
 //
+// Но адаптер есть не у каждого хостинга, которым пользуются: прежний зашитый
+// список (Selectel, Hetzner, DigitalOcean, …) остался второй группой селектора.
+// Такая запись хранится там же, в Хранилище, просто её никто не синхронизирует —
+// одно поле-секрет вместо схемы полей.
+//
 // Записи старого формата (`/api/infra-billing/api-tokens`) показываются отдельной
 // секцией только на чтение и удаление: заводить их заново незачем.
 //
@@ -27,9 +32,26 @@ const CAP_LABELS: Record<string, string> = {
 const capsText = (caps: string[]) =>
   caps.map(c => CAP_LABELS[c] ?? c).join(", ") || "—";
 
-/** Название адаптера по его kind; неизвестный kind показываем как есть. */
-const adapterTitle = (adapters: ProviderAdapterInfo[], kind: string) =>
-  adapters.find(a => a.kind === kind)?.title ?? (kind || "—");
+/** Хостинги без адаптера — прежний зашитый список экрана «API токены». */
+const LEGACY_KINDS: { v: string; l: string }[] = [
+  { v: "selectel", l: "Selectel" },
+  { v: "hetzner", l: "Hetzner" },
+  { v: "digitalocean", l: "DigitalOcean" },
+  { v: "cloudflare", l: "Cloudflare" },
+  { v: "datacheap", l: "Datacheap" },
+  { v: "generic", l: "Прочее" },
+];
+const LEGACY_LABELS: Record<string, string> =
+  Object.fromEntries(LEGACY_KINDS.map(k => [k.v, k.l] as const));
+
+/** Схемы полей у legacy-хостинга нет — храним один секрет под ключом `token`. */
+const LEGACY_FIELDS: ProviderAdapterInfo["fields"] = [
+  { key: "token", label: "Токен/ключ", kind: "password", required: true },
+];
+
+/** Название хостинга по его kind; неизвестный kind показываем как есть. */
+const kindTitle = (adapters: ProviderAdapterInfo[], kind: string) =>
+  adapters.find(a => a.kind === kind)?.title ?? LEGACY_LABELS[kind] ?? (kind || "—");
 
 export function InfraApiTokens() {
   const [entries, setEntries] = useState<VaultEntry[]>([]);
@@ -58,6 +80,10 @@ export function InfraApiTokens() {
   useEffect(() => { load(); }, [load]);
 
   const rows = useMemo(() => entries.filter(e => e.kind === "provider_creds"), [entries]);
+  // Kind-ы уже заведённых записей — чтобы селектор не потерял вариант, которым
+  // пользователь пользуется, даже если такого адаптера в сборке нет.
+  const usedKinds = useMemo(
+    () => [...new Set(rows.map(r => r.resource).filter(Boolean))], [rows]);
 
   const removeEntry = async (e: VaultEntry) => {
     const key = `v:${e.id}`;
@@ -86,7 +112,7 @@ export function InfraApiTokens() {
         subtitle="Креды провайдеров в Хранилище — их читает сервер при синхронизации баланса"
         actions={<>
           <button onClick={load} className="iconbtn" title="Обновить"><RefreshCw size={13} /></button>
-          <button onClick={() => setModal({})} className="btn btn-primary" disabled={adapters.length === 0}>
+          <button onClick={() => setModal({})} className="btn btn-primary">
             <Plus size={13} /> Добавить
           </button>
         </>} />
@@ -102,8 +128,8 @@ export function InfraApiTokens() {
 
       {adapters.length === 0 && !loading && (
         <p className="mb-4 text-xs text-[var(--t-low)]">
-          Список адаптеров недоступен — сервер не отдал <code>/adapters</code>. Новую запись
-          завести нельзя, пока он не ответит.
+          Список адаптеров недоступен — сервер не отдал <code>/adapters</code>. Пока он не
+          ответит, в селекторе только хостинги без API-синхронизации.
         </p>
       )}
 
@@ -131,7 +157,14 @@ export function InfraApiTokens() {
                   {e.name}
                   {e.note && <p className="text-[11px] text-[var(--t-faint)] mt-0.5">{e.note}</p>}
                 </td>
-                <td className="px-4 py-2.5 text-[var(--t-mid)]">{adapterTitle(adapters, e.resource)}</td>
+                <td className="px-4 py-2.5 text-[var(--t-mid)]">
+                  {kindTitle(adapters, e.resource)}
+                  {/* Пустой реестр адаптеров = сбой их загрузки, а не «всё legacy» —
+                      иначе пометка врала бы на каждой строке. */}
+                  {adapters.length > 0 && !adapters.some(a => a.kind === e.resource) && (
+                    <p className="text-[11px] text-[var(--t-faint)] mt-0.5">без API-синхронизации</p>
+                  )}
+                </td>
                 <td className="px-4 py-2.5 text-xs">
                   {e.broken ? (
                     <span className="text-[var(--err)]">не расшифровывается — сменился ENCRYPTION_KEY</span>
@@ -214,6 +247,7 @@ export function InfraApiTokens() {
         <CredsModal
           edit={modal.edit}
           adapters={adapters}
+          usedKinds={usedKinds}
           onClose={() => setModal(null)}
           onSaved={() => { setModal(null); load(); }}
         />
@@ -222,31 +256,41 @@ export function InfraApiTokens() {
   );
 }
 
-// ── Модалка: адаптер + его динамические поля ──────────────────
-function CredsModal({ edit, adapters, onClose, onSaved }: {
+// ── Модалка: хостинг + его поля ───────────────────────────────
+function CredsModal({ edit, adapters, usedKinds, onClose, onSaved }: {
   edit?: VaultEntry;
   adapters: ProviderAdapterInfo[];
+  usedKinds: string[];
   onClose: () => void;
   onSaved: () => void;
 }) {
-  // `resource` записи = kind адаптера: так видно, к какому API она подходит.
-  const [kind, setKind] = useState(edit?.resource ?? adapters[0]?.kind ?? "");
+  // `resource` записи = kind хостинга: так видно, к какому API она подходит.
+  const [kind, setKind] = useState(edit?.resource ?? adapters[0]?.kind ?? LEGACY_KINDS[0].v);
   const [name, setName] = useState(edit?.name ?? "");
   const [fields, setFields] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   const adapter = adapters.find(a => a.kind === kind);
-  // Запись могла быть заведена под адаптер, которого в этой сборке уже нет —
-  // не теряем её значение из селектора, иначе редактирование молча его подменит.
-  const options = useMemo(() => {
-    const known = adapters.map(a => ({ v: a.kind, l: a.title }));
-    return kind && !adapters.some(a => a.kind === kind)
-      ? [{ v: kind, l: `${kind} (адаптер недоступен)` }, ...known]
-      : known;
-  }, [adapters, kind]);
+  const adapterOpts = useMemo(
+    () => adapters.map(a => ({ v: a.kind, l: a.title })), [adapters]);
+  // Ко второй группе добавляем kind-ы уже сохранённых записей: запись могла быть
+  // заведена под адаптер, которого в этой сборке уже нет, и без этого её значение
+  // выпало бы из селектора — редактирование молча подменило бы хостинг.
+  const legacyOpts = useMemo(() => {
+    const known = new Set(adapters.map(a => a.kind));
+    const extra = usedKinds
+      .filter(k => !known.has(k) && !LEGACY_LABELS[k])
+      .map(k => ({ v: k, l: `${k} (адаптер недоступен)` }));
+    // Провайдер, у которого ПОЯВИЛСЯ адаптер, уходит из этой группы сам —
+    // иначе он двоился бы в селекторе (и в «с синхронизацией», и здесь).
+    return [...LEGACY_KINDS.filter(k => !known.has(k.v)), ...extra];
+  }, [adapters, usedKinds]);
+
+  // Нет адаптера — значит хостинг из второй группы: одно поле-секрет.
+  const fieldDefs = adapter?.fields ?? LEGACY_FIELDS;
 
   const filled = Object.entries(fields).filter(([, v]) => v.trim() !== "");
-  const missing = (adapter?.fields ?? []).filter(f => f.required && !(fields[f.key] ?? "").trim());
+  const missing = fieldDefs.filter(f => f.required && !(fields[f.key] ?? "").trim());
   // При редактировании пустые поля секрета = «не менять», поэтому required
   // блокирует только создание.
   const canSave = name.trim() !== "" && kind !== "" && (edit ? true : missing.length === 0);
@@ -293,21 +337,32 @@ function CredsModal({ edit, adapters, onClose, onSaved }: {
         <label className="label">Хостинг</label>
         <select value={kind} className="selectbox"
           onChange={e => { setKind(e.target.value); setFields({}); }}>
-          {options.length === 0 && <option value="">— адаптеры недоступны —</option>}
-          {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+          {adapterOpts.length > 0 && (
+            <optgroup label="С API-синхронизацией">
+              {adapterOpts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+            </optgroup>
+          )}
+          <optgroup label="Без API (только хранение)">
+            {legacyOpts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+          </optgroup>
         </select>
-        {adapter && (
+        {adapter ? (
           <p className="hint">
             Умеет: {capsText(adapter.caps)}
             {!adapter.caps.includes("balance") && " — баланс этот API не отдаёт, вводите вручную"}
+          </p>
+        ) : (
+          <p className="hint">
+            К API этого хостинга мы не ходим: запись просто хранится в Хранилище,
+            баланс и услуги у провайдера заполняются вручную.
           </p>
         )}
       </div>
 
       <Field label="Название связки" value={name} onChange={setName}
-        placeholder={adapter ? `${adapter.title} — прод` : "прод"} />
+        placeholder={`${kindTitle(adapters, kind)} — прод`} />
 
-      {(adapter?.fields ?? []).map(f => (
+      {fieldDefs.map(f => (
         <SecretField
           key={`${kind}:${f.key}`}
           label={f.label + (f.required && !edit ? " *" : "")}
