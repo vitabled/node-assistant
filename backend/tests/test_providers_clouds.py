@@ -152,7 +152,9 @@ def test_aws_payments_sum_the_month_and_there_is_no_balance(monkeypatch):
     assert pays[0]["ts"] == "2026-07-01"
 
     # Баланса у AWS нет, а EC2 — другая служба: адаптер это не заявляет и не врёт.
-    assert a.CAPS == {"payments"}
+    # Утверждаем СМЫСЛ: баланса у AWS нет. Точный набор возможностей растёт
+    # (добавился заказ через EC2), и снимок ломался бы на каждом расширении.
+    assert "balance" not in a.CAPS
     assert asyncio.run(a.balance(creds)) is None
     assert asyncio.run(a.services(creds)) == []
 

@@ -101,6 +101,19 @@ export const libraryApi = {
     return res.json();
   },
 
+  /** Текст файла для просмотра в панели.
+   *
+   *  Сервер отдаёт файлы библиотеки ТОЛЬКО как вложение (`Content-Disposition:
+   *  attachment`) — открыть ссылку в новой вкладке нельзя by design: чужой HTML,
+   *  отрисованный на нашем origin, это хранимая XSS. Поэтому текст забираем
+   *  запросом и показываем сами: HTML — в песочнице (`sandbox=""`), остальное —
+   *  как текст. */
+  async text(item: LibItem): Promise<string> {
+    const res = await fetch(`/api/library/files/${item.id}`);
+    if (!res.ok) throw new Error("Не удалось открыть файл");
+    return res.text();
+  },
+
   /** Library files are served as attachments — fetch, then hand the blob over. */
   async download(item: LibItem): Promise<void> {
     const res = await fetch(`/api/library/files/${item.id}`);

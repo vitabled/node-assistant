@@ -201,3 +201,30 @@ def test_price_comes_from_a_quote_when_the_plan_has_none(monkeypatch):
                      json=_order_body(expected_price=777.0, expected_currency="RUB"))
     assert ok.status_code == 200, ok.text
     assert created.get("name") == "web-1", "заказ ушёл в адаптер только после сверки цены"
+
+
+def test_unknown_price_can_be_acknowledged_explicitly(adapter):
+    """Вендор без цены в API (у OpenStack/Nova у flavor'а стоимости нет вовсе):
+    покупка возможна, но ТОЛЬКО с отдельной галочкой. Без неё — отказ, как раньше."""
+    h, aid = _account()
+    p = _provider(h, aid)
+    adapter.price = None
+
+    ok = client.post(f"/api/infra-billing/providers/{p}/order", headers=h,
+                     json=_order_body(expected_price=None,
+                                      acknowledge_unknown_price=True))
+    assert ok.status_code == 200, ok.text
+    assert len(adapter.orders) == 1, "заказ должен уйти вендору"
+
+
+def test_acknowledgement_does_not_disable_the_price_check(adapter):
+    """Галочка «цена неизвестна» НЕ отключает сверку там, где цена есть."""
+    h, aid = _account()
+    p = _provider(h, aid)
+    adapter.price = 9.99
+
+    r = client.post(f"/api/infra-billing/providers/{p}/order", headers=h,
+                    json=_order_body(expected_price=7.0,
+                                     acknowledge_unknown_price=True))
+    assert r.status_code == 409
+    assert adapter.orders == [], "по устаревшей цене заказ не уходит"

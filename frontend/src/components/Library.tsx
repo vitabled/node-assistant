@@ -12,6 +12,7 @@ import {
 import { NoteTree, notesOf, foldersOf } from "./library/NoteTree";
 import { NoteEditor } from "./library/NoteEditor";
 import { Backlinks } from "./library/Backlinks";
+import { FileViewer } from "./library/FileViewer";
 import type { NoteRef } from "./library/markdown";
 
 // Wave-5 Plan C (scoped) — «Библиотека»: files + markdown notes, now in the
@@ -25,6 +26,7 @@ export function Library() {
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [filesOpen, setFilesOpen] = useState(true);
+  const [viewing, setViewing] = useState<LibItem | null>(null);
   const [narrow, setNarrow] = useState(false);
   const [treeOpen, setTreeOpen] = useState(false);
 
@@ -50,6 +52,7 @@ export function Library() {
 
   const openNote = useCallback(async (id: string) => {
     try {
+      setViewing(null);   // правая область показывает что-то одно
       setNote(await libraryApi.getNote(id));
       setTreeOpen(false);
     } catch (e) {
@@ -235,18 +238,25 @@ export function Library() {
             {files.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
                 {files.map(it => (
-                  <div key={it.id} style={{
-                    display: "flex", alignItems: "center", gap: 6, padding: "3px 6px",
-                    borderRadius: "var(--r-sm)", minWidth: 0,
-                  }}>
+                  <div key={it.id}
+                    role="button" tabIndex={0}
+                    onClick={() => { setNote(null); setViewing(it); }}
+                    onKeyDown={e => { if (e.key === "Enter") { setNote(null); setViewing(it); } }}
+                    title="Открыть"
+                    className={viewing?.id === it.id ? "active" : undefined}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6, padding: "3px 6px",
+                      borderRadius: "var(--r-sm)", minWidth: 0, cursor: "pointer",
+                      background: viewing?.id === it.id ? "var(--bg3)" : undefined,
+                    }}>
                     <FileText size={12} style={{ color: "var(--t-low)", flex: "none" }} />
                     <span className="trunc" style={{ flex: 1, fontSize: 12.5, color: "var(--t-mid)" }} title={it.name}>{it.name}</span>
                     <span className="micro" style={{ flex: "none" }}>{it.size == null ? "" : fmtSize(it.size)}</span>
                     <button className="iconbtn" title="Скачать" style={{ width: 22, height: 22 }}
-                      onClick={() => { void download(it); }}><Download size={12} /></button>
+                      onClick={e => { e.stopPropagation(); void download(it); }}><Download size={12} /></button>
                     <button className="iconbtn" title={confirmDel === it.id ? "Нажмите ещё раз" : "Удалить"}
                       style={{ width: 22, height: 22, color: confirmDel === it.id ? "var(--err)" : undefined }}
-                      onClick={() => { void delFile(it.id); }}><Trash2 size={12} /></button>
+                      onClick={e => { e.stopPropagation(); void delFile(it.id); }}><Trash2 size={12} /></button>
                   </div>
                 ))}
               </div>
@@ -302,7 +312,10 @@ export function Library() {
           display: "flex", flexDirection: "column", gap: 10, minWidth: 0,
           minHeight: narrow ? 460 : 0,
         }}>
-          {note ? (
+          {viewing ? (
+            <FileViewer item={viewing} onClose={() => setViewing(null)}
+              onDownload={() => { void download(viewing); }} />
+          ) : note ? (
             <>
               {/* Keyed by id only: the folder now travels as a prop the editor
                   re-reads on every save, so a move must NOT remount (a remount

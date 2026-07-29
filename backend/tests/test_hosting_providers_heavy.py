@@ -578,6 +578,8 @@ def test_regru_cloudvps_has_no_balance():
     adapter = regru.RegruCloudVps()
     _deny(adapter)
     assert asyncio.run(adapter.balance({"token": "cv-token"})) is None
-    assert adapter.CAPS == {"services"}
+    # Проверяем СМЫСЛ («баланса у CloudVPS нет»), а не набор целиком: адаптер
+    # с тех пор законно получил "order", и равенство ломалось на этом.
+    assert "balance" not in adapter.CAPS
     assert regru.RegruAccount().CAPS == {"balance"}
     assert [a.KIND for a in regru.ADAPTERS] == ["regru_cloudvps", "regru_account"]
