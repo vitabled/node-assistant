@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import json
 
-from app.services import accounts, ai_agent, storage
+from app.services import accounts, ai_agent, ai_tools, ai_web, net_guard, storage
 
 router = APIRouter(prefix="/api/ai")
 
@@ -37,6 +37,12 @@ class AiConfigBody(BaseModel):
     active_preset_id: str = Field("", max_length=64)  # Plan I; "" = default preset
     gateway: str = "none"  # Plan J; none | cliproxy
     use_mcp: bool = False  # Wave-7 Plan E Ф2: borrow the MCP server's tools
+    # Веб-доступ. `web_api_key` — write-only, как и ключ провайдера.
+    web_enabled: bool = True
+    web_provider: str = "duckduckgo"
+    web_api_key: str | None = None
+    web_base_url: str = Field("", max_length=300)
+    web_max_results: int = Field(5, ge=1, le=ai_web.MAX_RESULTS)
 
     @field_validator("provider")
     @classmethod
@@ -52,6 +58,24 @@ class AiConfigBody(BaseModel):
             raise ValueError(f"gateway должен быть одним из {_GATEWAYS}")
         return v
 
+    @field_validator("web_provider")
+    @classmethod
+    def _web_provider(cls, v: str) -> str:
+        if v not in ai_web.WEB_PROVIDERS:
+            raise ValueError(f"web_provider должен быть одним из {ai_web.WEB_PROVIDERS}")
+        return v
+
+    @field_validator("web_base_url")
+    @classmethod
+    def _web_base_url(cls, v: str) -> str:
+        # Адрес своего SearXNG задаёт пользователь, а ходит по нему НАШ сервер
+        # изнутри сети — гард обязателен и здесь, и при каждом запросе (то же
+        # правило, что у `openstack.auth_url` и реестра чекеров).
+        v = (v or "").strip()
+        if v and not net_guard.is_safe_url(v):
+            raise ValueError("нужен http(s) на публичный хост (защита от SSRF)")
+        return v
+
 
 class Attachment(BaseModel):
     """Вложение чата. Файлы НЕ персистятся: они относятся к одному вопросу, а не
@@ -64,10 +88,19 @@ class Attachment(BaseModel):
     data_b64: str = Field("", max_length=6_000_000)
 
 
+class HistoryMsg(BaseModel):
+    """Реплика прошлого хода. Историю ведёт клиент: сервер переписку не хранит,
+    поэтому ей нечего утекать и нечего чистить по расписанию."""
+    role: str = Field("user", max_length=16)
+    content: str = Field("", max_length=ai_agent.MAX_HISTORY_CHARS)
+
+
 class ChatBody(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8000)
     attachments: list[Attachment] = Field(default_factory=list,
                                           max_length=ai_agent.MAX_ATTACHMENTS)
+    history: list[HistoryMsg] = Field(
+        default_factory=list, max_length=ai_agent.MAX_HISTORY_MESSAGES * 2)
 
 
 def _public(account_id: str | None = None) -> dict:
@@ -82,6 +115,12 @@ def _public(account_id: str | None = None) -> dict:
         "active_preset_id": cfg.active_preset_id,
         "gateway": cfg.gateway,
         "use_mcp": cfg.use_mcp,
+        "web_enabled": cfg.web_enabled,
+        "web_provider": cfg.web_provider,
+        "web_base_url": cfg.web_base_url,
+        "web_max_results": cfg.web_max_results,
+        "web_needs_key": ai_web.needs_key(cfg.web_provider),
+        "has_web_key": bool(cfg.web_api_key_enc),  # never the key itself
         "has_key": bool(cfg.api_key_enc),  # never the key itself
         # Есть ли ЧЕМ авторизоваться: через CLIProxyAPI ключ провайдера не нужен,
         # доступ даёт OAuth-аккаунт внутри шлюза. Фронт гейтит композер по этому
@@ -110,10 +149,16 @@ async def save_config(body: AiConfigBody) -> dict:
         "active_preset_id": body.active_preset_id.strip(),
         "gateway": body.gateway,
         "use_mcp": body.use_mcp,
+        "web_enabled": body.web_enabled,
+        "web_provider": body.web_provider,
+        "web_base_url": body.web_base_url.strip(),
+        "web_max_results": body.web_max_results,
     }
     # Only overwrite the key when a fresh non-blank one is supplied.
     if body.api_key and body.api_key.strip():
         ai_cfg["api_key_enc"] = ai_agent.encrypt_key(body.api_key.strip())
+    if body.web_api_key and body.web_api_key.strip():
+        ai_cfg["web_api_key_enc"] = ai_agent.encrypt_key(body.web_api_key.strip())
     data["ai"] = ai_cfg
     storage.save_settings(data)
     return {"ok": True, **_public()}
@@ -144,6 +189,7 @@ async def chat(body: ChatBody) -> StreamingResponse:
         async for event in ai_agent.run_agent(
             body.prompt, cfg, account_id,
             attachments=[a.model_dump() for a in body.attachments],
+            history=[m.model_dump() for m in body.history],
         ):
             yield json.dumps(event, ensure_ascii=False) + "\n"
 
@@ -159,26 +205,34 @@ async def tools_status() -> dict:
     built-in only / built-in + Remnawave / built-in only because MCP belongs to
     another account.
     """
-    from app.services import ai_agent, mcp_server
+    from app.services import mcp_server
 
-    cfg = ai_agent._cfg()
-    builtin = len(ai_agent.TOOLS)
+    account_id = accounts.current_account.get() or ""
+    cfg = ai_agent._cfg(account_id)
+    ctx = ai_agent.build_context(cfg, account_id)
+    names = [t.name for t in ai_tools.available(ctx)]
+    base = {
+        "builtin": len(names),
+        "tools": names,
+        "writes": not cfg.readonly,
+        "web": cfg.web_enabled,
+        "web_provider": ai_web.provider_label(cfg.web_provider),
+    }
     if not cfg.use_mcp:
-        return {"builtin": builtin, "mcp": 0, "reason": "off"}
+        return {**base, "mcp": 0, "reason": "off"}
     try:
         status = await mcp_server.status()
     except Exception:
-        return {"builtin": builtin, "mcp": 0, "reason": "unavailable"}
+        return {**base, "mcp": 0, "reason": "unavailable"}
     state = status.get("container")
     if state == "foreign":
-        return {"builtin": builtin, "mcp": 0, "reason": "foreign"}
+        return {**base, "mcp": 0, "reason": "foreign"}
     if state != "running" or not status.get("reachable"):
-        return {"builtin": builtin, "mcp": 0, "reason": "unavailable"}
+        return {**base, "mcp": 0, "reason": "unavailable"}
     mcp = await ai_agent._mcp_tools(cfg)
     return {
-        "builtin": builtin,
+        **base,
         "mcp": len(mcp),
         "capped": len(mcp) >= ai_agent.MAX_MCP_TOOLS,
-        "writes": not cfg.readonly,
         "reason": "ok" if mcp else "unavailable",
     }

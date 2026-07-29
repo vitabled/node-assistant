@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Send, Bot, Wrench, AlertCircle, Paperclip, X, FileText, Image as ImageIcon } from "lucide-react";
+import { Loader2, Send, Bot, Wrench, AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Globe, Trash2 } from "lucide-react";
 
 /** Только то, что нужно чату: гейт композера. Форма настроек живёт в
  *  «Настройки → Ассистент» (`settings/AiSettingsTab.tsx`) — эта страница НИЧЕГО
@@ -13,11 +13,24 @@ interface AiChatConfig {
   auth_ready?: boolean;
 }
 
+/** Ответ `GET /api/ai/tools`. Показываем ДО вопроса: иначе границы агента
+ *  выясняются только из отказа («не могу писать», «веб выключен»). */
+interface ToolsInfo {
+  builtin: number;
+  writes: boolean;
+  web: boolean;
+  web_provider: string;
+  mcp?: number;
+}
+
 /** Вложение живёт ровно один вопрос: файлы не персистятся, они относятся к
  *  сообщению, а не к аккаунту (см. api/ai.py::Attachment). */
 interface Attachment { name: string; mime: string; text: string; data_b64: string }
 
 const MAX_FILES = 5;
+/** Сервер режет историю сам (ai_agent.MAX_HISTORY_MESSAGES), но гонять по сети
+ *  весь разговор незачем — отправляем тот же хвост. */
+const MAX_HISTORY_MESSAGES = 20;
 const MAX_TEXT_CHARS = 40_000;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -40,12 +53,16 @@ async function readFile(f: File): Promise<Attachment | string> {
   return { name: f.name, mime: mime || "text/plain", text: text.slice(0, MAX_TEXT_CHARS), data_b64: "" };
 }
 
+/** `text` — ровно то, что уходит в историю. Имена вложений держим ОТДЕЛЬНЫМ
+ *  полем, а не приписываем к тексту: вложения эфемерны, и в истории следующего
+ *  хода строка «📎 …» была бы враньём — файлов у модели там уже нет. */
 type Msg =
-  | { role: "user"; text: string }
+  | { role: "user"; text: string; files?: string[] }
   | { role: "assistant"; text: string; tools: { id?: string; name: string; ok?: boolean }[] };
 
 export function AiChat() {
   const [cfg, setCfg] = useState<AiChatConfig | null>(null);
+  const [caps, setCaps] = useState<ToolsInfo | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [attach, setAttach] = useState<Attachment[]>([]);
@@ -62,6 +79,12 @@ export function AiChat() {
       .then(r => { if (!r.ok) throw new Error("bad"); return r.json(); })
       .then(setCfg)
       .catch(() => setLoadErr(true));
+    // Строка возможностей необязательна: не ответила ручка — просто не рисуем
+    // её. Заглушка с нулями врала бы про агента сильнее, чем её отсутствие.
+    fetch("/api/ai/tools")
+      .then(r => { if (!r.ok) throw new Error("bad"); return r.json(); })
+      .then(setCaps)
+      .catch(() => {});
     // Abort an in-flight chat stream if the user leaves the tab.
     return () => abortRef.current?.abort();
   }, []);
@@ -88,12 +111,18 @@ export function AiChat() {
     const files = attach;
     setInput("");
     setAttach([]); setAttachErr("");
-    const shown = files.length
-      ? `${prompt}
-
-📎 ${files.map(f => f.name).join(", ")}`
-      : prompt;
-    setMsgs(m => [...m, { role: "user", text: shown }, { role: "assistant", text: "", tools: [] }]);
+    // История собирается ДО добавления текущей пары: без неё «а теперь то же
+    // для второй ноды» не к чему привязать. Пустые пузыри (прерванный ответ)
+    // пропускаем — они ничего не сообщают модели.
+    const history = msgs
+      .filter(m => m.text.trim())
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map(m => ({ role: m.role, content: m.text }));
+    setMsgs(m => [
+      ...m,
+      { role: "user", text: prompt, files: files.length ? files.map(f => f.name) : undefined },
+      { role: "assistant", text: "", tools: [] },
+    ]);
     setBusy(true);
 
     // Pure updater: replace the last assistant message with a NEW object (no
@@ -112,7 +141,7 @@ export function AiChat() {
     try {
       const res = await fetch("/api/ai/chat", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, attachments: files }), signal: ac.signal,
+        body: JSON.stringify({ prompt, attachments: files, history }), signal: ac.signal,
       });
       if (!res.ok || !res.body) throw new Error("stream failed");
       const reader = res.body.getReader();
@@ -171,11 +200,26 @@ export function AiChat() {
       )}
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 mx-4 rounded-lg border border-[var(--line-soft)] bg-[var(--bg2)] p-4" data-testid="ai-chat-log">
-        {msgs.length === 0 && <p className="text-[12px] text-[var(--t-faint)]">Спросите про ноды, правила, подписки или доступность.</p>}
+        {msgs.length === 0 && (
+          <p className="text-[12px] text-[var(--t-faint)]">
+            Спросите про любой раздел панели — ноды, правила, подписки, хостинги, заметки.
+            {/* Про веб пишем, только если он не выключен: обещать умение, которое
+                тут же будет отклонено, — ровно та проблема, что решает строка
+                возможностей ниже. */}
+            {caps?.web !== false && " Могу поискать в интернете и открыть страницу."}
+          </p>
+        )}
         {msgs.map((m, i) => (
           <div key={i} className={m.role === "user" ? "self-end max-w-[85%]" : "self-start max-w-[90%]"}>
             {m.role === "user" ? (
-              <div className="px-3 py-2 rounded-lg bg-[var(--accent-dim)] text-[var(--t-hi)] text-sm">{m.text}</div>
+              <div className="flex flex-col items-end gap-1">
+                <div className="px-3 py-2 rounded-lg bg-[var(--accent-dim)] text-[var(--t-hi)] text-sm">{m.text}</div>
+                {!!m.files?.length && (
+                  <span className="flex items-center gap-1 text-[11px] text-[var(--t-low)]">
+                    <Paperclip size={10} /> {m.files.join(", ")}
+                  </span>
+                )}
+              </div>
             ) : (
               <div className="flex flex-col gap-1.5">
                 {m.tools.map((t, j) => (
@@ -198,6 +242,18 @@ export function AiChat() {
         onDragLeave={() => setOver(false)}
         onDrop={e => { e.preventDefault(); setOver(false); void addFiles(e.dataTransfer.files); }}
         style={over ? { outline: "1px dashed var(--accent)", outlineOffset: -6, borderRadius: 12 } : undefined}>
+
+        {caps && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--t-low)]" data-testid="ai-caps">
+            <span className="flex items-center gap-1">
+              <Wrench size={11} /> Инструментов: {caps.builtin + (caps.mcp ?? 0)}
+            </span>
+            <span className="flex items-center gap-1">
+              <Globe size={11} /> {caps.web ? `Веб: ${caps.web_provider}` : "Веб выключен"}
+            </span>
+            <span>{caps.writes ? "Режим: чтение и запись" : "Режим: только чтение"}</span>
+          </div>
+        )}
 
         {(attach.length > 0 || attachErr) && (
           <div className="flex flex-wrap items-center gap-1.5">
@@ -222,6 +278,12 @@ export function AiChat() {
             onClick={() => fileRef.current?.click()}
             className="p-2.5 rounded-lg text-[var(--t-low)] hover:text-[var(--accent-hi)] disabled:opacity-40">
             <Paperclip size={16} />
+          </button>
+          {/* Обрыв разговора: чистит и лог, и историю — они одно и то же. */}
+          <button title="Очистить переписку" disabled={busy || msgs.length === 0}
+            onClick={() => setMsgs([])}
+            className="p-2.5 rounded-lg text-[var(--t-low)] hover:text-[var(--err)] disabled:opacity-40">
+            <Trash2 size={16} />
           </button>
           <input className="input flex-1" value={input} disabled={busy || !cfg.enabled}
             placeholder={over ? "Отпустите файлы здесь" : "Сообщение агенту..."}

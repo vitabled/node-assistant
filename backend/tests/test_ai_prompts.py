@@ -1,5 +1,6 @@
 """Wave-5 Plan I — AI system-prompt presets: builtin/user CRUD, gating,
 active-preset resolution + build_system integration."""
+import asyncio
 import uuid
 
 from fastapi.testclient import TestClient
@@ -51,7 +52,10 @@ def test_user_crud_fork_and_isolation():
 
 def test_resolve_and_build_system():
     aid, _h = _register()
-    suffix = "list_rules"  # substring of the tooling suffix
+    # Substring of the non-editable tooling suffix. `panel_get` is the bridge
+    # tool the whole «assistant can reach every section» promise rests on — if a
+    # preset could strip it, the agent would go back to guessing.
+    suffix = "panel_get"
     # default fallback when empty / unknown
     assert presets.resolve_active_text("", aid) == presets.resolve_active_text("default", aid)
     assert presets.resolve_active_text("does-not-exist", aid) == presets.resolve_active_text("default", aid)
@@ -60,7 +64,8 @@ def test_resolve_and_build_system():
     # a user preset resolves to its own text, and build_system appends the suffix
     p = presets.create_preset("cust", "СИСТЕМНЫЙ ТЕКСТ ПРЕСЕТА", account_id=aid)
     cfg = AiConfig(active_preset_id=p["id"])
-    sysmsg = ai_agent.build_system(aid, cfg)
+    # `build_system` стал асинхронным: он собирает живую сводку по аккаунту.
+    sysmsg = asyncio.run(ai_agent.build_system(aid, cfg))
     assert "СИСТЕМНЫЙ ТЕКСТ ПРЕСЕТА" in sysmsg and suffix in sysmsg
     # default config → default text + suffix
-    assert suffix in ai_agent.build_system(aid, AiConfig())
+    assert suffix in asyncio.run(ai_agent.build_system(aid, AiConfig()))
