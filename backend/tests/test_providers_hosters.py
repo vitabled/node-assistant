@@ -319,7 +319,9 @@ def test_servers_com_lists_hosts_but_admits_it_has_no_billing(monkeypatch):
 
     # Биллинг-ручек в публичном API нет: адаптер обязан это ЗАЯВЛЯТЬ, иначе
     # пустой ответ выглядит как сломанная синхронизация.
-    assert a.CAPS == {"services"}
+    # Смысл теста — «счетов и баланса в публичном API нет»; заказ появился
+    # позже и к этому отношения не имеет.
+    assert "balance" not in a.CAPS and "payments" not in a.CAPS
     assert asyncio.run(a.balance({"token": "sc"})) is None
     assert asyncio.run(a.payments({"token": "sc"})) == []
 

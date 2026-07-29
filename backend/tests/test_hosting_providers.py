@@ -269,7 +269,9 @@ def test_registry_schemas_shape():
         assert all(f["kind"] in ("text", "password", "textarea") for f in s["fields"])
     by_kind = {s["kind"]: s for s in schemas}
     assert [f["key"] for f in by_kind["beget"]["fields"]] == ["login", "password"]
-    assert by_kind["beget"]["caps"] == ["balance"]
+    # Утверждаем СМЫСЛ, а не точный набор: возможности адаптера растут (у Beget
+    # появился заказ), и список-снимок ломался бы на каждом таком расширении.
+    assert "balance" in by_kind["beget"]["caps"]
 
 
 def test_registry_survives_a_broken_module(monkeypatch):

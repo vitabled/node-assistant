@@ -25,6 +25,22 @@ two vault entries — the UI hints that a full picture needs both):
   come back as the legacy `RUR`. Both are looked up from a short list of plausible
   keys; an unrecognised shape yields `None` + a log warning rather than a number
   we made up.
+
+Заказ (`order`, только CloudVPS) — квирки из документации вендора:
+
+- **⚠️ В `POST /v1/reglets` НЕТ региона.** Документированные поля — `name`
+  (необязательное, вендор сгенерирует сам), `size` (slug тарифа), `image` (slug
+  образа), плюс `ssh_keys`/`backups`/`isp_license_size`. Регион неявно задаёт сам
+  тариф: каталог у каждого региона свой. Поэтому `OrderOptions.regions` остаётся
+  **пустым** — селектор региона, который создание игнорирует, врал бы
+  пользователю; вместо этого регион едет в `OrderPlan.region` и в имени плана.
+- **Каталог живёт в v2 и требует региона** (`GET /v2/plans` и `GET /v2/images` с
+  обязательными `region`, `page`, `items_per_page`). Список регионов вендор
+  отдельной ручкой не отдаёт — он зафиксирован в `_REGIONS` по документации.
+  Регион, ответивший ошибкой, просто пропускается: каталог остальных полезен.
+- **Цена — `price_per_month`**, но у части линеек тарификация почасовая
+  (`unit: "hour"`), и тогда берётся `price_per_hour` с периодом `hour`. Пересчёт
+  час→месяц не делается: это была бы выдуманная сумма.
 """
 from __future__ import annotations
 
@@ -36,6 +52,8 @@ import httpx
 from app.services.hosting_providers.base import (
     Balance,
     CredField,
+    OrderOptions,
+    OrderPlan,
     ProviderAdapter,
     ServiceItem,
     map_http_error,
@@ -46,6 +64,10 @@ log = logging.getLogger("hosting.regru")
 
 _CLOUDVPS = "https://api.cloudvps.reg.ru"
 _REGRU_API = "https://api.reg.ru/api/regru2"
+
+# Регионы каталога v2 по документации вендора: отдельной ручки со списком нет.
+_REGIONS = ("msk1", "openstack-msk1", "openstack-spb1", "openstack-sam1")
+_PER_PAGE = 100
 
 _AMOUNT_KEYS = ("prepay", "balance", "available", "amount")
 _CURRENCY_KEYS = ("currency", "currency_code", "curr")
@@ -72,6 +94,31 @@ def _public_ip(networks: Any) -> str:
         if str(net.get("type") or "").lower() == "public":
             return str(net.get("ip_address") or "")
     return str(entries[0].get("ip_address") or "") if entries else ""
+
+
+def _plan(raw: Any, region: str) -> Optional[OrderPlan]:
+    """Одна позиция `GET /v2/plans` → `OrderPlan`, либо None у мусорной записи."""
+    if not isinstance(raw, dict):
+        return None
+    slug = str(raw.get("slug") or "").strip()
+    if not slug:
+        return None
+    price, period = _price(raw.get("price_per_month")), "month"
+    if price is None:
+        # Часовая линейка: месячной суммы у неё нет, а считать её самим —
+        # значит назвать цену, которой вендор не называл.
+        price, period = _price(raw.get("price_per_hour")), "hour"
+    return OrderPlan(
+        id=slug,
+        name=f"{raw.get('name') or slug} ({region})",
+        specs=f"{int(_price(raw.get('vcpus')) or 0)} vCPU · "
+              f"{_price(raw.get('memory')) or 0:g} ГБ RAM · "
+              f"{int(_price(raw.get('disk')) or 0)} ГБ",
+        price=price,
+        currency="RUB",
+        period=period,
+        region=region,
+    )
 
 
 def _reglet_item(raw: dict) -> ServiceItem:
@@ -102,14 +149,16 @@ class RegruCloudVps(ProviderAdapter):
     FIELDS = [CredField("token", "API-токен", "password")]
     # No "balance": CloudVPS has no balance endpoint — the account balance comes
     # from the separate `regru_account` adapter below.
-    CAPS = {"services"}
+    CAPS = {"services", "order"}
 
-    async def _get(self, creds: dict, path: str) -> tuple[Any, str]:
+    async def _get(self, creds: dict, path: str,
+                   params: Optional[dict] = None) -> tuple[Any, str]:
         token = str((creds or {}).get("token") or "").strip()
         try:
             async with self._client() as c:
                 r = await c.get(
                     f"{_CLOUDVPS}{path}",
+                    params=params,
                     headers={"Authorization": f"Bearer {token}",
                              "Content-Type": "application/json"},
                 )
@@ -118,6 +167,38 @@ class RegruCloudVps(ProviderAdapter):
 
         if r.status_code >= 400:
             return None, map_http_error(r.status_code)
+        try:
+            return r.json(), ""
+        except ValueError:
+            return None, "Reg.ru CloudVPS вернул не-JSON ответ"
+
+    async def _post(self, creds: dict, path: str, body: dict) -> tuple[Any, str]:
+        """РОВНО один POST, без ретраев: создание сервера тратит деньги, и
+        таймаут не означает «не создано»."""
+        token = str((creds or {}).get("token") or "").strip()
+        try:
+            async with self._client() as c:
+                r = await c.post(
+                    f"{_CLOUDVPS}{path}", json=body,
+                    headers={"Authorization": f"Bearer {token}",
+                             "Content-Type": "application/json"},
+                )
+        except httpx.HTTPError as exc:
+            return None, f"Reg.ru CloudVPS недоступен: {redact(str(exc), token)}"
+
+        if r.status_code >= 400:
+            # Слова вендора («тариф недоступен», «недостаточно средств») лечатся
+            # по-разному, а общая фраза по коду не подсказывает ничего.
+            try:
+                payload = r.json() or {}
+            except ValueError:
+                payload = {}
+            msg = ""
+            if isinstance(payload, dict):
+                msg = str(payload.get("message") or payload.get("error")
+                          or payload.get("detail") or "").strip()
+            base = map_http_error(r.status_code)
+            return None, redact(f"{base}: {msg}" if msg else base, token)
         try:
             return r.json(), ""
         except ValueError:
@@ -141,6 +222,86 @@ class RegruCloudVps(ProviderAdapter):
             log.warning("regru_cloudvps: unexpected /v1/reglets shape")
             return []
         return [_reglet_item(raw) for raw in rows if isinstance(raw, dict)]
+
+    async def order_options(self, creds: dict) -> Optional[OrderOptions]:
+        if self.check_fields(creds):
+            return None
+        plans: list[OrderPlan] = []
+        images: list[dict] = []
+        answered = False
+        for region in _REGIONS:
+            page = {"region": region, "page": 1, "items_per_page": _PER_PAGE}
+            data, err = await self._get(creds, "/v2/plans", page)
+            if err or not isinstance(data, dict):
+                # Регион мог быть выведен из продажи — остальные всё равно нужны.
+                continue
+            answered = True
+            for p in (data.get("plans") or []):
+                plan = _plan(p, region)
+                if plan is not None:
+                    plans.append(plan)
+            imgs, err = await self._get(creds, "/v2/images",
+                                        dict(page, type="distribution"))
+            if err or not isinstance(imgs, dict):
+                continue
+            for i in (imgs.get("images") or []):
+                if not isinstance(i, dict) or not i.get("slug"):
+                    continue
+                images.append({
+                    "id": str(i["slug"]),
+                    "name": f"{i.get('distribution') or ''} {i.get('name') or ''}".strip()
+                            or str(i["slug"]),
+                    "region": str(i.get("region_slug") or region),
+                    "min_disk_gb": i.get("min_disk_size"),
+                })
+        if not answered:
+            return None
+        return OrderOptions(
+            plans=plans,
+            # Пусто намеренно: у создания региона нет, он зашит в тариф.
+            regions=[],
+            images=images,
+            custom=None,  # только готовые тарифы, конструктора у CloudVPS нет
+        )
+
+    async def create_order(self, creds: dict, spec: dict) -> dict:
+        fail = {"ok": False, "id": "", "name": "", "price": None, "currency": "RUB"}
+        missing = self.check_fields(creds)
+        if missing:
+            return {**fail, "error": missing}
+
+        spec = spec or {}
+        size = str(spec.get("plan_id") or "").strip()
+        image = str(spec.get("image") or "").strip()
+        empty = [label for label, value in (
+            ("тариф", size), ("образ", image),
+        ) if not value]
+        if empty:
+            return {**fail, "error": "не заполнено: " + ", ".join(empty)}
+
+        body = {"size": size, "image": image}
+        name = str(spec.get("name") or "").strip()
+        if name:
+            # Имя необязательно: без него вендор сгенерирует своё.
+            body["name"] = name
+
+        data, err = await self._post(creds, "/v1/reglets", body)
+        if err:
+            return {**fail, "error": err}
+        reglet = (data or {}).get("reglet") if isinstance(data, dict) else None
+        if not isinstance(reglet, dict) or not reglet.get("id"):
+            return {**fail, "error": "Reg.ru принял запрос, но не вернул сервер "
+                                     "— проверьте панель перед повторной попыткой"}
+        # Из ответа берём только id и имя: пароль/ключи, если вендор их пришлёт,
+        # наружу отдавать нельзя, а цену маршрут покупки уже знает из каталога.
+        return {
+            "ok": True,
+            "id": str(reglet.get("id")),
+            "name": str(reglet.get("name") or name),
+            "price": None,
+            "currency": "RUB",
+            "error": "",
+        }
 
 
 class RegruAccount(ProviderAdapter):

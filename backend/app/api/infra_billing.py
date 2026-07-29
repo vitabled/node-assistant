@@ -161,6 +161,11 @@ class OrderBody(BaseModel):
     confirm: bool = False
     expected_price: Optional[float] = None
     expected_currency: str = ""
+    # Отдельное подтверждение для вендоров, которые цену через API не называют
+    # (у OpenStack/Nova у flavor'а стоимости нет вовсе). Без него такой заказ
+    # по-прежнему отклоняется: молча купить «за сколько-то» нельзя, но и
+    # запрещать покупку целому классу провайдеров — значит не решить задачу.
+    acknowledge_unknown_price: bool = False
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -479,19 +484,24 @@ async def provider_order(uuid: str, body: OrderBody):
 
     spec = _order_spec(body, plan)
     if price is None:
-        # У конструкторов (RuVDS) «тариф» — прайс-лист, готовой суммы у плана нет.
-        # Спрашиваем стоимость у вендора расчётом: он ничего не создаёт, но даёт
+        # У конструкторов (RuVDS) «тариф» — это прайс-лист, готовой суммы у плана
+        # нет. Спрашиваем расчёт у вендора: он ничего не создаёт, но называет
         # цену, которую можно сверить с показанной пользователю.
         quote = await _order_quote(adapter, creds, spec)
         if quote:
             price, currency = quote["price"], quote["currency"] or currency
+
     if price is None:
-        # Fail closed, like the domain purchase: without a price from the vendor we
-        # cannot prove the user agreed to what will actually be charged.
-        raise HTTPException(400, "Провайдер не сообщил цену выбранной конфигурации — "
-                                 "заказ через панель выполнить нельзя, оформите его у провайдера")
-    if body.expected_price is None or abs(price - body.expected_price) > 0.01 \
-            or (body.expected_currency and currency
+        # Вендор не называет цену вовсе (у OpenStack/Nova у flavor'а стоимости
+        # нет). Раньше здесь стоял безусловный отказ — он закрывал покупку целому
+        # классу провайдеров. Теперь заказ возможен, но только с ОТДЕЛЬНЫМ
+        # признанием, что сумма заранее неизвестна: молча купить «за сколько-то»
+        # по-прежнему нельзя.
+        if not body.acknowledge_unknown_price:
+            raise HTTPException(400, "Провайдер не сообщает цену через API — подтвердите "
+                                     "покупку без известной суммы отдельной галочкой "
+                                     "или оформите заказ в панели провайдера")
+    elif body.expected_price is None or abs(price - body.expected_price) > 0.01             or (body.expected_currency and currency
                 and body.expected_currency.upper() != currency.upper()):
         raise HTTPException(409, f"Цена изменилась: сейчас {price} {currency}. "
                                  "Обновите варианты и подтвердите заново")

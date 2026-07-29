@@ -17,7 +17,7 @@ import json
 import httpx
 import pytest
 
-from app.services.hosting_providers.beget import BegetAdapter
+from app.services.hosting_providers.base import ProviderAdapter
 from app.services.hosting_providers.digitalocean import DigitalOceanAdapter
 from app.services.hosting_providers.hetzner import HetznerAdapter
 from app.services.hosting_providers.ruvds import RuvdsAdapter
@@ -72,14 +72,23 @@ def _ruvds_catalog(request: httpx.Request) -> httpx.Response:
 
 # ── Дефолты базы: адаптер без заказа ──────────────────────────
 def test_an_adapter_without_ordering_gets_the_base_defaults():
-    """Beget ничего не переопределяет — контракт обязан отвечать за него сам,
-    иначе добавление заказа сломало бы все прежние адаптеры."""
-    a = BegetAdapter()
+    """Проверяем ДЕФОЛТЫ КОНТРАКТА, а не конкретного вендора.
 
+    Раньше примером служил Beget, но заказ появился и у него — и будет появляться
+    у других. Тривиальный наследник не устареет: он и есть «адаптер, который
+    ничего не переопределил»."""
+    class Bare(ProviderAdapter):
+        KIND, TITLE, FIELDS, CAPS = "bare", "Без заказа", [], {"balance"}
+
+        async def verify(self, creds):
+            return True, ""
+
+    a = Bare()
     assert "order" not in a.CAPS, "заказ не заявляем там, где его нет"
-    assert asyncio.run(a.order_options({"login": "l", "password": "p"})) is None
+    assert asyncio.run(a.order_options({})) is None
+    assert asyncio.run(a.quote_order({}, {})) is None
 
-    res = asyncio.run(a.create_order({"login": "l", "password": "p"}, {"plan_id": "x"}))
+    res = asyncio.run(a.create_order({}, {"plan_id": "x"}))
     assert res["ok"] is False and res["error"] == "Провайдер не поддерживает заказ"
 
 

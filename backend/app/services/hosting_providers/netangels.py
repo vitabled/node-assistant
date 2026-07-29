@@ -20,6 +20,19 @@
 Списков услуг и счетов в этом API нет — `CAPS` объявляет только `balance`,
 `services()`/`payments()` остаются пустыми из базового класса. Это честное «API не
 отдаёт», а не недоделка.
+
+**⚠️ Заказ: `CAPS` НЕ заявляет `order`, и это тоже не недоделка.** NetAngels —
+это в первую очередь хостинг с панелью: подтверждена ровно одна пара ручек
+(токен + профиль аккаунта), ручки заказа услуги в публичном API нет, а
+обязательные для неё идентификаторы (тариф, площадка, шаблон ОС) взять неоткуда
+— каталогов API тоже не отдаёт. Кнопка, за которой стоит угаданный URL, здесь
+означала бы либо 404, либо оплаченную не ту услугу, поэтому `create_order`
+отказывает словами и БЕЗ запроса.
+
+**Что нужно снять, чтобы включить заказ**: путь и тело ручки заказа, ручки
+каталогов (тарифы, площадки, шаблоны ОС), поле идентификатора созданной услуги в
+ответе. После этого пишутся `order_options()`/`create_order()`, и в `CAPS`
+добавляется `order`.
 """
 from __future__ import annotations
 
@@ -50,6 +63,9 @@ _TOKEN_TTL = 12 * 3600      # вдвое меньше вендорских 24 ч
 _TOKEN_CACHE: dict[str, tuple[str, float]] = {}
 
 _AMOUNT_KEYS = ("balance", "amount", "value", "sum")
+
+_ORDER_UNSUPPORTED = ("NetAngels: заказ услуги через публичное API не "
+                      "предусмотрен — оформите в панели NetAngels")
 
 
 def _cache_key(api_key: str) -> str:
@@ -144,6 +160,16 @@ class NetangelsAdapter(ProviderAdapter):
                     continue
         log.warning("netangels: no recognised balance key in /account/info/")
         return None
+
+    async def create_order(self, creds: dict, spec: dict) -> dict:
+        """Отказ БЕЗ сетевого запроса — см. докстринг модуля.
+
+        Своими словами, а не дефолтом базы: пользователю нужно знать, что дело в
+        отсутствующей ручке вендора, а не в его ключе."""
+        return {
+            "ok": False, "id": "", "name": "", "price": None, "currency": "RUB",
+            "error": _ORDER_UNSUPPORTED,
+        }
 
 
 ADAPTER = NetangelsAdapter()

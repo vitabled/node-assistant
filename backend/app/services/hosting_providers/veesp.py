@@ -17,9 +17,22 @@ someone runs them against a live account:
   warning in the log rather than a wrong number.
 - `/invoice` — invoices are charges, so every row is normalised to
   `type: "charge"`; a list and a `{invoices: [...]}` wrapper are both accepted.
-- **Service listing is NOT implemented**: the name of the VPS-list endpoint is
-  undocumented, and guessing it would produce a silently empty list that looks
-  like «no servers». Needs recon against a live account.
+- `/service` — список услуг: `{"services": [{id, name, domain, total, status,
+  billingcycle, next_due, category}]}`. ⚠️ Путь снят не с живого аккаунта, а с
+  опубликованного разбора клиентского API (там же `/details`,
+  `/service/{id}/vms`), поэтому читатель такой же защитный: неузнанная форма даёт
+  пустой список, а не выдуманные услуги. IP в этот ответ не входит — он лежит в
+  `/service/{id}/vms`, то есть в отдельном запросе НА КАЖДУЮ услугу; ради одной
+  колонки такой веер не делаем.
+
+⚠️ **Заказ: `CAPS` НЕ заявляет `order`, и это не недоделка.** Публичная
+документация клиентского API (`secure.veesp.com/userapi`) закрыта JS-проверкой и
+через неё не читается, а по косвенным упоминаниям видны только каталожные ручки
+(`/category/{id}/product`) — САМОЙ ручки оформления заказа подтвердить не
+удалось. Кнопка, которая молча ничего не создаёт (или, хуже, создаёт не то,
+списав деньги), опаснее её отсутствия, поэтому `create_order` отказывает словами
+и БЕЗ сетевого запроса. Когда появится доступ к документации, здесь нужен
+каталог продуктов + одно создание — остальное в модуле уже есть.
 """
 from __future__ import annotations
 
@@ -32,6 +45,7 @@ from app.services.hosting_providers.base import (
     Balance,
     CredField,
     ProviderAdapter,
+    ServiceItem,
     map_http_error,
     redact,
 )
@@ -39,6 +53,11 @@ from app.services.hosting_providers.base import (
 log = logging.getLogger("hosting.veesp")
 
 _BASE = "https://secure.veesp.com/api"
+
+_ORDER_UNSUPPORTED = (
+    "Veesp не подтверждает оформление заказа через API — оформите услугу в "
+    "личном кабинете"
+)
 
 _AMOUNT_KEYS = ("balance", "credit", "amount", "value", "total")
 _CURRENCY_KEYS = ("currency", "currency_code", "curr", "code")
@@ -65,6 +84,13 @@ def _pick_str(node: dict, keys: tuple[str, ...], default: str = "") -> str:
     return default
 
 
+def _category(node: Any) -> str:
+    """Категория услуги: строкой или объектом `{name: …}`."""
+    if isinstance(node, dict):
+        return str(node.get("name") or node.get("title") or "vps").strip() or "vps"
+    return str(node or "vps").strip() or "vps"
+
+
 class VeespAdapter(ProviderAdapter):
     KIND = "veesp"
     TITLE = "Veesp"
@@ -72,7 +98,7 @@ class VeespAdapter(ProviderAdapter):
         CredField("email", "E-mail личного кабинета"),
         CredField("password", "Пароль личного кабинета", "password"),
     ]
-    CAPS = {"balance", "payments"}
+    CAPS = {"balance", "services", "payments"}
 
     async def _get(self, creds: dict, path: str) -> tuple[Any, str]:
         email = str((creds or {}).get("email") or "").strip()
@@ -111,6 +137,45 @@ class VeespAdapter(ProviderAdapter):
             log.warning("veesp: no recognised amount key in /balance")
             return None
         return Balance(amount, _pick_str(data, _CURRENCY_KEYS, "EUR").upper())
+
+    async def services(self, creds: dict) -> list[ServiceItem]:
+        if self.check_fields(creds):
+            return []
+        data, err = await self._get(creds, "/service")
+        if err:
+            return []
+        rows = data
+        if isinstance(data, dict):
+            rows = data.get("services") or data.get("service") or data.get("data") or []
+        if not isinstance(rows, list):
+            log.warning("veesp: unexpected /service shape")
+            return []
+        out: list[ServiceItem] = []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            sid = str(raw.get("id") or "")
+            out.append(ServiceItem(
+                id=sid,
+                name=_pick_str(raw, ("name", "domain", "product"), f"услуга {sid}".strip()),
+                # `category` бывает и строкой, и объектом с именем.
+                kind=_category(raw.get("category")),
+                cost=_pick_number(raw, ("total", "amount", "price", "cost")),
+                currency=_pick_str(raw, _CURRENCY_KEYS, "EUR").upper(),
+                period=_pick_str(raw, ("billingcycle", "billing_cycle", "period"),
+                                 "month"),
+                status=_pick_str(raw, ("status", "state")),
+                # IP живёт в отдельном `/service/{id}/vms` — см. докстроку модуля.
+                ip="",
+                region=_pick_str(raw, ("location", "region", "datacenter")),
+                paid_till=_pick_str(raw, ("next_due", "nextduedate", "paid_till")),
+            ))
+        return out
+
+    async def create_order(self, creds: dict, spec: dict) -> dict:
+        """Отказ БЕЗ сетевого запроса: ручка заказа не подтверждена (см. шапку)."""
+        return {"ok": False, "id": "", "name": "", "price": None, "currency": "EUR",
+                "error": _ORDER_UNSUPPORTED}
 
     async def payments(self, creds: dict) -> list[dict]:
         if self.check_fields(creds):

@@ -19,6 +19,16 @@
 ⚠️ Путь счетов и форма строк на живом аккаунте не снимались: читатель защитный
 (ключи ищутся по списку правдоподобных написаний), а 404/403 дают пустой список,
 не исключение. Это первое место под правку после разведки.
+
+**⚠️ Заказ: `CAPS` НЕ заявляет `order`, и это не недоделка.** Публичной ручки,
+которая создавала бы сервер по API-токену, подтвердить не удалось: в открытой
+части API Infomaniak — продукты, счета, домены и веб-хостинг, а покупка
+оформляется в Manager. Угаданный `POST` сюда стоил бы чужих денег, поэтому
+`create_order` отказывает СЛОВАМИ и без запроса.
+
+Полезная замена, а не тупик: **Infomaniak Public Cloud — это OpenStack**, и он
+уже покрыт адаптером `openstack` (Keystone `https://api.pub1.infomaniak.cloud/
+identity`, проектные креды). Отказ прямо на него и указывает.
 """
 from __future__ import annotations
 
@@ -45,6 +55,12 @@ _AMOUNT_KEYS = ("amount_tax_incl", "total_tax_incl", "amount", "total",
                 "price", "amount_tax_excl", "total_tax_excl")
 _CURRENCY_KEYS = ("currency", "currency_code")
 _NOTE_KEYS = ("number", "reference", "name", "state", "status", "description")
+
+_ORDER_UNSUPPORTED = (
+    "Infomaniak не публикует API заказа серверов — оформите покупку в Manager. "
+    "Для Public Cloud подойдёт адаптер «OpenStack»: он и есть их облако "
+    "(Keystone https://api.pub1.infomaniak.cloud/identity, проектные креды)"
+)
 
 
 def _num(value: Any) -> Optional[float]:
@@ -175,6 +191,11 @@ class InfomaniakAdapter(ProviderAdapter):
                 "note": _pick_str(raw, _NOTE_KEYS),
             })
         return out
+
+    async def create_order(self, creds: dict, spec: dict) -> dict:
+        """Честный отказ БЕЗ единого запроса — см. докстринг модуля."""
+        return {"ok": False, "id": "", "name": "", "price": None, "currency": "",
+                "error": _ORDER_UNSUPPORTED}
 
 
 ADAPTER = InfomaniakAdapter()

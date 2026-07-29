@@ -73,6 +73,40 @@ def list_items(account_id: Optional[str] = None) -> list[dict]:
     return out
 
 
+def search_notes(query: str, limit: int = 10, account_id: Optional[str] = None) -> list[dict]:
+    """Заметки, где встречается `query` (в имени, папке или тексте).
+
+    Живёт здесь, а не у вызывающего, ровно по одной причине: искать по телу
+    заметки можно только имея сам текст, а `list_items` его намеренно вырезает.
+    Читать индекс по одной заметке через `get_note` — это N чтений файла на один
+    поиск. Возвращаем фрагмент вокруг совпадения, а не весь текст: вызывающему
+    (ассистенту) нужен ориентир, полный текст он попросит по id.
+    """
+    needle = (query or "").strip().lower()
+    if not needle:
+        return []
+    out: list[dict] = []
+    for it in _read(account_id):
+        if it.get("kind") != "note":
+            continue
+        text = it.get("text") or ""
+        hay = f"{it.get('name', '')}\n{it.get('folder', '')}\n{text}".lower()
+        pos = hay.find(needle)
+        if pos < 0:
+            continue
+        start = max(0, text.lower().find(needle) - 120)
+        out.append({
+            "id": it.get("id"),
+            "name": it.get("name"),
+            "folder": it.get("folder", ""),
+            "updated_at": it.get("updated_at", it.get("created_at", 0)),
+            "excerpt": text[start:start + 400],
+        })
+        if len(out) >= max(1, limit):
+            break
+    return out
+
+
 def _safe(name: str) -> str:
     name = _SAFE_NAME.sub("_", (name or "").strip())[:200]
     return name or "file"

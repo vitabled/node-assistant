@@ -115,6 +115,15 @@ class AiConfig(BaseModel):
     cliproxy_image: str = "eceasy/cli-proxy-api:v7.2.50"
     cliproxy_master_key_enc: str = ""   # client key our backend presents on /v1
     cliproxy_mgmt_key_enc: str = ""     # Management API key — NEVER to a browser
+    # Веб-доступ ассистента (поиск + чтение страниц). Включён по умолчанию:
+    # провайдер по умолчанию `duckduckgo` ключа не требует, поэтому включение не
+    # заставляет никого ничего заводить. Ключ платного провайдера — Fernet, как
+    # и остальные секреты модуля.
+    web_enabled: bool = True
+    web_provider: str = "duckduckgo"    # duckduckgo | tavily | brave | searxng
+    web_api_key_enc: str = ""
+    web_base_url: str = ""              # только для searxng (свой инстанс)
+    web_max_results: int = 5
     # NOTE: the shared container's owner is tracked GLOBALLY in
     # DATA_DIR/cliproxy_owner.json (cliproxy_server._OWNER_FILE), NOT here — a
     # per-account field made every non-owner look like the owner (Wave-7 review).

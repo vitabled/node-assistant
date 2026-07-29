@@ -53,7 +53,12 @@ export function InfraServices() {
         subtitle="Оплачиваемые позиции инфраструктуры"
         actions={<>
           <button onClick={load} className="iconbtn"><RefreshCw size={13} /></button>
-          {canOrder && <button onClick={() => setOrder(true)} className="btn btn-ghost"><ShoppingCart size={13} /> Купить</button>}
+          {/* Кнопку показываем ВСЕГДА: спрятанная кнопка не объясняет, почему её
+              нет, — а причина («у провайдера не выбран адаптер с заказом»)
+              чинится в два клика в «Провайдерах». */}
+          <button onClick={() => setOrder(true)} className="btn btn-ghost">
+            <ShoppingCart size={13} /> Купить
+          </button>
           <button onClick={() => setModal({})} className="btn btn-primary"><Plus size={13} /> Услуга</button>
         </>} />
 
@@ -101,7 +106,24 @@ export function InfraServices() {
 
       {modal && <ServiceModal edit={modal.edit} providers={providers} projects={projects}
         onClose={() => setModal(null)} onSaved={() => { setModal(null); load(); }} />}
-      {order && <OrderModal providers={providers.filter(p => orderKinds.has(p.adapterKind))}
+      {order && !canOrder && (
+        <Modal title="Покупка недоступна" onClose={() => setOrder(false)}
+          footer={<button className="btn" onClick={() => setOrder(false)}>Понятно</button>}>
+          <p className="text-sm text-[var(--t-mid)]">
+            Ни у одного провайдера не выбран адаптер, умеющий заказ.
+          </p>
+          <p className="text-xs text-[var(--t-low)]">
+            Заказ сейчас поддерживают: RuVDS (конструктор), DigitalOcean и Hetzner.
+            Откройте «Провайдеры», выберите адаптер и запись Хранилища с кредами —
+            после этого кнопка заработает.
+          </p>
+          <p className="text-xs text-[var(--t-low)]">
+            У остальных провайдеров публичного API заказа нет — там сервер
+            оформляется в панели самого хостинга.
+          </p>
+        </Modal>
+      )}
+      {order && canOrder && <OrderModal providers={providers.filter(p => orderKinds.has(p.adapterKind))}
         onClose={() => setOrder(false)} onDone={() => { setOrder(false); load(); }} />}
     </Page>
   );

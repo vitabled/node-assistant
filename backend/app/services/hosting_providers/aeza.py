@@ -22,6 +22,31 @@
   100 раз больше — правка ровно в `_money()`.
 - **Время** приходит epoch-ом (секунды или миллисекунды) — переводится в ISO-UTC,
   иначе в интерфейсе была бы строка «1690000000000».
+
+Заказ (`order`) — единственная часть этого адаптера, которая НЕ угадана:
+метод описан в собственной документации вендора (`AezaGroup/dev-docs`,
+`t/service.md`), поэтому `CAPS` заявляет `order`.
+
+- **`POST /services/orders`**, тело: `count`, `term`, `name`, `productId`,
+  `parameters` (для VPS — `{"os": <id>}`), `autoProlong`, `method`. Каталог —
+  `GET /services/products`, список ОС — `GET /os`.
+- ⚠️ **`autoProlong` у вендора по умолчанию `true`, у нас — `false`.**
+  Автопродление списывает деньги в будущем без нового подтверждения; включать
+  его молча нельзя. То же решение принято для покупки домена в Cloudflare.
+- ⚠️ **`count` жёстко равен 1.** В контракте заказа количества нет, а
+  «случайно N серверов» — это оплаченная ошибка, а не опечатка.
+- **`method` по умолчанию `balance`** — оплата с баланса. Это самый
+  консервативный вариант: он не инициирует внешний платёж и просто не пройдёт,
+  если денег нет.
+- ⚠️ **Сразу после заказа `createdServiceIds` ПУСТ** (услуга ещё создаётся;
+  вендор предлагает опрашивать `GET /services/orders/{id}`). Мы делаем ровно
+  один POST и возвращаем идентификатор УСЛУГИ, если он уже приехал, иначе
+  идентификатор ЗАКАЗА. Опрашивать не идём: ретраев у создающей операции нет, а
+  ожидание в чужом API — не наша ответственность.
+- ⚠️ **Ключи `prices` неоднозначны** (в одних ответах это сроки, в других —
+  валюты), поэтому цена читается через `_product_price`, который различает оба
+  случая и молчит, когда цену для нужного срока не назвали. Как и во всём
+  остальном модуле, суммы НЕ делятся на 100 — см. `_money()`.
 """
 from __future__ import annotations
 
@@ -34,6 +59,8 @@ import httpx
 from app.services.hosting_providers.base import (
     Balance,
     CredField,
+    OrderOptions,
+    OrderPlan,
     ProviderAdapter,
     ServiceItem,
     map_http_error,
@@ -46,6 +73,22 @@ _BASE = "https://my.aeza.net/api"
 
 # Кандидаты пути баланса: берём первый ответивший (см. докстроку).
 _BALANCE_PATHS = ("/account", "/customer", "/user")
+
+_PRODUCTS_PATH = "/services/products"
+_OS_PATH = "/os"
+_ORDERS_PATH = "/services/orders"
+
+# Срок оплаты. Один и тот же резолвер используется и в расчёте цены, и в заказе,
+# поэтому подтверждённая сумма всегда относится к тому сроку, который уйдёт в
+# запрос. Полного перечня сроков вендор не публикует («hour, month и т.д.»).
+_TERM = {"hour": "hour", "hourly": "hour", "day": "day", "daily": "day",
+         "month": "month", "monthly": "month", "1month": "month",
+         "quarter": "quarter", "3month": "quarter",
+         "year": "year", "yearly": "year", "12month": "year"}
+_DEFAULT_TERM = "month"
+# Написания, по которым узнаётся карта цен «по срокам», а не «по валютам».
+_TERM_KEYS = {"hour", "day", "week", "month", "quarter",
+              "halfyear", "half_year", "year"}
 
 _AMOUNT_KEYS = ("balance", "amount", "value", "sum", "money", "funds", "total")
 _CURRENCY_KEYS = ("currency", "currencyCode", "currency_code", "curr")
@@ -64,6 +107,17 @@ def _money(raw: Any) -> Optional[float]:
         return float(str(raw).strip())
     except (TypeError, ValueError):
         return None
+
+
+def _int_id(raw: Any) -> Optional[int]:
+    """Целочисленный идентификатор (`productId`, `os`) или None.
+
+    `bool` отсекается явно: в Python `True` — это `int`, и «id=True» уехало бы
+    в тело заказа единицей."""
+    if isinstance(raw, bool):
+        return None
+    value = _money(raw)
+    return None if value is None else int(value)
 
 
 def _pick_number(node: dict, keys: tuple[str, ...]) -> Optional[float]:
@@ -120,6 +174,42 @@ def _items(payload: Any) -> list[dict]:
     return [row for row in node if isinstance(row, dict)] if isinstance(node, list) else []
 
 
+def _term(raw: Any) -> str:
+    return _TERM.get(str(raw or "").strip().lower(), _DEFAULT_TERM)
+
+
+def _price_value(node: Any) -> Optional[float]:
+    if isinstance(node, dict):
+        return _pick_number(node, ("value", "price", "amount", "sum"))
+    return _money(node)
+
+
+def _product_price(product: dict, term: str) -> Optional[float]:
+    """Цена продукта за указанный СРОК, либо `None`.
+
+    ⚠️ `prices` бывает картой по срокам (`{"month": …}`) и картой по валютам
+    (`{"rub": {"value", "slug", "defaultCurrency"}}`). Различаем по ключам:
+    у карты сроков чужой срок — это НЕ цена нашего заказа, поэтому подставлять
+    её вместо отсутствующей нельзя (пользователь подтвердил бы час вместо
+    месяца). У карты валют берём валюту по умолчанию."""
+    prices = product.get("prices")
+    if not isinstance(prices, dict):
+        return _pick_number(product, ("price", "cost", "summaryPrice"))
+    lowered = {str(key).lower(): value for key, value in prices.items()}
+    if any(key in _TERM_KEYS for key in lowered):
+        return _price_value(lowered.get(term)) if term in lowered else None
+    for node in prices.values():
+        if isinstance(node, dict) and node.get("defaultCurrency"):
+            value = _price_value(node)
+            if value is not None:
+                return value
+    for node in prices.values():
+        value = _price_value(node)
+        if value is not None:
+            return value
+    return None
+
+
 def _api_error(data: Any) -> str:
     """Текст ошибки из тела ответа, "" если тело выглядит нормальным."""
     if not isinstance(data, dict):
@@ -137,7 +227,7 @@ class AezaAdapter(ProviderAdapter):
     KIND = "aeza"
     TITLE = "Aeza"
     FIELDS = [CredField("api_key", "API-ключ", "password")]
-    CAPS = {"balance", "services", "payments"}
+    CAPS = {"balance", "services", "payments", "order"}
 
     async def _get(self, creds: dict, path: str) -> tuple[Any, str, int]:
         """→ (payload, error, http-статус). Статус нужен вызывающему, чтобы
@@ -167,6 +257,34 @@ class AezaAdapter(ProviderAdapter):
         if err:
             return None, redact(err, key), r.status_code
         return data, "", r.status_code
+
+    async def _post(self, creds: dict, path: str, body: dict) -> tuple[Any, str]:
+        """РОВНО один POST, без ретраев: заказ тратит деньги, и таймаут не
+        означает «не заказано»."""
+        key = str((creds or {}).get("api_key") or "").strip()
+        try:
+            async with self._client() as c:
+                r = await c.post(f"{_BASE}{path}", json=body, headers={
+                    "X-API-Key": key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                })
+        except httpx.HTTPError as exc:
+            return None, f"Aeza недоступна: {redact(str(exc), key)}"
+
+        if r.status_code >= 400:
+            try:
+                text = _api_error(r.json())
+            except ValueError:
+                text = ""
+            return None, redact(text, key) or map_http_error(r.status_code)
+        try:
+            data = r.json()
+        except ValueError:
+            return None, "Aeza вернула не-JSON ответ"
+        # Aeza умеет ответить 200 с телом-ошибкой — для заказа это критично.
+        err = _api_error(data)
+        return (None, redact(err, key)) if err else (data, "")
 
     async def _balance_payload(self, creds: dict) -> tuple[Any, str]:
         """Первый путь из `_BALANCE_PATHS`, который ответил."""
@@ -232,6 +350,146 @@ class AezaAdapter(ProviderAdapter):
         if err:
             return []
         return [_transaction(raw) for raw in _items(data)]
+
+    # ── Заказ ──────────────────────────────────────────────────
+    async def order_options(self, creds: dict) -> Optional[OrderOptions]:
+        if self.check_fields(creds):
+            return None
+        data, err, _status = await self._get(creds, _PRODUCTS_PATH)
+        if err:
+            return None
+        rows = _items(data)
+        if not rows:
+            log.warning("aeza: no recognised items in %s", _PRODUCTS_PATH)
+            return None
+        oses, os_err, _os_status = await self._get(creds, _OS_PATH)
+
+        plans: list[OrderPlan] = []
+        for raw in rows:
+            pid = _int_id(raw.get("id"))
+            # Приватный продукт назначается администратором персонально —
+            # предлагать его к самостоятельному заказу нельзя.
+            if pid is None or raw.get("isPrivate"):
+                continue
+            group = raw.get("group")
+            specs = _pick_str(group, ("name", "title")) if isinstance(group, dict) else ""
+            install = _money(raw.get("installPrice")) or 0
+            if install > 0:
+                # Разовая плата за установку — это тоже деньги пользователя,
+                # и в `price` контракта она не помещается.
+                specs = (f"{specs} · " if specs else "") + f"установка {install:g}"
+            plans.append(OrderPlan(
+                id=str(pid),
+                name=_pick_str(raw, _NAME_KEYS) or f"Продукт {pid}",
+                specs=specs,
+                price=_product_price(raw, _DEFAULT_TERM),
+                currency=_pick_str(raw, _CURRENCY_KEYS, "RUB").upper(),
+                period=_DEFAULT_TERM,
+            ))
+
+        images: list[dict] = []
+        if not os_err:
+            for raw in _items(oses):
+                oid = _int_id(raw.get("id"))
+                if oid is None:
+                    continue
+                images.append({
+                    "id": str(oid),
+                    "name": _pick_str(raw, _NAME_KEYS) or f"OS {oid}",
+                })
+
+        return OrderOptions(
+            plans=plans,
+            # Локация у Aeza зашита в сам продукт, отдельной ручки локаций в
+            # документации нет — выдумывать список не из чего.
+            regions=[],
+            images=images,
+            custom=None,  # готовые продукты, конструктора нет
+        )
+
+    async def _order_body(self, creds: dict, spec: dict) -> tuple[Optional[dict], str]:
+        """Тело `POST /services/orders` по спецификации формы."""
+        missing = self.check_fields(creds)
+        if missing:
+            return None, missing
+
+        spec = spec or {}
+        product_id = _int_id(spec.get("plan_id"))
+        os_id = _int_id(spec.get("image"))
+        name = str(spec.get("name") or "").strip()
+        empty = [label for label, value in (
+            ("тариф", product_id), ("образ ОС", os_id),
+        ) if value is None]
+        if not name:
+            empty.append("имя услуги")
+        if empty:
+            return None, "не заполнено: " + ", ".join(empty)
+
+        return {
+            "count": 1,                       # никогда не больше одной услуги
+            "term": _term(spec.get("period")),
+            "name": name,
+            "productId": product_id,
+            "parameters": {"os": os_id},
+            # Вендорское умолчание — true; см. докстроку модуля.
+            "autoProlong": bool(spec.get("auto_prolong", False)),
+            "method": str(spec.get("method") or "balance"),
+        }, ""
+
+    async def quote_order(self, creds: dict, spec: dict) -> Optional[dict]:
+        """Цена продукта за ТОТ срок, который уйдёт в заказ."""
+        spec = spec or {}
+        product_id = _int_id(spec.get("plan_id"))
+        if product_id is None or self.check_fields(creds):
+            return None
+        data, err, _status = await self._get(creds, _PRODUCTS_PATH)
+        if err:
+            return None
+        for raw in _items(data):
+            if _int_id(raw.get("id")) != product_id:
+                continue
+            price = _product_price(raw, _term(spec.get("period")))
+            if price is None:
+                return None
+            return {"price": price,
+                    "currency": _pick_str(raw, _CURRENCY_KEYS, "RUB").upper()}
+        return None
+
+    async def create_order(self, creds: dict, spec: dict) -> dict:
+        fail = {"ok": False, "id": "", "name": "", "price": None, "currency": "RUB"}
+        body, err = await self._order_body(creds, spec)
+        if err or body is None:
+            return {**fail, "error": err or "не удалось собрать заказ"}
+
+        data, err = await self._post(creds, _ORDERS_PATH, body)
+        if err:
+            return {**fail, "error": err}
+        node = _unwrap(data)
+        if not isinstance(node, dict):
+            return {**fail, "error": "Aeza приняла запрос, но не вернула заказ "
+                                     "— проверьте ЛК перед повторной попыткой"}
+        # Услуга создаётся асинхронно: сразу после заказа список пуст (докстрока).
+        created = node.get("createdServiceIds")
+        service_id = None
+        if isinstance(created, list):
+            service_id = next((_int_id(x) for x in created
+                               if _int_id(x) is not None), None)
+        order_id = _int_id(node.get("id"))
+        if service_id is None and order_id is None:
+            return {**fail, "error": "Aeza приняла запрос, но не вернула идентификатор "
+                                     "— проверьте ЛК перед повторной попыткой"}
+        return {
+            "ok": True,
+            "id": str(service_id if service_id is not None else order_id),
+            "name": str(body["name"]),
+            "price": None,
+            # Валюту НЕ переопределяем. Ответ заказа её не называет, а карта
+            # `prices` бывает и по валютам — подставив сюда «RUB», мы бы
+            # переписали ту валюту, в которой пользователь подтвердил сумму
+            # (маршрут предпочитает значение адаптера любому непустому).
+            "currency": "",
+            "error": "",
+        }
 
 
 def _period(raw: dict) -> str:

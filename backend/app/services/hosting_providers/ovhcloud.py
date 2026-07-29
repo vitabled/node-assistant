@@ -29,6 +29,24 @@ Consumer Key, выпускаются на https://api.ovh.com/createToken/). П�
 счёт клиента), поэтому `balance()` отдаёт `None` — честное «баланс вручную».
 
 ⚠️ **US живёт на другом домене** — `api.us.ovhcloud.com`, а НЕ `us.api.ovh.com`.
+
+**⚠️ Заказ: `CAPS` НЕ заявляет `order`, и это не недоделка.** У OVHcloud покупка
+идёт через КОРЗИНУ, и это не один запрос, а последовательность
+`POST /order/cart` → `POST /order/cart/{id}/assign` →
+`POST /order/cart/{id}/{product}` → `POST …/item/{itemId}/configuration` (по
+одному на каждый обязательный параметр) → `POST /order/cart/{id}/checkout`.
+Состав обязательных параметров СВОЙ у каждого предложения и узнаётся отдельной
+ручкой `requiredConfiguration`, то есть предсказуемой последовательности,
+которую можно покрыть тестом, здесь нет. А последний шаг — checkout — уже
+списывает деньги. Поэтому `create_order` отказывает СЛОВАМИ и без единого
+запроса: кнопка, которая наполовину соберёт корзину и бросит её, хуже
+отсутствия кнопки.
+
+Каталог предложений при этом честный и живой: `order_options()` читает
+публичный `GET /order/catalog/public/vps?ovhSubsidiary=…` — это справка, по
+которой видно, что вообще предлагают и почём. Как и у `selectel`, через маршрут
+он сейчас недостижим (ручка `order-options` гейтится на `CAPS`) и станет
+доступен, если корзину когда-нибудь реализуют.
 """
 from __future__ import annotations
 
@@ -43,6 +61,8 @@ import httpx
 
 from app.services.hosting_providers.base import (
     CredField,
+    OrderOptions,
+    OrderPlan,
     ProviderAdapter,
     map_http_error,
     redact,
@@ -62,6 +82,17 @@ _DEFAULT_ENDPOINT = "eu"
 # порядок в списке не документирован — по дате отобрать надёжнее, чем «с конца».
 _HISTORY_DAYS = 180
 _MAX_BILLS = 24
+
+# Каталог отдаёт цены ЦЕЛЫМИ микро-центами: 3.59 € приезжает как 359000000.
+_CATALOG_UNIT = 100_000_000
+_MAX_PLANS = 60
+
+_ORDER_UNSUPPORTED = (
+    "OVHcloud оформляет заказ через корзину: cart → assign → item → "
+    "configuration (свой набор параметров у каждого предложения) → checkout, "
+    "и checkout сразу списывает деньги. Предсказуемой одношаговой "
+    "последовательности здесь нет — оформите заказ в панели OVHcloud"
+)
 
 
 def endpoint_base(name: str) -> str:
@@ -89,6 +120,34 @@ def _num(value: Any) -> Optional[float]:
         return float(str(value).strip().replace(",", "."))
     except (TypeError, ValueError):
         return None
+
+
+def catalog_price(pricings: Any) -> tuple[Optional[float], str]:
+    """(цена продления, период) из блока `pricings` публичного каталога. Чистая.
+
+    ⚠️ **Единица — микро-центы**: делитель зафиксирован тестом, потому что сумма,
+    показанная в сто миллионов раз больше реальной, страшнее её отсутствия.
+    Берём тариф продления (`renew`), а не установки: именно он повторяется
+    каждый месяц. Форму `{"value": …}` (так отвечает корзина) тоже принимаем."""
+    rows = [p for p in pricings if isinstance(p, dict)] if isinstance(pricings, list) else []
+    chosen = next((p for p in rows
+                   if "renew" in (p.get("capacities") or [])), None)
+    if chosen is None and rows:
+        chosen = rows[0]
+    if chosen is None:
+        return None, ""
+
+    raw = chosen.get("price")
+    if isinstance(raw, dict):
+        price = _num(raw.get("value"))
+    else:
+        micro = _num(raw)
+        price = round(micro / _CATALOG_UNIT, 2) if micro is not None else None
+
+    unit = str(chosen.get("intervalUnit") or "").strip().lower()
+    interval = _num(chosen.get("interval")) or 1
+    period = unit if interval == 1 else f"{interval:g}{unit}"
+    return price, period
 
 
 class OvhcloudAdapter(ProviderAdapter):
@@ -223,6 +282,56 @@ class OvhcloudAdapter(ProviderAdapter):
             })
         out.sort(key=lambda row: str(row.get("ts") or ""), reverse=True)
         return out
+
+    # ── Заказ ──────────────────────────────────────────────────
+    async def order_options(self, creds: dict) -> Optional[OrderOptions]:
+        """Справочный каталог VPS. Заказ отсюда НЕ оформляется (см. докстринг)."""
+        if self.check_fields(creds):
+            return None
+        me, err, _status = await self._request(creds, "GET", "/me")
+        if err or not isinstance(me, dict):
+            return None
+        subsidiary = str(me.get("ovhSubsidiary") or "").strip().upper()
+        if not subsidiary.isalpha() or len(subsidiary) > 5:
+            # Подставлять «FR» нельзя: это чужие цены в чужой валюте.
+            log.warning("ovhcloud: непонятный ovhSubsidiary — каталог не строим")
+            return None
+
+        data, err, _status = await self._request(
+            creds, "GET", f"/order/catalog/public/vps?ovhSubsidiary={subsidiary}")
+        if err or not isinstance(data, dict):
+            return None
+        locale = data.get("locale") if isinstance(data.get("locale"), dict) else {}
+        currency = str(locale.get("currencyCode")
+                       or ((me.get("currency") or {}).get("code")
+                           if isinstance(me.get("currency"), dict) else "")
+                       or "").upper()
+
+        plans: list[OrderPlan] = []
+        for row in (data.get("plans") or []):
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("planCode") or "").strip()
+            if not code:
+                continue
+            price, period = catalog_price(row.get("pricings"))
+            plans.append(OrderPlan(
+                id=code,
+                name=str(row.get("invoiceName") or code),
+                specs=str(row.get("description") or "").strip(),
+                price=price,
+                currency=currency,
+                period=period or "month",
+            ))
+        del plans[_MAX_PLANS:]
+        # Площадка и ОС у OVH — это `configuration` позиции корзины, а корзины у
+        # нас нет: списки пустые, чтобы форма не обещала выбор, которого нет.
+        return OrderOptions(plans=plans, regions=[], images=[], custom=None)
+
+    async def create_order(self, creds: dict, spec: dict) -> dict:
+        """Честный отказ БЕЗ единого запроса — см. докстринг модуля."""
+        return {"ok": False, "id": "", "name": "", "price": None, "currency": "",
+                "error": _ORDER_UNSUPPORTED}
 
 
 ADAPTER = OvhcloudAdapter()

@@ -144,8 +144,15 @@ def test_tools_status_reports_off_by_default():
     h = _auth()
     r = client.get("/api/ai/tools", headers=h)
     assert r.status_code == 200
-    assert r.json()["mcp"] == 0 and r.json()["reason"] == "off"
-    assert r.json()["builtin"] == len(ai_agent.TOOLS)
+    body = r.json()
+    assert body["mcp"] == 0 and body["reason"] == "off"
+    # `builtin` — это то, что ассистенту РЕАЛЬНО доступно сейчас, а не размер
+    # каталога: в режиме чтения (он по умолчанию) изменяющие инструменты не
+    # предлагаются вовсе. Утверждаем это свойство, а не число.
+    assert body["builtin"] == len(body["tools"])
+    assert body["writes"] is False
+    assert [n for n in body["tools"] if ai_agent.TOOLS[n].write] == []
+    assert body["builtin"] < len(ai_agent.TOOLS)
 
 
 def test_tools_status_requires_auth():
