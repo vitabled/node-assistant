@@ -1,5 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { Loader2, Send, Bot, Wrench, AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Globe, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Loader2, Send, Square, Bot, PanelLeft, Wrench, AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Globe, Trash2, MessageSquarePlus } from "lucide-react";
+import { usePermissions } from "../../auth/usePermissions";
+import {
+  listSessions, getActive, setActive, newSession, clearActive,
+  replaceMessages, removeSession, type Msg, type SessionsState,
+} from "./aiSessions";
+import * as runner from "./aiRunner";
 
 /** Только то, что нужно чату: гейт композера. Форма настроек живёт в
  *  «Настройки → Ассистент» (`settings/AiSettingsTab.tsx`) — эта страница НИЧЕГО
@@ -25,13 +31,31 @@ interface ToolsInfo {
 
 /** Вложение живёт ровно один вопрос: файлы не персистятся, они относятся к
  *  сообщению, а не к аккаунту (см. api/ai.py::Attachment). */
-interface Attachment { name: string; mime: string; text: string; data_b64: string }
+interface AttachmentImage { index: number; mime: string; data_b64: string }
+interface Attachment {
+  name: string; mime: string; text: string; data_b64: string;
+  /** Картинки, вынесенные из текста. В промпт не попадают — ассистент сохраняет
+   *  их в медиатеку инструментом save_attachment_image по номеру маркера. */
+  images?: AttachmentImage[];
+}
 
 const MAX_FILES = 5;
 /** Сервер режет историю сам (ai_agent.MAX_HISTORY_MESSAGES), но гонять по сети
  *  весь разговор незачем — отправляем тот же хвост. */
 const MAX_HISTORY_MESSAGES = 20;
-const MAX_TEXT_CHARS = 40_000;
+// ⚠️ Потолок на ВЕСЬ файл, а не на то, что уедет в промпт: сервер кладёт в
+// сообщение только начало, а остальное ассистент дочитывает инструментом
+// read_attachment. Прежние 40 000 резали каталог хостингов на 22 МБ до 0,18%, и
+// ассистент честно сообщал, что данных в файле нет — обрезали его мы.
+const MAX_TEXT_CHARS = 2_000_000;
+
+// Встроенные картинки выносим в ОТДЕЛЬНОЕ поле, а в тексте оставляем маркер с
+// номером. Их нельзя ни оставить, ни выбросить: в каталоге хостингов на них
+// приходилось 97% объёма (21 МБ из 22) — с ними не помещаются сами данные; а
+// выбросить значит потерять то, что и просят перенести (у карточки хостинга
+// есть вложения). Маркер стоит РОВНО на месте картинки, поэтому по нему видно,
+// какому хостингу она принадлежит.
+const DATA_URI_RE = /data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)/gi;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
@@ -50,29 +74,83 @@ async function readFile(f: File): Promise<Attachment | string> {
   // прочитается, но пользы от него модели не будет — предупреждаем размером.
   const text = await f.text();
   if (!text.trim()) return `${f.name}: пустой или нечитаемый файл`;
-  return { name: f.name, mime: mime || "text/plain", text: text.slice(0, MAX_TEXT_CHARS), data_b64: "" };
+  const images: AttachmentImage[] = [];
+  const lean = text.replace(DATA_URI_RE, (_m, imgMime: string, b64: string) => {
+    const index = images.length;
+    images.push({ index, mime: imgMime.toLowerCase(), data_b64: b64 });
+    return `«изображение #${index}»`;
+  });
+  return { name: f.name, mime: mime || "text/plain",
+           text: lean.slice(0, MAX_TEXT_CHARS), data_b64: "", images };
 }
 
-/** `text` — ровно то, что уходит в историю. Имена вложений держим ОТДЕЛЬНЫМ
- *  полем, а не приписываем к тексту: вложения эфемерны, и в истории следующего
- *  хода строка «📎 …» была бы враньём — файлов у модели там уже нет. */
-type Msg =
-  | { role: "user"; text: string; files?: string[] }
-  | { role: "assistant"; text: string; tools: { id?: string; name: string; ok?: boolean }[] };
+/** Команда срабатывает, только если это ВСЁ содержимое поля. Иначе нельзя было
+ *  бы спросить «что отдаёт /api/ai/config» — вопрос про путь молча превратился
+ *  бы в команду. Поэтому неизвестный «/…» уходит в чат обычным текстом. */
+const COMMANDS = ["/newsession", "/clear", "/compact"] as const;
+type Command = (typeof COMMANDS)[number];
+const asCommand = (s: string): Command | null =>
+  (COMMANDS as readonly string[]).includes(s) ? (s as Command) : null;
+
+/** Событие состояния из стрима (`ai_agent.run_agent`). */
+interface AgentStatus {
+  phase: "thinking" | "tools" | "done";
+  step: number;
+  steps: number;
+  tokens: number;
+  /** Инструмент, который выполняется прямо сейчас. Ставит клиент по tool_call. */
+  tool?: string;
+}
+
+/** «6.4k» вместо «6432»: точное число здесь не нужно, а короткое не прыгает
+ *  шириной на каждом обновлении. */
+export const fmtTokens = (n: number) =>
+  n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n);
+
+export const fmtElapsed = (sec: number) =>
+  sec < 60 ? `${sec}с` : `${Math.floor(sec / 60)}м ${String(sec % 60).padStart(2, "0")}с`;
+
+const PHASE_LABEL: Record<AgentStatus["phase"], string> = {
+  thinking: "Думает",
+  tools: "Работает с панелью",
+  done: "Готово",
+};
+
+/** Пометка сжатого контекста: пузырь выглядит как ответ ассистента, и без неё
+ *  выжимка читалась бы как реплика в разговоре. */
+const COMPACT_PREFIX = "📝 Сжатый контекст:";
 
 export function AiChat() {
+  const { user } = usePermissions();
+  const uid = user?.id ?? null;
   const [cfg, setCfg] = useState<AiChatConfig | null>(null);
   const [caps, setCaps] = useState<ToolsInfo | null>(null);
-  const [msgs, setMsgs] = useState<Msg[]>([]);
+  // Состояние ответа и сам лог живут в `aiRunner` — модуле вне компонента:
+  // иначе уход в другой раздел панели размонтирует чат и обрывает запрос.
+  useSyncExternalStore(runner.subscribe, runner.getVersion);
+  const store = runner.ensureSessions(uid);
+  const run = runner.getRunState();
+
+  const [cmdErr, setCmdErr] = useState("");
+  /** Сжатие идёт одним запросом и уходом со страницы не портится — держим его
+   *  локально, в отличие от длинного ответа агента. */
+  const [compacting, setCompacting] = useState(false);
+  // Композер запираем и на сжатие: оно тоже ходит к модели.
+  const busy = run.busy || compacting;
+  // Список разговоров. На узком экране закрыт по умолчанию: панель в 224px
+  // съела бы больше половины ширины телефона (там она ложится ПОВЕРХ чата —
+  // правило `.ni-ai-sessions` в index.css).
+  const [panelOpen, setPanelOpen] = useState(
+    () => typeof window === "undefined" || window.innerWidth > 820);
   const [input, setInput] = useState("");
   const [attach, setAttach] = useState<Attachment[]>([]);
   const [attachErr, setAttachErr] = useState("");
   const [over, setOver] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const [busy, setBusy] = useState(false);
+  const status = run.status;
+  const [elapsed, setElapsed] = useState(0);
   const [loadErr, setLoadErr] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     fetch("/api/ai/config")
@@ -85,10 +163,35 @@ export function AiChat() {
       .then(r => { if (!r.ok) throw new Error("bad"); return r.json(); })
       .then(setCaps)
       .catch(() => {});
-    // Abort an in-flight chat stream if the user leaves the tab.
-    return () => abortRef.current?.abort();
+    // ⚠️ Уход со страницы НЕ отменяет запрос: ответ по большому файлу идёт
+    // минутами, и переключиться на другой раздел на это время нормально.
+    // Отмена осталась только явной — кнопкой «Остановить».
+    //
+    // А это — подхват ответа, который продолжал идти на сервере, пока страницу
+    // перезагружали. Без него F5 выглядел бы как потеря работы, хотя работа
+    // никуда не девалась.
+    void runner.resume(uid);
   }, []);
+
+  // Часы тикают ТОЛЬКО во время ответа: интервал, живущий всегда, перерисовывал
+  // бы страницу раз в секунду просто так.
+  useEffect(() => {
+    if (!busy || !run.startedAt) return;
+    // ⚠️ Отсчёт от `startedAt` ИСПОЛНИТЕЛЯ, а не от монтирования: вернувшись на
+    // страницу, человек должен видеть настоящее время работы, а не ноль.
+    const tick = () => setElapsed(Math.floor((Date.now() - run.startedAt) / 1000));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [busy, run.startedAt]);
+
+  const msgs = getActive(store).messages;
   useEffect(() => { scrollRef.current?.scrollTo?.(0, scrollRef.current.scrollHeight); }, [msgs]);
+
+  // Чтение под ключом личности и запись в localStorage делает `aiRunner`:
+  // писать обязан тот, кто владеет состоянием, иначе ответ, пришедший при
+  // закрытой странице, оседать было бы некуда.
+  const commit = (next: SessionsState) => runner.updateSessions(() => next);
 
   const addFiles = async (files: FileList | File[]) => {
     const list = Array.from(files);
@@ -105,68 +208,62 @@ export function AiChat() {
     setAttachErr(errs.join("; "));
   };
 
+  // История собирается ДО добавления текущей пары: без неё «а теперь то же для
+  // второй ноды» не к чему привязать. Пустые пузыри (прерванный ответ)
+  // пропускаем — они ничего не сообщают модели. После `/compact` тут уже лежит
+  // одна выжимка, поэтому сборка ничего про сжатие знать не должна.
+  const buildHistory = (list: Msg[]) =>
+    list.filter(m => m.text.trim())
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map(m => ({ role: m.role, content: m.text }));
+
+  /** `/compact` — заменить переписку выжимкой. Сжимать пустой разговор незачем. */
+  const runCompact = async () => {
+    const history = buildHistory(msgs);
+    if (!history.length) { setCmdErr("Сжимать нечего — переписка пуста."); return; }
+    setCompacting(true);
+    try {
+      const res = await fetch("/api/ai/compact", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ history }),
+      });
+      const data = await res.json().catch(() => ({} as any));
+      // Причину отказа показываем дословно: «ИИ-агент выключен» и «модель не
+      // ответила» требуют разных действий от человека.
+      if (!res.ok) throw new Error(typeof data?.detail === "string" ? data.detail : "Не удалось сжать переписку.");
+      // Пустая выжимка — тоже отказ: заменить ею разговор значило бы стереть
+      // его молча.
+      if (typeof data?.summary !== "string" || !data.summary.trim())
+        throw new Error("Модель вернула пустую выжимку — переписка не тронута.");
+      commit(replaceMessages(store, [
+        { role: "assistant", text: `${COMPACT_PREFIX} ${data.summary}`, tools: [] },
+      ]));
+    } catch (e: any) {
+      setCmdErr(String(e?.message || "Не удалось сжать переписку."));
+    } finally { setCompacting(false); }
+  };
+
   const send = async () => {
     const prompt = input.trim();
     if (!prompt || busy) return;
+    setCmdErr("");
+
+    // Команды разбираем ДО сети: они ничего не спрашивают у модели.
+    const cmd = asCommand(prompt);
+    if (cmd) {
+      setInput("");
+      if (cmd === "/newsession") commit(newSession(store));
+      else if (cmd === "/clear") commit(clearActive(store));
+      else await runCompact();
+      return;
+    }
+
     const files = attach;
     setInput("");
     setAttach([]); setAttachErr("");
-    // История собирается ДО добавления текущей пары: без неё «а теперь то же
-    // для второй ноды» не к чему привязать. Пустые пузыри (прерванный ответ)
-    // пропускаем — они ничего не сообщают модели.
-    const history = msgs
-      .filter(m => m.text.trim())
-      .slice(-MAX_HISTORY_MESSAGES)
-      .map(m => ({ role: m.role, content: m.text }));
-    setMsgs(m => [
-      ...m,
-      { role: "user", text: prompt, files: files.length ? files.map(f => f.name) : undefined },
-      { role: "assistant", text: "", tools: [] },
-    ]);
-    setBusy(true);
-
-    // Pure updater: replace the last assistant message with a NEW object (no
-    // in-place mutation — safe under React StrictMode double-invoke).
-    const patchLast = (fn: (m: Extract<Msg, { role: "assistant" }>) => void) =>
-      setMsgs(m => {
-        const last = m[m.length - 1];
-        if (!last || last.role !== "assistant") return m;
-        const next = { ...last, tools: last.tools.map(t => ({ ...t })) };
-        fn(next);
-        return [...m.slice(0, -1), next];
-      });
-
-    const ac = new AbortController();
-    abortRef.current = ac;
-    try {
-      const res = await fetch("/api/ai/chat", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, attachments: files, history }), signal: ac.signal,
-      });
-      if (!res.ok || !res.body) throw new Error("stream failed");
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const ln of lines) {
-          if (!ln.trim()) continue;
-          let ev: any;
-          try { ev = JSON.parse(ln); } catch { continue; }
-          if (ev.type === "text") patchLast(a => { a.text += ev.delta; });
-          else if (ev.type === "tool_call") patchLast(a => { a.tools.push({ id: ev.id, name: ev.name }); });
-          else if (ev.type === "tool_result")
-            patchLast(a => { const t = a.tools.find(x => (ev.id ? x.id === ev.id : x.name === ev.name && x.ok === undefined)); if (t) t.ok = ev.ok; });
-          else if (ev.type === "error") patchLast(a => { a.text += `\n⚠️ ${ev.message}`; });
-        }
-      }
-    } catch {
-      if (!ac.signal.aborted) patchLast(a => { a.text += "\n⚠️ Ошибка соединения с ИИ."; });
-    } finally { if (abortRef.current === ac) abortRef.current = null; setBusy(false); }
+    // Сам запрос ведёт `aiRunner`: он переживает уход со страницы, пишет ответ
+    // в хранилище и рассылает прогресс подписчикам.
+    void runner.send({ prompt, attachments: files, history: buildHistory(msgs) });
   };
 
   if (loadErr) return <p className="text-sm text-[var(--err)]">Не удалось загрузить конфигурацию ИИ.</p>;
@@ -181,10 +278,71 @@ export function AiChat() {
     // `flex-1`, а НЕ `h-full`: родитель (`<Screen>` в App.tsx) — flex-колонка с
     // `flex:1; min-height:0`, поэтому процентная высота зависела бы от того,
     // разрешима ли высота выше по дереву, а flex-растяжение — нет.
-    <div className="flex flex-col flex-1 min-h-0 ni-pagebody">
+    // Строка: слева список разговоров, справа сам чат. `relative` — чтобы на
+    // узком экране панель легла поверх чата (правило в index.css), а не
+    // отъедала половину ширины.
+    <div className="flex flex-1 min-h-0 relative">
+      {panelOpen && (
+        <aside className="ni-ai-sessions shrink-0 w-56 flex flex-col min-h-0 border-r"
+          style={{ borderColor: "var(--line-soft)", background: "var(--bg2)" }}
+          data-testid="ai-sessions">
+          <div className="p-2 shrink-0">
+            <button disabled={busy} onClick={() => commit(newSession(store))}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs
+                         text-[var(--t-hi)] hover:bg-[var(--bg3)] disabled:opacity-40">
+              <MessageSquarePlus size={14} /> Новый разговор
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 flex flex-col gap-0.5">
+            {listSessions(store).map(s2 => {
+              const active = s2.id === getActive(store).id;
+              return (
+                // Строка целиком кликабельна, крестик — поверх неё; иначе на
+                // узкой панели в 224px попасть в маленькую цель тяжело.
+                <div key={s2.id} className="group relative">
+                  <button disabled={busy} onClick={() => commit(setActive(store, s2.id))}
+                    title={s2.title || "Новый разговор"} data-testid="ai-session-row"
+                    className="w-full text-left pl-2 pr-7 py-1.5 rounded-lg text-xs truncate
+                               disabled:opacity-40"
+                    style={active
+                      ? { background: "var(--accent-dim)", color: "var(--t-hi)" }
+                      : { color: "var(--t-mid)" }}>
+                    {s2.title || "Новый разговор"}
+                  </button>
+                  <button title="Удалить разговор" disabled={busy}
+                    onClick={() => commit(removeSession(store, s2.id))}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded
+                               text-[var(--t-faint)] opacity-0 group-hover:opacity-100
+                               hover:text-[var(--err)] disabled:opacity-0">
+                    <X size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      )}
+
+      <div className="flex flex-col flex-1 min-w-0 min-h-0 ni-pagebody">
       <div className="shrink-0 flex items-center gap-2 h-11 px-4 ni-pagehead">
+        <button title={panelOpen ? "Скрыть разговоры" : "Показать разговоры"}
+          aria-label="Список разговоров" aria-expanded={panelOpen}
+          onClick={() => setPanelOpen(o => !o)}
+          className="p-1.5 rounded-lg text-[var(--t-low)] hover:text-[var(--accent-hi)]">
+          <PanelLeft size={15} />
+        </button>
         <Bot size={16} className="text-[var(--accent-hi)]" />
-        <span className="text-sm font-semibold text-[var(--t-hi)]">Встроенный ИИ-агент</span>
+        {/* `min-w-0` + `truncate`: заголовок разговора задаёт пользователь, и
+            длинный текст иначе распирает шапку (было именно так с выпадающим
+            списком — он не сжимался и вылезал за рамку). */}
+        <span className="text-sm font-semibold text-[var(--t-hi)] truncate min-w-0"
+          title={getActive(store).title || "Новый разговор"}>
+          {getActive(store).title || "Новый разговор"}
+        </span>
+        <span className="text-[11px] text-[var(--t-low)] ml-auto shrink-0"
+          data-testid="ai-msg-count">
+          Сообщений: {msgs.length}
+        </span>
       </div>
 
       {!cfg.enabled && (
@@ -235,6 +393,39 @@ export function AiChat() {
             )}
           </div>
         ))}
+
+        {/* Строка состояния — В КОНЦЕ ЛОГА, а не в шапке: лог автопрокручивается
+            вниз, поэтому она всегда на виду, и её видно рядом с тем, что агент
+            уже успел сделать. */}
+        {busy && (
+          <div className="self-start flex items-center gap-2 text-[11px] text-[var(--t-low)]"
+            data-testid="ai-status" aria-live="polite">
+            <Loader2 size={12} className="animate-spin text-[var(--accent-hi)]" />
+            <span className="text-[var(--t-mid)]">
+              {status ? PHASE_LABEL[status.phase] : "Отправка"}
+            </span>
+            <span>·</span>
+            <span>{fmtElapsed(elapsed)}</span>
+            {status && (
+              <>
+                <span>·</span>
+                <span>шаг {status.step} из {status.steps}</span>
+              </>
+            )}
+            {status && status.tokens > 0 && (
+              <>
+                <span>·</span>
+                <span>{fmtTokens(status.tokens)} токенов</span>
+              </>
+            )}
+            {status?.tool && (
+              <>
+                <span>·</span>
+                <span className="font-mono truncate max-w-[160px]">{status.tool}</span>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="shrink-0 flex flex-col gap-2 p-4"
@@ -254,6 +445,14 @@ export function AiChat() {
             <span>{caps.writes ? "Режим: чтение и запись" : "Режим: только чтение"}</span>
           </div>
         )}
+
+        {/* Команды — строкой под композером, а не модалкой: подсказка нужна
+            ровно в момент набора. */}
+        <div className="text-[11px] text-[var(--t-faint)]" data-testid="ai-commands">
+          Команды: <code>/newsession</code> — новая сессия, <code>/clear</code> — очистить переписку,{" "}
+          <code>/compact</code> — сжать её в выжимку.
+        </div>
+        {cmdErr && <div className="text-[11px] text-[var(--err)]">{cmdErr}</div>}
 
         {(attach.length > 0 || attachErr) && (
           <div className="flex flex-wrap items-center gap-1.5">
@@ -279,9 +478,10 @@ export function AiChat() {
             className="p-2.5 rounded-lg text-[var(--t-low)] hover:text-[var(--accent-hi)] disabled:opacity-40">
             <Paperclip size={16} />
           </button>
-          {/* Обрыв разговора: чистит и лог, и историю — они одно и то же. */}
+          {/* Обрыв разговора: чистит и лог, и историю — они одно и то же.
+              Сессия остаётся, как и у команды `/clear`. */}
           <button title="Очистить переписку" disabled={busy || msgs.length === 0}
-            onClick={() => setMsgs([])}
+            onClick={() => commit(clearActive(store))}
             className="p-2.5 rounded-lg text-[var(--t-low)] hover:text-[var(--err)] disabled:opacity-40">
             <Trash2 size={16} />
           </button>
@@ -294,12 +494,22 @@ export function AiChat() {
               if (files.length) { e.preventDefault(); void addFiles(files); }
             }}
             onKeyDown={e => { if (e.key === "Enter") send(); }} />
-        <button onClick={send} disabled={busy || !cfg.enabled || !input.trim()}
-          className="p-2.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] disabled:opacity-40">
-          {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+        {run.busy ? (
+          // Отмена теперь ТОЛЬКО отсюда: уход со страницы запрос не обрывает,
+          // значит должен быть явный способ его прекратить.
+          <button onClick={() => runner.stop()} title="Остановить ответ"
+            className="p-2.5 rounded-lg bg-[var(--bg3)] hover:bg-[var(--err-dim)] text-[var(--err)]">
+            <Square size={16} />
           </button>
+        ) : (
+          <button onClick={send} disabled={busy || !cfg.enabled || !input.trim()}
+            className="p-2.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] disabled:opacity-40">
+            {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+          </button>
+        )}
         </div>
       </div>
     </div>
+      </div>
   );
 }

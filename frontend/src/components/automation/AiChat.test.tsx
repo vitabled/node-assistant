@@ -1,6 +1,10 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { AiChat } from "./AiChat";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { AiChat, fmtTokens, fmtElapsed } from "./AiChat";
+import * as runner from "./aiRunner";
+import { load, getActive } from "./aiSessions";
+
+const SUMMARY = "Обсудили ноды: их 12, все онлайн.";
 
 const CONFIG = {
   enabled: true, provider: "openai", base_url: "https://x/v1", model: "m",
@@ -36,11 +40,20 @@ function installFetch(chatEvents: any[], tools: any = TOOLS) {
     if (url === "/api/ai/tools")
       return tools ? { ok: true, json: async () => tools } as any : { ok: false } as any;
     if (url === "/api/ai/chat") return streamResponse(chatEvents);
+    if (url === "/api/ai/compact") return { ok: true, json: async () => ({ summary: SUMMARY }) } as any;
     throw new Error(`unmocked ${url}`);
   });
   (globalThis as any).fetch = fn;
   return fn;
 }
+
+/** Что легло в localStorage под текущей (в тестах — анонимной) личностью. */
+const stored = () => getActive(load(null)).messages;
+
+/** Заголовок сессии — это первое сообщение пользователя, поэтому один и тот же
+ *  текст живёт и в логе, и в списке сессий. Запросы по тексту реплики обязаны
+ *  быть ограничены логом, иначе они находят два элемента. */
+const log = () => within(screen.getByTestId("ai-chat-log"));
 
 /** Тело последнего POST /api/ai/chat. */
 function lastChatBody(fn: any) {
@@ -66,13 +79,27 @@ async function ask(input: HTMLElement, text: string) {
  *  Кнопка очистки отпирается ровно при `!busy && есть сообщения`. */
 const settled = () => waitFor(() => expect(screen.getByTitle(/Очистить/)).not.toBeDisabled());
 
+// Переписка теперь переживает перемонтирование — значит, и утечёт в следующий
+// тест, если не убрать её руками.
+beforeEach(() => {
+  localStorage.clear();
+  // Исполнитель — синглтон и намеренно переживает размонтирование компонента
+  // (в этом весь смысл: ответ не должен обрываться при уходе со страницы).
+  // Значит его память надо сбрасывать вместе с хранилищем, иначе разговор
+  // протекает в следующий тест.
+  runner.reset();
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe("AiChat", () => {
   it("renders the chat once loaded", async () => {
     installFetch([]);
     render(<AiChat />);
-    expect(await screen.findByText(/Встроенный ИИ-агент/)).toBeInTheDocument();
+    // Название раздела живёт в хлебных крошках («Автоматизация / Ассистент»),
+    // поэтому в шапке чата стоит имя РАЗГОВОРА — как в Claude Desktop.
+    expect(await screen.findByPlaceholderText(/Сообщение агенту/)).toBeInTheDocument();
+    expect(screen.getByTestId("ai-sessions")).toBeInTheDocument();
+    expect(screen.getAllByText("Новый разговор").length).toBeGreaterThan(0);
   });
 
   // Волна 6, План C Ф1: конфигурация уехала в «Настройки → Ассистент».
@@ -114,7 +141,7 @@ describe("AiChat", () => {
     await ask(input, "сколько правил?");
 
     // user message shown
-    expect(await screen.findByText("сколько правил?")).toBeInTheDocument();
+    await waitFor(() => expect(log().getByText("сколько правил?")).toBeInTheDocument());
     // tool-call chip + final answer streamed in
     await waitFor(() => expect(screen.getByText("list_rules")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/У вас 0 правил\./)).toBeInTheDocument());
@@ -209,5 +236,224 @@ describe("AiChat", () => {
     render(<AiChat />);
     await screen.findByPlaceholderText(/Сообщение агенту/);
     expect(screen.queryByTestId("ai-caps")).not.toBeInTheDocument();
+  });
+
+  // ── сессии и команды ──────────────────────────────────────────
+
+  it("keeps the conversation across a remount", async () => {
+    installFetch([{ type: "text", delta: "12 нод." }, { type: "done" }]);
+    const first = render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await ask(input, "сколько нод?");
+    await settled();
+    // Ждём именно записи: перемонтирование читает хранилище один раз, и
+    // повторная проверка DOM его уже не догонит.
+    await waitFor(() => expect(stored()).toHaveLength(2));
+    first.unmount();
+
+    render(<AiChat />);
+    await screen.findByPlaceholderText(/Сообщение агенту/);
+    expect(log().getByText("сколько нод?")).toBeInTheDocument();
+    expect(log().getByText(/12 нод\./)).toBeInTheDocument();
+    expect(screen.getByTestId("ai-msg-count").textContent).toContain("2");
+  });
+
+  it("/clear empties the current session and keeps it in the list", async () => {
+    const fn = installFetch([{ type: "text", delta: "готово" }, { type: "done" }]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await ask(input, "первый вопрос");
+    await settled();
+    await ask(input, "/clear");
+
+    await waitFor(() => expect(log().queryByText("первый вопрос")).not.toBeInTheDocument());
+    expect(screen.getAllByTestId("ai-session-row")).toHaveLength(1);
+    expect(stored()).toEqual([]);
+    // Команда разбирается до сети: второго запроса в чат быть не должно.
+    expect(fn.mock.calls.filter(([u]: any[]) => u === "/api/ai/chat")).toHaveLength(1);
+  });
+
+  it("/newsession opens an empty session and leaves the old one in the list", async () => {
+    installFetch([{ type: "text", delta: "готово" }, { type: "done" }]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await ask(input, "первый вопрос");
+    await settled();
+    await ask(input, "/newsession");
+
+    await waitFor(() => expect(log().queryByText("первый вопрос")).not.toBeInTheDocument());
+    const rows = screen.getAllByTestId("ai-session-row");
+    expect(rows).toHaveLength(2);
+    expect(rows.map(r => r.textContent)).toContain("первый вопрос"); // старая сессия жива
+    expect(stored()).toEqual([]);                                    // активна — новая, пустая
+  });
+
+  it("/compact replaces the conversation with the summary and sends it as history", async () => {
+    const fn = installFetch([{ type: "text", delta: "12 нод." }, { type: "done" }]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await ask(input, "сколько нод?");
+    await settled();
+    await ask(input, "/compact");
+
+    await waitFor(() => expect(log().getByText(new RegExp(SUMMARY))).toBeInTheDocument());
+    const compacts = fn.mock.calls.filter(([u]: any[]) => u === "/api/ai/compact");
+    expect(compacts).toHaveLength(1);
+    expect(JSON.parse(compacts[0][1].body).history).toEqual([
+      { role: "user", content: "сколько нод?" },
+      { role: "assistant", content: "12 нод." },
+    ]);
+    expect(log().queryByText("сколько нод?")).not.toBeInTheDocument();
+    expect(log().getByText(/Сжатый контекст/)).toBeInTheDocument();
+
+    // Следующий ход уходит уже с выжимкой вместо всей переписки.
+    await settled();
+    await ask(input, "а сколько онлайн?");
+    await waitFor(() => {
+      const history = lastChatBody(fn).history;
+      expect(history).toHaveLength(1);
+      expect(history[0].role).toBe("assistant");
+      expect(history[0].content).toContain(SUMMARY);
+    });
+  });
+
+  // Иначе нельзя было бы спросить про путь: «/api/…» — не команда.
+  it("treats an unknown slash-word as an ordinary message", async () => {
+    const fn = installFetch([{ type: "text", delta: "это ручка конфига" }, { type: "done" }]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await ask(input, "/api/foo");
+    await waitFor(() => expect(log().getByText(/это ручка конфига/)).toBeInTheDocument());
+    expect(lastChatBody(fn).prompt).toBe("/api/foo");
+    expect(log().getByText("/api/foo")).toBeInTheDocument(); // показан как реплика пользователя
+  });
+
+  it("recognises a command even with stray spaces around it", async () => {
+    const fn = installFetch([{ type: "text", delta: "готово" }, { type: "done" }]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await ask(input, "первый вопрос");
+    await settled();
+    await ask(input, "   /clear  ");
+
+    await waitFor(() => expect(log().queryByText("первый вопрос")).not.toBeInTheDocument());
+    expect(fn.mock.calls.filter(([u]: any[]) => u === "/api/ai/chat")).toHaveLength(1);
+  });
+
+  // Строка состояния: без неё длинный ответ выглядит зависшим — инструменты
+  // отработали, текста ещё нет, и понять, жив ли агент, нечем.
+  it("shows a live status line while the agent works and hides it afterwards", async () => {
+    installFetch([
+      { type: "status", phase: "thinking", step: 1, steps: 6, tokens: 0 },
+      { type: "status", phase: "tools", step: 1, steps: 6, tokens: 1234 },
+      { type: "tool_call", id: "1", name: "read_attachment" },
+      { type: "tool_result", id: "1", name: "read_attachment", ok: true },
+      { type: "text", delta: "Готово." },
+      { type: "status", phase: "done", step: 2, steps: 6, tokens: 2034 },
+      { type: "done" },
+    ]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "перенеси данные");
+
+    await waitFor(() => expect(log().getByText("Готово.")).toBeInTheDocument());
+    // Ответ завершён — строка обязана исчезнуть, иначе она врёт о работе.
+    expect(screen.queryByTestId("ai-status")).not.toBeInTheDocument();
+  });
+
+  it("renders phase, step, tokens and the running tool in the status line", () => {
+    // Форматтеры — чистые: проверяем их напрямую, не гоняя стрим по секундам.
+    expect(fmtTokens(6432)).toBe("6.4k");
+    expect(fmtTokens(2000)).toBe("2k");
+    expect(fmtTokens(940)).toBe("940");
+    expect(fmtElapsed(45)).toBe("45с");
+    expect(fmtElapsed(510)).toBe("8м 30с");
+  });
+
+  // ── прогресс переживает уход со страницы ────────────────────
+  it("keeps the answer running when the user leaves the page", async () => {
+    // Стрим, который мы отпускаем по частям: имитируем долгий ответ.
+    let push!: (line: string) => void;
+    let finish!: () => void;
+    const body = new ReadableStream({
+      start(c) {
+        const enc = new TextEncoder();
+        push = (line: string) => c.enqueue(enc.encode(line + "\n"));
+        finish = () => c.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch" as any).mockImplementation((url: any) => {
+      const u = String(url);
+      if (u.includes("/api/ai/config"))
+        return Promise.resolve(new Response(JSON.stringify({ enabled: true, has_key: true }),
+                                            { status: 200 }));
+      if (u.includes("/api/ai/tools"))
+        return Promise.resolve(new Response(JSON.stringify({ builtin: 1, writes: false, web: false, web_provider: "duckduckgo" }), { status: 200 }));
+      // ⚠️ Отдельно от потока: `resume` на монтировании спрашивает, не остался
+      // ли незаконченный ответ, и общий `body` был бы им же и вычитан.
+      if (u.includes("/api/ai/chat/state"))
+        return Promise.resolve(new Response(JSON.stringify({ active: false, events: 0 }),
+                                            { status: 200 }));
+      return Promise.resolve(new Response(body, { status: 200 }));
+    });
+
+    const view = render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    fireEvent.change(input, { target: { value: "долгий вопрос" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(runner.getRunState().busy).toBe(true));
+
+    // Пользователь ушёл в другой раздел — компонент размонтирован.
+    view.unmount();
+    expect(runner.getRunState().busy).toBe(true);
+
+    // ...а ответ продолжает приходить и попадать в хранилище.
+    push(JSON.stringify({ type: "text", delta: "часть ответа" }));
+    await waitFor(() => {
+      const msgs = getActive(runner.getSessions()).messages;
+      expect(msgs[msgs.length - 1].text).toContain("часть ответа");
+    });
+    finish();
+    await waitFor(() => expect(runner.getRunState().busy).toBe(false));
+
+    // Вернулись — текст на месте, ничего не потеряно.
+    render(<AiChat />);
+    expect(await screen.findByText(/часть ответа/)).toBeInTheDocument();
+  });
+
+  it("stops only when asked explicitly", async () => {
+    // Поток, который сам не закончится: так видно, что отменяет именно кнопка.
+    const body = new ReadableStream({ start() { /* держим открытым */ } });
+    vi.spyOn(globalThis, "fetch" as any).mockImplementation((url: any) => {
+      const u = String(url);
+      if (u.includes("/api/ai/config"))
+        return Promise.resolve(new Response(JSON.stringify({ enabled: true, has_key: true }), { status: 200 }));
+      if (u.includes("/api/ai/tools"))
+        return Promise.resolve(new Response(JSON.stringify(TOOLS), { status: 200 }));
+      if (u.includes("/api/ai/chat/state"))
+        return Promise.resolve(new Response(JSON.stringify({ active: false }), { status: 200 }));
+      if (u.includes("/api/ai/chat/stop"))
+        return Promise.resolve(new Response(JSON.stringify({ stopped: true }), { status: 200 }));
+      return Promise.resolve(new Response(body, { status: 200 }));
+    });
+
+    const view = render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "вопрос");
+    await waitFor(() => expect(runner.getRunState().busy).toBe(true));
+
+    // Размонтирование НЕ отменяет: именно автоотмена и теряла работу.
+    view.unmount();
+    expect(runner.getRunState().busy).toBe(true);
+
+    // А явная остановка — отменяет.
+    runner.stop();
+    expect(runner.getRunState().busy).toBe(false);
   });
 });

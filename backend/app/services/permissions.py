@@ -213,6 +213,9 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
 
     # ── ассистент ────────────────────────────────────────────
     ("/api/ai/chat", {"*": "assistant.execute"}),
+    ("/api/ai/compact", {"*": "assistant.execute"}),
+    # Все ручки разговора — то же полномочие, что и сам чат.
+    ("/api/ai/chat", {"*": "assistant.execute"}),
     ("/api/ai/config", {"GET": "assistant.view", "*": "assistant.edit"}),
     ("/api/ai/models", {"GET": "assistant.view"}),
     ("/api/ai/tools", {"GET": "assistant.view"}),

@@ -486,3 +486,196 @@ def test_web_calls_are_capped_per_answer():
     assert ok and "лимит" in out["error"]
     # Счётчик не растёт после отказа — иначе он был бы неотличим от расхода.
     assert ctx.web_calls == ai_tools.MAX_WEB_CALLS
+
+
+# ── вложения: большой файл и картинки по своим записям ─────────
+def _attach_ctx(uid: str, text: str, images=None) -> ai_tools.ToolContext:
+    ctx = ai_tools.ToolContext(account_id=uid, user_id=uid, readonly=False)
+    ctx.attachments.append({"name": "catalog.html", "text": text,
+                            "images": images or []})
+    return ctx
+
+
+def test_big_attachment_is_readable_in_chunks_not_silently_cut():
+    """⚠️ Регрессия на настоящий баг: вложение резалось до 40 000 символов, и
+    модель по началу файла делала вывод, что данных в нём нет. Теперь в промпт
+    уходит НАЧАЛО с явной пометкой, а остальное читается кусками."""
+    from app.services import ai_agent
+
+    big = "".join(f"провайдер-{i} " for i in range(20_000))
+    assert len(big) > ai_agent.INLINE_TEXT_CHARS * 2
+
+    inlined = ai_agent.build_user_content(
+        "перенеси всё", [{"name": "catalog.html", "mime": "text/html", "text": big}],
+        "openai")
+    assert "ЭТО НЕ ВЕСЬ ФАЙЛ" in inlined, "обрез обязан быть назван вслух"
+    assert "read_attachment" in inlined, "и сказано, чем дочитать"
+
+    ctx = _attach_ctx("acc", big)
+    seen, offset, guard = 0, 0, 0
+    while guard < 200:
+        guard += 1
+        ok, r = asyncio.run(ai_tools.run("read_attachment", {"offset": offset}, ctx))
+        assert ok
+        seen += len(r["text"])
+        if r["eof"]:
+            break
+        offset = r["next_offset"]
+    assert seen == len(big), "по кускам читается ВЕСЬ файл, а не начало"
+
+
+def test_images_keep_their_place_so_each_lands_on_its_own_record():
+    """Картинка принадлежит той записи, внутри которой стояла. Маркер занимает
+    её место — иначе привязать 171 скриншот к 172 провайдерам было бы нечем."""
+    from app.services import ai_agent
+
+    src = ('{"name": "Aeza", "shot": "data:image/png;base64,QUFB"}, '
+           '{"name": "Hetzner", "shot": "data:image/jpeg;base64,QkJC"}')
+    text, images = ai_agent.extract_data_uris(src)
+
+    assert "base64" not in text, "тяжёлые данные из текста ушли"
+    assert text.index("«изображение #0»") < text.index("Hetzner"), \
+        "маркер остался внутри записи своего провайдера"
+    assert text.index("Hetzner") < text.index("«изображение #1»")
+    assert [i["index"] for i in images] == [0, 1]
+    assert [i["mime"] for i in images] == ["image/png", "image/jpeg"]
+
+
+def test_saving_images_returns_ids_for_the_record_and_survives_a_broken_one():
+    from app.services import ai_agent, media_store
+
+    uid, _h = _register()
+    src = 'A "data:image/png;base64,QUFB" B "data:image/png;base64,!!битая!!"'
+    text, images = ai_agent.extract_data_uris(src)
+    ctx = _attach_ctx(uid, text, images)
+
+    ok, res = asyncio.run(ai_tools.run(
+        "save_attachment_image", {"indices": [0], "prefix": "Aeza"}, ctx))
+    assert ok and len(res["media_ids"]) == 1
+    stored = media_store.list_items(uid)
+    assert len(stored) == 1
+
+    # Несуществующий номер не роняет вызов — он попадает в failed.
+    ok, res2 = asyncio.run(ai_tools.run(
+        "save_attachment_image", {"indices": [0, 999]}, ctx))
+    assert ok and res2["failed"] == [999] and len(res2["media_ids"]) == 1
+
+
+def test_attachment_tools_hidden_without_attachments():
+    """Без приложенного файла они только засоряют список инструментов."""
+    bare = ai_tools.ToolContext(account_id="a", user_id="a", readonly=False)
+    names = [t.name for t in ai_tools.available(bare)]
+    assert "read_attachment" not in names and "save_attachment_image" not in names
+    ok, msg = asyncio.run(ai_tools.run("read_attachment", {}, bare))
+    assert ok is False and "не приложено" in msg
+
+    withfile = _attach_ctx("a", "текст")
+    assert "read_attachment" in [t.name for t in ai_tools.available(withfile)]
+
+
+# ── бюджет шагов: не дать сжечь его на повторах ────────────────
+def test_identical_call_is_answered_with_a_reminder_not_rerun():
+    """⚠️ Регрессия на живой прогон: шесть из десяти шагов ушли на повторный
+    `search_attachment` с ТЕМИ ЖЕ аргументами, и бюджет кончился, не начав
+    работы. Повтор не должен стоить обращения к данным."""
+    ctx = _attach_ctx("acc", "первый провайдер второй провайдер")
+
+    ok, first = asyncio.run(ai_tools.run(
+        "search_attachment", {"query": "провайдер"}, ctx))
+    assert ok and first["total"] == 2
+
+    ok, again = asyncio.run(ai_tools.run(
+        "search_attachment", {"query": "провайдер"}, ctx))
+    assert ok and again.get("repeat") is True
+    assert "уже делался" in again["note"]
+
+    # ДРУГИЕ аргументы — обычный вызов: последовательное чтение файла кусками
+    # под дедуп попадать не должно.
+    ok, other = asyncio.run(ai_tools.run(
+        "search_attachment", {"query": "второй"}, ctx))
+    assert ok and other.get("repeat") is None and other["total"] == 1
+
+    ok, chunk1 = asyncio.run(ai_tools.run("read_attachment", {"offset": 0}, ctx))
+    ok2, chunk2 = asyncio.run(ai_tools.run("read_attachment", {"offset": 5}, ctx))
+    assert chunk1.get("repeat") is None and chunk2.get("repeat") is None
+
+
+def test_attachment_strategy_is_spelled_out_only_when_a_file_is_attached():
+    """Инструкция про порядок работы нужна там, где есть файл; без файла она
+    только занимает место в промпте."""
+    bare = ai_tools.describe(_ctx(readonly=False))
+    # Без файла нет и порядка работы с ним — но подсказать, ЧЕМ открыть файл из
+    # Библиотеки, надо: через `panel_get` он не читается, ответ обрезается.
+    assert "не откладывая" not in bare
+    assert "open_library_file" in bare
+
+    withfile = ai_tools.describe(_attach_ctx("acc", "данные"))
+    assert "catalog.html" in withfile
+    assert "не откладывая" in withfile, "модель обязана писать по ходу дела"
+
+
+def test_chunk_survives_the_history_intact():
+    """⚠️ Корень «хождения по кругу»: `read_attachment` отдавал 30 000 символов,
+    а в историю попадало 12 000, обрезанных ПОСРЕДИ JSON. Модель получала
+    неразбираемый огрызок и шла читать заново, сжигая бюджет шагов."""
+    import json
+
+    from app.services import ai_agent
+
+    ctx = _attach_ctx("acc", "x" * 200_000)
+    ok, chunk = asyncio.run(ai_tools.run("read_attachment", {"offset": 0}, ctx))
+    assert ok and len(chunk["text"]) == ai_tools.ATTACHMENT_CHUNK
+
+    msgs: list = []
+    ai_agent._append_tool_results_openai(msgs, {"role": "assistant"},
+                                         [{"id": "1", "result": chunk}])
+    content = msgs[-1]["content"]
+    # Утверждаем СВОЙСТВО (кусок доезжает целым), а не конкретные числа: оба
+    # потолка ещё будут двигаться, и связь между ними важнее их значений.
+    assert json.loads(content)["text"] == chunk["text"]
+    assert ai_agent._TOOL_RESULT_CAP > ai_tools.ATTACHMENT_CHUNK
+
+
+def test_old_results_are_evicted_so_a_long_transfer_fits_the_window():
+    """Двадцать пять кусков по 30k — это ~200 тысяч токенов только на файл:
+    без вытеснения перенос упирается не в наши лимиты, а в окно модели."""
+    from app.services import ai_agent
+
+    ctx = _attach_ctx("acc", "y" * 400_000)
+    msgs: list = []
+    for i in range(10):
+        ok, chunk = asyncio.run(ai_tools.run(
+            "read_attachment", {"offset": i * 30_000}, ctx))
+        ai_agent._append_tool_results_openai(msgs, {"role": "assistant"},
+                                             [{"id": str(i), "result": chunk}])
+
+    tool_msgs = [m for m in msgs if m.get("role") == "tool"]
+    total = sum(len(m["content"]) for m in tool_msgs)
+    assert total <= ai_agent._HISTORY_RESULT_BUDGET
+    # Вытесняется САМОЕ СТАРОЕ: свежее нужно модели прямо сейчас.
+    assert tool_msgs[0]["content"] == ai_agent._EVICTED
+    assert tool_msgs[-1]["content"] != ai_agent._EVICTED
+
+
+def test_bulk_write_reports_each_item(monkeypatch):
+    """Пакетная запись обязана сказать, ЧТО не легло и почему: по этому тексту
+    модель чинит следующее тело, а не гадает."""
+    uid, _h = _register()
+    ctx = ai_tools.ToolContext(account_id=uid, user_id=uid, readonly=False)
+
+    ok, res = asyncio.run(ai_tools.run("panel_write_many", {
+        "method": "POST", "path": "/api/hostings",
+        "items": [{"name": "Первый"}, {"нет": "имени"}, {"name": "Третий"}],
+    }, ctx))
+    assert ok
+    assert res["created"] == 2
+    assert len(res["failed"]) == 1 and res["failed"][0]["index"] == 1
+    assert res["failed"][0]["error"]
+
+    # Тот же гейт, что у одиночной записи, и срабатывает он в `run()` — ДО
+    # самого инструмента, поэтому отказ приходит строкой, а не телом ответа.
+    ro = ai_tools.ToolContext(account_id=uid, user_id=uid, readonly=True)
+    ok, denied = asyncio.run(ai_tools.run("panel_write_many", {
+        "method": "POST", "path": "/api/hostings", "items": [{"name": "x"}]}, ro))
+    assert ok is False and "только для чтения" in denied
+    assert ro.used == [], "отказ случился до выполнения"
