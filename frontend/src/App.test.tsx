@@ -22,6 +22,18 @@ vi.mock("./components/StepProgress", () => ({ StepProgress: () => null, RENEW_ST
 vi.mock("./components/TerminalOutput", () => ({ TerminalOutput: () => null }));
 vi.mock("./hooks/useTaskStream", () => ({ useTaskStream: () => {} }));
 
+// Привилегии — подменяем целиком (без сети). `allow` читается ВНУТРИ can(), то
+// есть в момент рендера: фабрика `vi.mock` поднимается выше объявления и на само
+// значение сослаться не может. По умолчанию разрешено всё → остальные тесты файла
+// работают как раньше.
+let allow: (permission: string) => boolean = () => true;
+vi.mock("./auth/usePermissions", () => ({
+  usePermissions: () => ({
+    user: null, permissions: [], loading: false,
+    can: (p: string) => allow(p),
+  }),
+}));
+
 import App, { CRUMB } from "./App";
 import { addAccount, forget, getSnapshot, tabKey } from "./auth/store";
 
@@ -73,5 +85,36 @@ describe("App tab persistence (per account)", () => {
     fireEvent.click(screen.getByText("Настройки"));
     expect(screen.getByText("TAB:Settings")).toBeInTheDocument();
     expect(localStorage.getItem(tabKey("id-a"))).toBe("settings");
+  });
+});
+
+// Волна 13: сохранённая вкладка могла стать недоступной (сняли роль).
+describe("App tab availability", () => {
+  beforeEach(() => { reset(); addAccount({ id: "id-a", login: "alice", token: "t" }); });
+  afterEach(() => { cleanup(); allow = () => true; });
+
+  it("falls back to the first available tab when the restored one is forbidden", () => {
+    localStorage.setItem(tabKey("id-a"), "settings");
+    allow = p => p !== "settings.view";
+    render(<App />);
+    // Первая доступная в порядке сайдбара — «Дешборд» (monitoring.view).
+    expect(screen.getByText("TAB:Dashboard")).toBeInTheDocument();
+    expect(screen.queryByText("TAB:Settings")).not.toBeInTheDocument();
+  });
+
+  it("keeps the restored tab when it is allowed", () => {
+    localStorage.setItem(tabKey("id-a"), "settings");
+    allow = p => p === "settings.view";
+    render(<App />);
+    expect(screen.getByText("TAB:Settings")).toBeInTheDocument();
+  });
+
+  // Ни одного доступного раздела: прыгать некуда, и прыжок в никуда запутал бы
+  // сильнее, чем ошибка доступа на самой странице.
+  it("stays put when the user may see nothing at all", () => {
+    localStorage.setItem(tabKey("id-a"), "settings");
+    allow = () => false;
+    render(<App />);
+    expect(screen.getByText("TAB:Settings")).toBeInTheDocument();
   });
 });

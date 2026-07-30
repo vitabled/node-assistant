@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import {
   CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight,
 } from "lucide-react";
-import { Sidebar, type Tab }               from "./components/Sidebar";
+import { Sidebar, NAV_TABS, tabPermission, type Tab } from "./components/Sidebar";
 import { BottomTabBar, PRIMARY_TABS }       from "./components/BottomTabBar";
 import { Dashboard }                       from "./components/Dashboard";
 import { DeployDashboard }                 from "./components/DeployDashboard";
@@ -54,6 +54,7 @@ import { StepProgress, RENEW_STEPS }       from "./components/StepProgress";
 import { TerminalOutput }                  from "./components/TerminalOutput";
 import { useTaskStream, type StatusFrame } from "./hooks/useTaskStream";
 import { AccountMenu }                     from "./auth/AccountMenu";
+import { usePermissions }                  from "./auth/usePermissions";
 import { tabKey, getActiveId, certJobsKey } from "./auth/store";
 import {
   applyAccent, applyDensity, applyThemeMode, applySkin,
@@ -146,6 +147,21 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem(tabKey(), tab); } catch {}
   }, [tab]);
+
+  // Восстановленная вкладка могла стать недоступной (сняли роль, урезали её
+  // состав) — уходим на первую доступную в порядке сайдбара. Пустой экран не
+  // объясняет человеку, что произошло, а сама страница всё равно получила бы 403.
+  // Пока привилегии не загрузились, `can` разрешает всё, поэтому эффект молчит и
+  // не дёргает вкладку на каждом старте.
+  const { can } = usePermissions();
+  useEffect(() => {
+    const need = tabPermission(tab);
+    if (!need || can(need)) return;
+    const next = NAV_TABS.find(i => can(`${i.domain}.view`));
+    // Ни одного доступного раздела (роль без просмотра) — оставляем как есть:
+    // прыжок в никуда запутал бы сильнее, чем ошибка доступа на самой странице.
+    if (next) setTab(next.tab);
+  }, [can, tab]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem(SIDEBAR_KEY) === "1"; } catch { return false; }
   });

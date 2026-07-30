@@ -7,10 +7,20 @@ The secret is shown ONCE at creation; only an HMAC-SHA256 digest is stored
 fast MAC rather than bcrypt — the token itself carries 256 bits of entropy
 (secrets.token_urlsafe(32)), making offline brute-force infeasible.
 
-Token format: ``nai_<account_id>_<secret>`` — the account_id is embedded so
-require_account resolves it in O(1) by loading only that account's token file
-(no global index → per-account isolation preserved). account_id is a uuid4 (has
-'-' but no '_'), so the account_id/secret boundary is the FIRST underscore.
+Token format: ``nai_<user_id>_<secret>`` — the id is embedded so the resolver
+works in O(1) by loading only one token file (no global index). The id is a uuid4
+(has '-' but no '_'), so the id/secret boundary is the FIRST underscore.
+
+⚠️ **Волна 13: токен принадлежит ПОЛЬЗОВАТЕЛЮ, а не рабочей области.** Привилегии
+токена не хранятся — они берутся у владельца в момент запроса, поэтому снятая
+роль обесточивает и его токены. Флаг `readonly` при этом только СУЖАЕТ права до
+безопасных методов, никогда не расширяет.
+
+⚠️ Записи БЕЗ поля `user_id` (выпущенные до Волны 13) не резолвятся никогда, и
+это не недоделка. Идентификатор первого прежнего аккаунта после миграции стал
+одновременно id суперпользователя и id рабочей области — старый токен
+резолвился бы и получил бы ПОЛНЫЕ права владельца вместо прав своего тенанта.
+Такие токены надо перевыпустить.
 """
 from __future__ import annotations
 
@@ -41,9 +51,10 @@ _LAST_USED_THROTTLE = 60
 
 @dataclass
 class Resolved:
-    account_id: str
+    account_id: str      # рабочая область владельца (для сторов)
     token_id: str
     readonly: bool
+    user_id: str = ""    # владелец: у него и спрашиваются привилегии
 
 
 def _hmac(secret: str) -> str:
@@ -59,8 +70,20 @@ def _mask(rec: dict) -> dict:
     return {k: v for k, v in rec.items() if k != "hash"}
 
 
-def list_tokens(account_id: Optional[str] = None) -> list[dict]:
-    return [_mask(t) for t in storage.load_api_tokens(account_id)]
+def _current_user_id() -> str:
+    from app.services import users
+
+    user = users.current_user.get()
+    return (user or {}).get("id") or ""
+
+
+def list_tokens(account_id: Optional[str] = None,
+                user_id: Optional[str] = None) -> list[dict]:
+    """Токены ВЛАДЕЛЬЦА. Чужие не показываем: под одной рабочей областью файл
+    общий, и без фильтра оператор видел бы токены администратора."""
+    uid = user_id or _current_user_id()
+    return [_mask(t) for t in storage.load_api_tokens(account_id)
+            if t.get("user_id") and (not uid or t.get("user_id") == uid)]
 
 
 def create(
@@ -68,18 +91,23 @@ def create(
     readonly: bool = False,
     expires_in: Optional[int] = None,
     account_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> tuple[dict, str]:
     """Create a token. Returns (masked_record, plaintext_token); the plaintext is
     returned ONCE and never persisted."""
     aid = account_id or accounts.current_account.get()
     if not aid:
         raise RuntimeError("No active account in context")
+    uid = user_id or _current_user_id()
+    if not uid:
+        raise RuntimeError("No active user in context")
     secret = secrets.token_urlsafe(32)
-    token = f"{TOKEN_PREFIX}{aid}_{secret}"
+    token = f"{TOKEN_PREFIX}{uid}_{secret}"
     now = int(time.time())
     rec = {
         "id": uuid.uuid4().hex,
         "name": name,
+        "user_id": uid,
         "prefix": token[: len(TOKEN_PREFIX) + 8],  # e.g. "nai_1a2b3c4d" — display hint
         "hash": _hmac(secret),
         "readonly": bool(readonly),
@@ -93,10 +121,15 @@ def create(
     return _mask(rec), token
 
 
-def revoke(token_id: str, account_id: Optional[str] = None) -> bool:
+def revoke(token_id: str, account_id: Optional[str] = None,
+           user_id: Optional[str] = None) -> bool:
     aid = account_id or accounts.current_account.get()
+    uid = user_id or _current_user_id()
     toks = storage.load_api_tokens(aid)
-    kept = [t for t in toks if t.get("id") != token_id]
+    # Отзывать можно только свой токен: id токена приходит из URL, а файл под
+    # одной рабочей областью общий.
+    kept = [t for t in toks
+            if not (t.get("id") == token_id and (not uid or t.get("user_id") == uid))]
     if len(kept) == len(toks):
         return False
     storage.save_api_tokens(kept, aid)
@@ -104,26 +137,35 @@ def revoke(token_id: str, account_id: Optional[str] = None) -> bool:
 
 
 def resolve(token: str) -> Optional[Resolved]:
-    """Resolve a plaintext API token → (account_id, token_id, readonly), or None on
-    any failure (unknown prefix, bad format, since-deleted account, no matching
-    hash, expired). Silent like accounts.account_id_from_token."""
+    """Resolve a plaintext API token → Resolved, or None on any failure (unknown
+    prefix, bad format, since-deleted or disabled user, no matching hash, expired).
+    Silent like users.resolve_token."""
+    from app.services import users
+
     if not token or not token.startswith(TOKEN_PREFIX):
         return None
-    aid, sep, secret = token[len(TOKEN_PREFIX):].partition("_")
-    if not sep or not aid or not secret:
+    uid, sep, secret = token[len(TOKEN_PREFIX):].partition("_")
+    if not sep or not uid or not secret:
         return None
-    if not accounts.get(aid):
+    owner = users.get(uid)
+    if owner is None or owner.get("disabled"):
         return None
+    aid = users.workspace_of(owner)
     digest = _hmac(secret)
     toks = storage.load_api_tokens(aid)
     now = int(time.time())
     for rec in toks:
+        # ⚠️ Сверяем и владельца: без этого токен, выпущенный до Волны 13 (без
+        # `user_id`), резолвился бы под id первого прежнего аккаунта, который
+        # стал суперпользователем, — и получил бы полные права вместо своих.
+        if rec.get("user_id") != uid:
+            continue
         if hmac.compare_digest(rec.get("hash", ""), digest):
             exp = rec.get("expires_at", 0)
             if exp and now > exp:
                 return None
             _touch_last_used(aid, toks, rec, now)
-            return Resolved(aid, rec["id"], bool(rec.get("readonly")))
+            return Resolved(aid, rec["id"], bool(rec.get("readonly")), uid)
     return None
 
 
@@ -136,14 +178,22 @@ def _touch_last_used(aid: str, toks: list, rec: dict, now: int) -> None:
         pass
 
 
-def mint_managed(name: str, readonly: bool = True, account_id: Optional[str] = None) -> str:
-    """Rotate a managed token: revoke any existing token with this name for the
-    account, issue a fresh one, return the plaintext. Used by the MCP orchestrator
-    so the container carries a revocable API token instead of a raw session JWT."""
+def mint_managed(name: str, readonly: bool = True, account_id: Optional[str] = None,
+                 user_id: Optional[str] = None) -> str:
+    """Rotate a managed token: revoke any existing token with this name, issue a
+    fresh one, return the plaintext. Used by the MCP orchestrator so the container
+    carries a revocable API token instead of a raw session JWT.
+
+    ⚠️ Токен привязывается к ПОЛЬЗОВАТЕЛЮ, включившему интеграцию: иначе контейнер
+    получил бы права рабочей области, а не своего хозяина."""
     aid = account_id or accounts.current_account.get()
+    uid = user_id or _current_user_id()
     if not aid:
         raise RuntimeError("No active account in context")
-    toks = [t for t in storage.load_api_tokens(aid) if t.get("name") != name]
+    if not uid:
+        raise RuntimeError("No active user in context")
+    toks = [t for t in storage.load_api_tokens(aid)
+            if not (t.get("name") == name and t.get("user_id") == uid)]
     storage.save_api_tokens(toks, aid)
-    _masked, token = create(name, readonly=readonly, account_id=aid)
+    _masked, token = create(name, readonly=readonly, account_id=aid, user_id=uid)
     return token

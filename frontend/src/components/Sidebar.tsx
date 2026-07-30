@@ -8,6 +8,8 @@ import {
   Lock, Cloud, Globe,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { Fragment } from "react";
+import { usePermissions } from "../auth/usePermissions";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings" | "mihomo" | "configs"
@@ -21,83 +23,134 @@ export type Tab =
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
 
-interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon }
+/**
+ * Домен привилегий пункта (`services/permissions.py::DOMAINS`).
+ *
+ * ⚠️ Соответствие «пункт → привилегия» живёт ОДНОЙ таблицей — прямо в описании
+ * пунктов ниже, а не условиями в разметке: при первом же переносе пункта между
+ * группами условие и состав группы разъехались бы, и раздел либо потерял бы
+ * гейт, либо пропал у того, кому положен.
+ *
+ * Сайдбар смотрит только на `<домен>.view`: скрывать раздел из-за отсутствия
+ * «создать»/«изменить» неверно — на чтение он полезен.
+ */
+type PermDomain =
+  | "deploy" | "panel" | "certs" | "hosts" | "configs" | "automation" | "assistant"
+  | "monitoring" | "stats" | "hostings" | "billing" | "cloudflare" | "haproxy"
+  | "library" | "vault" | "settings";
+
+export interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon; domain: PermDomain }
 
 const NAV_MAIN: NavItemDef[] = [
-  { tab: "dashboard",  label: "Дешборд",       Icon: Activity  },
-  { tab: "deploy",     label: "Деплой ноды",   Icon: Rocket    },
-  { tab: "certs",      label: "Управление SSL", Icon: ShieldCheck },
-  { tab: "templates",  label: "Шаблоны",       Icon: FileCode2 },
-  { tab: "hosts",      label: "Хосты",         Icon: Network   },
-  { tab: "traffic",    label: "Трафик",        Icon: Gauge     },
+  // Дешборд — статус-страница чекера и доступности серверов, отсюда monitoring.
+  { tab: "dashboard",  label: "Дешборд",       Icon: Activity,    domain: "monitoring" },
+  { tab: "deploy",     label: "Деплой ноды",   Icon: Rocket,      domain: "deploy"     },
+  { tab: "certs",      label: "Управление SSL", Icon: ShieldCheck, domain: "certs"     },
+  { tab: "templates",  label: "Шаблоны",       Icon: FileCode2,   domain: "deploy"     },
+  { tab: "hosts",      label: "Хосты",         Icon: Network,     domain: "hosts"      },
+  // Лимиты трафика — те же `/api/traffic-rules`, что и правила автоматизации.
+  { tab: "traffic",    label: "Трафик",        Icon: Gauge,       domain: "automation" },
 ];
 
 const STATS_TABS: NavItemDef[] = [
-  { tab: "stats-users",      label: "Пользователи",   Icon: Users },
-  { tab: "stats-speedtests", label: "Тесты скорости", Icon: Zap   },
+  { tab: "stats-users",      label: "Пользователи",   Icon: Users, domain: "stats"      },
+  { tab: "stats-speedtests", label: "Тесты скорости", Icon: Zap,   domain: "monitoring" },
   // HAProxy (NodeFlow) статистика — перенесена сюда из группы «HAPROXY».
-  { tab: "haproxy-overview", label: "HAProxy: обзор",  Icon: LayoutDashboard },
-  { tab: "haproxy-traffic",  label: "HAProxy: трафик", Icon: Gauge           },
+  { tab: "haproxy-overview", label: "HAProxy: обзор",  Icon: LayoutDashboard, domain: "haproxy" },
+  { tab: "haproxy-traffic",  label: "HAProxy: трафик", Icon: Gauge,           domain: "haproxy" },
 ];
 
 const AUTOMATION_TABS: NavItemDef[] = [
-  { tab: "automation", label: "Правила",   Icon: Workflow },
+  { tab: "automation", label: "Правила",   Icon: Workflow, domain: "automation" },
   // ИИ-чат вынесен из Настроек в отдельный раздел сразу после «Правил» (11a).
-  { tab: "assistant",  label: "Ассистент", Icon: Bot      },
+  { tab: "assistant",  label: "Ассистент", Icon: Bot,      domain: "assistant"  },
 ];
 
 const RW_TABS: NavItemDef[] = [
-  { tab: "rw-install",   label: "Установка",            Icon: ServerCog      },
-  { tab: "rw-subpages",  label: "Страницы подписок",    Icon: LayoutTemplate },
-  { tab: "rw-variables", label: "Переменные",           Icon: SlidersHorizontal },
-  { tab: "rw-backup",    label: "Резервное копирование", Icon: DatabaseBackup },
-  { tab: "rw-migration", label: "Миграция",             Icon: ArrowLeftRight },
+  { tab: "rw-install",   label: "Установка",            Icon: ServerCog,      domain: "panel"   },
+  { tab: "rw-subpages",  label: "Страницы подписок",    Icon: LayoutTemplate, domain: "configs" },
+  { tab: "rw-variables", label: "Переменные",           Icon: SlidersHorizontal, domain: "panel" },
+  { tab: "rw-backup",    label: "Резервное копирование", Icon: DatabaseBackup, domain: "panel"  },
+  { tab: "rw-migration", label: "Миграция",             Icon: ArrowLeftRight, domain: "panel"   },
   // Редакторы конфигов Remnawave — после операционных пунктов (Волна 6, План A).
-  { tab: "rw-profiles",  label: "Профили",              Icon: UserCog        },
+  { tab: "rw-profiles",  label: "Профили",              Icon: UserCog,        domain: "configs" },
   // Mihomo-конфигуратор (встроенный, iframe).
-  { tab: "mihomo",       label: "Mihomo",               Icon: Waypoints      },
+  { tab: "mihomo",       label: "Mihomo",               Icon: Waypoints,      domain: "configs" },
   // Пользовательские конфиги (шаблоны по типам клиента, Wave-5 План D).
-  { tab: "configs",      label: "Конфиги",              Icon: FileJson       },
+  { tab: "configs",      label: "Конфиги",              Icon: FileJson,       domain: "configs" },
 ];
 
 // Группа «HAPROXY» — прокси к панели NodeFlow (управление HAProxy-нодами).
 // «Обзор» и «Трафик» перенесены в «Статистику»; «Настройки» — в Настройки → «HAProxy».
 const HAPROXY_TABS: NavItemDef[] = [
-  { tab: "haproxy-nodes",     label: "Ноды",      Icon: Boxes           },
-  { tab: "haproxy-routes",    label: "Маршруты",  Icon: RouteIcon       },
-  { tab: "haproxy-firewall",  label: "Файрвол",   Icon: ShieldHalf      },
-  { tab: "haproxy-releases",  label: "Релизы",    Icon: Package         },
+  { tab: "haproxy-nodes",     label: "Ноды",      Icon: Boxes,      domain: "haproxy" },
+  { tab: "haproxy-routes",    label: "Маршруты",  Icon: RouteIcon,  domain: "haproxy" },
+  { tab: "haproxy-firewall",  label: "Файрвол",   Icon: ShieldHalf, domain: "haproxy" },
+  { tab: "haproxy-releases",  label: "Релизы",    Icon: Package,    domain: "haproxy" },
 ];
 
 // Группа «Справка» (бывш. «Хостинги»): карта хостингов + каталог + библиотека знаний.
 const HOSTINGS_TABS: NavItemDef[] = [
-  { tab: "hostings-map",         label: "Карта хостингов", Icon: MapIcon    },
-  { tab: "hostings-list",        label: "Хостинги",        Icon: Server     },
-  { tab: "subscription-analyze", label: "Анализ подписки", Icon: ScanSearch },
-  { tab: "library",              label: "Библиотека",      Icon: BookOpen   },
+  { tab: "hostings-map",         label: "Карта хостингов", Icon: MapIcon,    domain: "hostings" },
+  { tab: "hostings-list",        label: "Хостинги",        Icon: Server,     domain: "hostings" },
+  { tab: "subscription-analyze", label: "Анализ подписки", Icon: ScanSearch, domain: "hostings" },
+  { tab: "library",              label: "Библиотека",      Icon: BookOpen,   domain: "library"  },
   // Хранилище секретов (Волна 9): пароли/API-ключи/SSH-ключи от внешних ресурсов.
-  { tab: "vault",                label: "Хранилище",       Icon: Lock       },
+  { tab: "vault",                label: "Хранилище",       Icon: Lock,       domain: "vault"    },
 ];
 
 // Группа «CLOUDFLARE» — биллинг подключённого аккаунта + покупка доменов.
 // Подключение живёт в Настройки → «Cloudflare» (как у HAProxy), группа операционная.
 const CF_TABS: NavItemDef[] = [
-  { tab: "cf-overview",      label: "Обзор",          Icon: Cloud       },
-  { tab: "cf-subscriptions", label: "Подписки",       Icon: ReceiptText },
-  { tab: "cf-usage",         label: "Использование",  Icon: Gauge       },
-  { tab: "cf-payments",      label: "Платежи",        Icon: CreditCard  },
-  { tab: "cf-domains",       label: "Домены",         Icon: Globe       },
+  { tab: "cf-overview",      label: "Обзор",          Icon: Cloud,       domain: "cloudflare" },
+  { tab: "cf-subscriptions", label: "Подписки",       Icon: ReceiptText, domain: "cloudflare" },
+  { tab: "cf-usage",         label: "Использование",  Icon: Gauge,       domain: "cloudflare" },
+  { tab: "cf-payments",      label: "Платежи",        Icon: CreditCard,  domain: "cloudflare" },
+  { tab: "cf-domains",       label: "Домены",         Icon: Globe,       domain: "cloudflare" },
 ];
 
 const INFRA_TABS: NavItemDef[] = [
-  { tab: "infra-dashboard", label: "Dashboard",          Icon: PieChart          },
-  { tab: "infra-providers", label: "Провайдеры",         Icon: CreditCard        },
-  { tab: "infra-projects",  label: "Проекты",            Icon: FolderKanban      },
-  { tab: "infra-services",  label: "Услуги и тарифы",    Icon: Server            },
-  { tab: "infra-payments",  label: "Платежи",            Icon: ReceiptText       },
-  { tab: "infra-settings",  label: "Настройки биллинга", Icon: SlidersHorizontal },
-  { tab: "infra-tokens",    label: "API токены",         Icon: KeyRound          },
+  { tab: "infra-dashboard", label: "Dashboard",          Icon: PieChart,          domain: "billing" },
+  { tab: "infra-providers", label: "Провайдеры",         Icon: CreditCard,        domain: "billing" },
+  { tab: "infra-projects",  label: "Проекты",            Icon: FolderKanban,      domain: "billing" },
+  { tab: "infra-services",  label: "Услуги и тарифы",    Icon: Server,            domain: "billing" },
+  { tab: "infra-payments",  label: "Платежи",            Icon: ReceiptText,       domain: "billing" },
+  { tab: "infra-settings",  label: "Настройки биллинга", Icon: SlidersHorizontal, domain: "billing" },
+  { tab: "infra-tokens",    label: "API токены",         Icon: KeyRound,          domain: "billing" },
 ];
+
+// Футер — вне групп, но в модели привилегий такой же, как остальные пункты.
+const FOOTER_TABS: NavItemDef[] = [
+  { tab: "notifications", label: "Уведомления", Icon: Bell,      domain: "automation" },
+  { tab: "settings",      label: "Настройки",   Icon: Settings2, domain: "settings"   },
+];
+
+const GROUPS: { title: string; items: NavItemDef[] }[] = [
+  { title: "Управление",     items: NAV_MAIN        },
+  { title: "Статистика",     items: STATS_TABS      },
+  { title: "Автоматизация",  items: AUTOMATION_TABS },
+  { title: "Remnawave",      items: RW_TABS         },
+  { title: "HAPROXY",        items: HAPROXY_TABS    },
+  { title: "Справка",        items: HOSTINGS_TABS   },
+  { title: "Cloudflare",     items: CF_TABS         },
+  // Инфра-биллинг — плоская секция, без аккордеона (CLAUDE.md §4c).
+  { title: "Инфра-биллинг",  items: INFRA_TABS      },
+];
+
+/** Все пункты в порядке отрисовки — App берёт отсюда «первую доступную вкладку». */
+export const NAV_TABS: readonly NavItemDef[] = [
+  ...GROUPS.flatMap(g => g.items), ...FOOTER_TABS,
+];
+
+const TAB_DOMAIN = new Map<Tab, PermDomain>(NAV_TABS.map(i => [i.tab, i.domain]));
+
+/** Привилегия просмотра вкладки. `null` — вкладки нет в таблице выше; тогда её НЕ
+ *  прячем: тихо потерянный раздел хуже лишнего пункта, а сервер всё равно ответит
+ *  403 на его запросы. */
+export function tabPermission(tab: Tab): string | null {
+  const domain = TAB_DOMAIN.get(tab);
+  return domain ? `${domain}.view` : null;
+}
 
 interface Props {
   activeTab: Tab;
@@ -108,6 +161,15 @@ interface Props {
 }
 
 export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
+  // Гейт разделов. ⚠️ Косметика: настоящая проверка — на сервере (см.
+  // usePermissions). Пока права неизвестны, `can` разрешает всё, поэтому сайдбар
+  // не мигает пустым на каждой загрузке.
+  const { can } = usePermissions();
+  const groups = GROUPS
+    .map(g => ({ title: g.title, items: g.items.filter(i => can(`${i.domain}.view`)) }))
+    .filter(g => g.items.length > 0);   // пустая группа не рисуется вовсе
+  const footer = FOOTER_TABS.filter(i => can(`${i.domain}.view`));
+
   const NavBtn = ({ item }: { item: NavItemDef }) => {
     const { Icon, label } = item;
     const active = activeTab === item.tab;
@@ -147,59 +209,24 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         </div>
       </div>
 
-      {/* nav */}
+      {/* nav — заголовок группы и её кнопки остаются СИБЛИНГАМИ в одной колонке
+          (Fragment не добавляет узлов): по этой плоской структуре ходит тест. */}
       <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", display: "flex", flexDirection: "column", gap: 2, paddingTop: 8 }}>
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Управление</p>
-        {NAV_MAIN.map(item => <NavBtn key={item.tab} item={item} />)}
-
-        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Статистика</p>
-        {STATS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
-
-        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Автоматизация</p>
-        {AUTOMATION_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
-
-        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Remnawave</p>
-        {RW_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
-
-        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>HAPROXY</p>
-        {HAPROXY_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
-
-        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Справка</p>
-        {HOSTINGS_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
-
-        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Cloudflare</p>
-        {CF_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
-
-        <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />
-        <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>Инфра-биллинг</p>
-
-        {/* Infra subtabs — flat section (no accordion) */}
-        {INFRA_TABS.map(item => <NavBtn key={item.tab} item={item} />)}
+        {groups.map((g, i) => (
+          <Fragment key={g.title}>
+            {i > 0 && <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />}
+            <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>{g.title}</p>
+            {g.items.map(item => <NavBtn key={item.tab} item={item} />)}
+          </Fragment>
+        ))}
       </div>
 
       {/* footer — Уведомления + Настройки (moved out of the main nav) */}
-      <div style={{ paddingTop: 8, borderTop: "1px solid var(--line-soft)", marginTop: 6 }}>
-        <button
-          className={`navitem ${activeTab === "notifications" ? "active" : ""}`}
-          onClick={() => onTabChange("notifications")}
-        >
-          <Bell size={16} style={{ flex: "none" }} />
-          <span className="trunc">Уведомления</span>
-        </button>
-        <button
-          className={`navitem ${activeTab === "settings" ? "active" : ""}`}
-          onClick={() => onTabChange("settings")}
-        >
-          <Settings2 size={16} style={{ flex: "none" }} />
-          <span className="trunc">Настройки</span>
-        </button>
-      </div>
+      {footer.length > 0 && (
+        <div style={{ paddingTop: 8, borderTop: "1px solid var(--line-soft)", marginTop: 6 }}>
+          {footer.map(item => <NavBtn key={item.tab} item={item} />)}
+        </div>
+      )}
     </aside>
   );
 }

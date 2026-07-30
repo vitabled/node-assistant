@@ -41,6 +41,7 @@ from app.services import (
     rule_engine,
     rules_store,
     telegram,
+    users,
     worker_lease,
 )
 from app.api.xray_checker import _filter_by_account
@@ -425,8 +426,10 @@ async def _run_webhook_event(event: dict) -> int:
     """Run webhook-triggered rules across ALL accounts on a verified event."""
     now = int(time.time())
     fired = 0
-    for acc in accounts.list_accounts():
-        aid = acc["id"]
+    # Обходим рабочие области, а не пользователей: правила принадлежат области, и
+    # под одной их может читать несколько человек — по списку людей одно и то же
+    # правило сработало бы по разу на каждого.
+    for aid in users.list_workspaces():
         try:
             rules = rules_store.list_rules(aid)
         except Exception:
@@ -464,13 +467,13 @@ async def rules_loop() -> None:
             if not worker_lease.acquire(worker_lease.MONITORING):
                 await asyncio.sleep(_TICK)
                 continue
-            for acc in accounts.list_accounts():
+            for aid in users.list_workspaces():
                 try:
-                    await _run_account_scheduled(acc["id"], now)
+                    await _run_account_scheduled(aid, now)
                 except Exception as exc:
                     log.warning(
                         "rules.account_failed account=%s: %s",
-                        acc.get("id"),
+                        aid,
                         telegram.redact(str(exc))[:200],
                     )
         except Exception:

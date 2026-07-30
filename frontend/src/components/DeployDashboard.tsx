@@ -133,6 +133,15 @@ export function DeployDashboard() {
             <p className="text-xs text-[var(--t-faint)] mt-0.5">
               {jobs.length > 0 ? `${jobs.length} задач` : "Нет задач деплоя"}
             </p>
+            {/* Карточки лежат в браузере (localStorage), а не на сервере, потому
+                что несут SSH-креды — их мы не храним. Следствие: коллега своих
+                карточек здесь не увидит, и без этой строки «не вижу ноду,
+                которую задеплоил админ» будут считать багом. Общая картина —
+                серверная: «Доступность серверов» и ноды Remnawave. */}
+            <p className="text-[11px] text-[var(--t-faint)] mt-1">
+              Карточки видны только вам: они хранятся в этом браузере, так как
+              содержат SSH-доступы. Общий список — на «Доступности серверов».
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setShowExisting(true)}

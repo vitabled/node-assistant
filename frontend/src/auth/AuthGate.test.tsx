@@ -16,9 +16,14 @@ describe("AuthGate", () => {
   beforeEach(reset);
   afterEach(cleanup);
 
-  it("shows the login screen when no account is active", () => {
+  it("shows the login screen when no account is active", async () => {
+    // Экран входа сначала спрашивает /api/auth/state («нужна ли первичная
+    // настройка») и до ответа не рисует НИ ОДНОЙ формы — поэтому ждём её.
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () => ({
+      ok: true, status: 200, json: async () => ({ bootstrap: false }),
+    })) as unknown as typeof fetch;
     render(<AuthGate />);
-    expect(screen.getByText("Вход в аккаунт")).toBeInTheDocument();
+    expect(await screen.findByText("Вход в аккаунт")).toBeInTheDocument();
     expect(screen.queryByText("APP_ROOT")).not.toBeInTheDocument();
   });
 

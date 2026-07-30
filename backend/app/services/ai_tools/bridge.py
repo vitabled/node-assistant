@@ -249,9 +249,17 @@ def normalize_path(path: str) -> str:
 
 async def call(method: str, path: str, account_id: str,
                query: Optional[dict] = None, body: Optional[dict] = None,
-               readonly: bool = True) -> dict:
-    """Один вызов REST панели от имени аккаунта. Никогда не бросает."""
-    from app.services import accounts
+               readonly: bool = True, user_id: str = "") -> dict:
+    """Один вызов REST панели ОТ ИМЕНИ ПОЛЬЗОВАТЕЛЯ. Никогда не бросает.
+
+    ⚠️ Токен минтится для конкретного пользователя, а не для рабочей области.
+    Иначе ассистент получил бы права уровня установки и стал бы способом обойти
+    роли: спросил у него — он сделал то, что тебе самому запрещено. Привилегии в
+    токене не лежат, они берутся у пользователя в момент запроса, поэтому
+    ассистент по построению не может больше своего хозяина, а денилист выше
+    остаётся вторым слоем и запрещает даже то, что хозяину разрешено.
+    """
+    from app.services import users
 
     method = (method or "GET").upper()
     path = normalize_path(path)
@@ -264,8 +272,11 @@ async def call(method: str, path: str, account_id: str,
     if reason:
         return {"ok": False, "error": f"действие запрещено: {reason}"}
 
+    if not user_id:
+        # Без личности звать REST нечем: анонимного доступа у панели нет вовсе.
+        return {"ok": False, "error": "нет активного пользователя"}
     try:
-        token = accounts.issue_token(account_id)
+        token = users.issue_token(user_id)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"не удалось авторизоваться: {str(exc)[:120]}"}
 

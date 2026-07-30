@@ -13,6 +13,7 @@
 #   sudo node-assistant update          # pull, rebuild, restart
 #   sudo node-assistant set-domain new.example.com
 #   sudo node-assistant set-ports --http-port 8080 --https-port 8443
+#   sudo node-assistant reset-admin     # forgot the panel password
 #
 # Everything is idempotent: existing secrets and certificates are reused, never
 # regenerated.
@@ -33,6 +34,8 @@ USE_TLS=1
 STAGING=0
 FORCE_CERT=0
 ASK_PORTS=1          # install prompts for the web ports unless they came as flags
+RESET_LOGIN=""       # reset-admin: which superuser
+RESET_GENERATE=0     # reset-admin: generate the password instead of asking
 
 # ── output helpers ─────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -59,6 +62,25 @@ confirm() {
     case "$a" in [yY]*) return 0 ;; *) return 1 ;; esac
 }
 
+# Same terminal-not-stdin rule, with echo off. `read -p` prints the prompt on
+# stderr, so command substitution still captures only the typed value.
+# Asked twice on purpose: the input is invisible, and a typo here locks the owner
+# out a second time.
+ask_secret() {
+    local prompt="$1" first="" again=""
+    # Opened in a subshell instead of testing with `-r`: inside a container
+    # /dev/tty is a readable device node that still refuses to open, and the raw
+    # `read` failures that follow look like a bug, not "you have no terminal".
+    ( : < /dev/tty ) 2>/dev/null \
+        || die "No terminal to read the password from — use --generate."
+    read -r -s -p "$prompt" first < /dev/tty || first=""
+    printf '\n' >&2
+    read -r -s -p "Repeat: " again < /dev/tty || again=""
+    printf '\n' >&2
+    [ "$first" = "$again" ] || die "The two entries differ — nothing was changed."
+    printf '%s' "$first"
+}
+
 usage() {
     cat <<EOF
 ${C_B}node-assistant${C_RST} — installer and management CLI
@@ -73,6 +95,11 @@ Commands:
   update             fetch, rebuild and restart on the tracked branch
   set-domain <fqdn>  change the panel domain and issue a certificate for it
   set-ports          change the web entry ports (HTTP/HTTPS published on the host)
+  reset-admin        set a new password for a panel superuser (locked out?)
+
+reset-admin options:
+  --login <name>      Which superuser (required only if there are several)
+  --generate          Generate the password and print it once
 
 Install options:
   --domain <fqdn>     Domain to serve the panel on (enables HTTPS)
@@ -93,12 +120,13 @@ Examples:
   sudo ./install.sh --domain panel.example.com --email me@example.com -y
   sudo ./install.sh --no-tls --http-port 8080 --default-ports
   sudo node-assistant update
+  sudo node-assistant reset-admin --login owner --generate
 EOF
 }
 
 # ── argument parsing ───────────────────────────────────────────
 case "${1:-}" in
-    install|status|check-updates|update|set-domain|set-ports) COMMAND="$1"; shift ;;
+    install|status|check-updates|update|set-domain|set-ports|reset-admin) COMMAND="$1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) COMMAND="install" ;;
 esac
@@ -115,6 +143,8 @@ while [ $# -gt 0 ]; do
         --http-port)     HTTP_PORT="${2:-}";  ASK_PORTS=0; shift 2 ;;
         --https-port)    HTTPS_PORT="${2:-}"; ASK_PORTS=0; shift 2 ;;
         --default-ports) ASK_PORTS=0; shift ;;
+        --login)         RESET_LOGIN="${2:-}"; shift 2 ;;
+        --generate)      RESET_GENERATE=1; shift ;;
         --no-tls)        USE_TLS=0; shift ;;
         --staging)       STAGING=1; shift ;;
         --force-cert)    FORCE_CERT=1; shift ;;
@@ -702,6 +732,45 @@ cmd_set_ports() {
     printf '  Panel: %s\n' "$(panel_url)"
 }
 
+# ── command: reset-admin ───────────────────────────────────────
+# The only way back in when the panel password is lost: there is no self-service
+# registration, and changing a password in the UI requires being logged in.
+#
+# Not a hole in the permission model — whoever has a shell here already reads
+# ENCRYPTION_KEY from .env, and with it can forge a session token for anybody.
+# This just makes the legitimate path easier than the illegitimate one.
+cmd_reset_admin() {
+    need_install
+    ENV_FILE="$APP_DIR/.env"
+
+    # `run`, not `exec`: a forgotten password is usually discovered while the
+    # stack is down, and `run` brings up a throwaway container of its own.
+    # `--no-deps` — editing users.json needs no other service.
+    # `-T` — without it compose run insists on a TTY and fails whenever the
+    # password arrives over a pipe (which is exactly how it arrives below).
+    if [ "$RESET_GENERATE" = 1 ]; then
+        local gen=(python -m app.reset_admin --generate)
+        [ -n "$RESET_LOGIN" ] && gen+=(--login "$RESET_LOGIN")
+        $DC run --rm --no-deps -T backend "${gen[@]}" < /dev/null \
+            || die "Password reset failed."
+        printf '\n  Sign in with that password and change it in the panel.\n'
+        return 0
+    fi
+
+    [ -n "$RESET_LOGIN" ] || \
+        RESET_LOGIN="$(ask "Superuser login (blank = the only one): " "")"
+    local pw; pw="$(ask_secret "New password (min 10 characters): ")"
+    [ -n "$pw" ] || die "Empty password — nothing was changed."
+
+    local args=(python -m app.reset_admin --password-stdin)
+    [ -n "$RESET_LOGIN" ] && args+=(--login "$RESET_LOGIN")
+    # The password travels on stdin and never as an argument: argv is world-
+    # readable in /proc/<pid>/cmdline and lands in the shell history.
+    printf '%s' "$pw" | $DC run --rm --no-deps -T backend "${args[@]}" \
+        || die "Password reset failed."
+    printf '  Panel: %s\n' "$(panel_url)"
+}
+
 # ── dispatch ───────────────────────────────────────────────────
 ENV_FILE="${APP_DIR:-}/.env"
 case "$COMMAND" in
@@ -711,5 +780,6 @@ case "$COMMAND" in
     update)        cmd_update ;;
     set-domain)    cmd_set_domain ;;
     set-ports)     cmd_set_ports ;;
+    reset-admin)   cmd_reset_admin ;;
     *)             usage; exit 1 ;;
 esac

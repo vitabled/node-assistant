@@ -22,7 +22,7 @@ from fastapi import APIRouter, Header, HTTPException
 from typing import Optional
 
 from app.models.subscriptions import SubscriptionCreate, SubscriptionUpdate
-from app.services import storage, accounts
+from app.services import storage, accounts, users
 from app.services import xray_checker
 
 router = APIRouter(prefix="/api/subscriptions")
@@ -137,8 +137,9 @@ async def agg_subs(x_agg_token: str = Header(default="")):
     if _AGG_TOKEN and x_agg_token != _AGG_TOKEN:
         raise HTTPException(403, "forbidden")
     out = []
-    for acc in accounts.list_accounts():
-        aid = acc["id"]
+    # Подписки лежат в области — по списку людей агрегатор получил бы каждую
+    # подписку продублированной на всех её пользователей.
+    for aid in users.list_workspaces():
         try:
             subs = storage.load_subscriptions(aid)
         except Exception:

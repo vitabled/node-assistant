@@ -225,20 +225,20 @@ def test_call_reads_real_data_through_the_app():
                        json={"name": "Мостовой хостинг", "tags": ["тест"]}).status_code == 201
 
     # Путь без префикса — нормализация должна доехать до реальной ручки.
-    out = asyncio.run(bridge.call("GET", "hostings", aid))
+    out = asyncio.run(bridge.call("GET", "hostings", aid, user_id=aid))
     assert out["ok"] is True and out["status"] == 200
     assert isinstance(out["data"], list)
     assert [x["name"] for x in out["data"]] == ["Мостовой хостинг"]
 
     # Чужой аккаунт своих данных здесь не видит — токен выписывается на account_id.
     other, _ = _register()
-    assert asyncio.run(bridge.call("GET", "hostings", other))["data"] == []
+    assert asyncio.run(bridge.call("GET", "hostings", other, user_id=other))["data"] == []
 
 
 def test_readonly_refuses_any_non_get_without_executing_it():
     aid, h = _register()
     for method in ("POST", "PUT", "PATCH"):
-        out = asyncio.run(bridge.call(method, "/api/hostings", aid,
+        out = asyncio.run(bridge.call(method, "/api/hostings", aid, user_id=aid,
                                       body={"name": "не должен появиться"},
                                       readonly=True))
         assert out["ok"] is False and "только для чтения" in out["error"]
@@ -252,16 +252,19 @@ def test_denied_path_is_refused_before_anything_runs(monkeypatch):
     Проверяем счётчиком выписанных токенов: он инкрементится в `call` сразу
     после денилиста, поэтому ноль означает, что дальше гейта не прошли.
     """
-    from app.services import accounts
+    # Волна 13: токен минтится для ПОЛЬЗОВАТЕЛЯ (`users.issue_token`), а не для
+    # рабочей области — иначе ассистент стал бы способом обойти роли. Счётчик
+    # переехал вместе с этим.
+    from app.services import users
 
     aid, _h = _register()
     calls = []
-    real = accounts.issue_token
-    monkeypatch.setattr(accounts, "issue_token",
+    real = users.issue_token
+    monkeypatch.setattr(users, "issue_token",
                         lambda a: (calls.append(a), real(a))[1])
 
     # Разрешённый вызов счётчик двигает — иначе тест ничего не доказывал бы.
-    asyncio.run(bridge.call("GET", "/api/hostings", aid))
+    asyncio.run(bridge.call("GET", "/api/hostings", aid, user_id=aid))
     assert len(calls) == 1
 
     for method, path in (("POST", "/api/deploy"),
@@ -269,7 +272,7 @@ def test_denied_path_is_refused_before_anything_runs(monkeypatch):
                          ("POST", "/api/cloudflare/domains/register"),
                          ("POST", "/api/vault/e1/reveal"),
                          ("DELETE", "/api/hostings/x")):
-        out = asyncio.run(bridge.call(method, path, aid, body={}, readonly=False))
+        out = asyncio.run(bridge.call(method, path, aid, body={}, readonly=False, user_id=aid))
         assert out["ok"] is False
         assert "запрещено" in out["error"]
     assert len(calls) == 1, "запрещённый путь дошёл до выполнения"

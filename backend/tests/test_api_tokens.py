@@ -1,4 +1,7 @@
-"""Wave-5 Plan H — per-account API access tokens: store/resolve + require_account
+"""Wave-5 Plan H — API access tokens (Волна 13: токен принадлежит ПОЛЬЗОВАТЕЛЮ,
+а не рабочей области, поэтому вызовы несут `user_id`)
+
+Wave-5 Plan H — per-account API access tokens: store/resolve + require_account
 bearer acceptance + readonly enforcement + isolation + MCP managed-token rotation."""
 import uuid
 
@@ -21,7 +24,7 @@ def _register():
 # ── service layer ────────────────────────────────────────────────
 def test_create_hides_secret_and_resolves():
     aid, _ = _register()
-    masked, token = api_tokens.create("ci", account_id=aid)
+    masked, token = api_tokens.create("ci", account_id=aid, user_id=aid)
     assert token.startswith("nai_") and aid in token
     assert "hash" not in masked and "token" not in masked
     resolved = api_tokens.resolve(token)
@@ -31,7 +34,7 @@ def test_create_hides_secret_and_resolves():
 
 def test_resolve_rejects_bad_expired_and_foreign():
     aid, _ = _register()
-    _m, token = api_tokens.create("t", account_id=aid)
+    _m, token = api_tokens.create("t", account_id=aid, user_id=aid)
     # tampered secret
     assert api_tokens.resolve(f"nai_{aid}_wrongsecret") is None
     # non-prefixed / malformed
@@ -40,7 +43,7 @@ def test_resolve_rejects_bad_expired_and_foreign():
     # unknown account id embedded
     assert api_tokens.resolve(f"nai_{uuid.uuid4()}_abc") is None
     # expired
-    _m2, expired = api_tokens.create("e", expires_in=-10, account_id=aid)
+    _m2, expired = api_tokens.create("e", expires_in=-10, account_id=aid, user_id=aid)
     assert api_tokens.resolve(expired) is None
     # a good one still works
     assert api_tokens.resolve(token).account_id == aid
@@ -48,7 +51,7 @@ def test_resolve_rejects_bad_expired_and_foreign():
 
 def test_list_masks_and_revoke():
     aid, _ = _register()
-    _m, token = api_tokens.create("x", account_id=aid)
+    _m, token = api_tokens.create("x", account_id=aid, user_id=aid)
     listed = api_tokens.list_tokens(aid)
     assert len(listed) == 1 and all("hash" not in t for t in listed)
     tid = listed[0]["id"]
@@ -59,8 +62,8 @@ def test_list_masks_and_revoke():
 
 def test_mint_managed_rotates():
     aid, _ = _register()
-    old = api_tokens.mint_managed("mcp-container", account_id=aid)
-    new = api_tokens.mint_managed("mcp-container", account_id=aid)
+    old = api_tokens.mint_managed("mcp-container", account_id=aid, user_id=aid)
+    new = api_tokens.mint_managed("mcp-container", account_id=aid, user_id=aid)
     assert old != new
     assert api_tokens.resolve(old) is None            # previous rotated out
     r = api_tokens.resolve(new)

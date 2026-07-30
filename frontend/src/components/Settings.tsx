@@ -22,6 +22,9 @@ import { DataTransfer } from "./settings/DataTransfer";
 import { UpdatesTab } from "./settings/UpdatesTab";
 import { HaproxyConnect } from "./haproxy/HaproxyConnect";
 import { CfConnect } from "./cloudflare/CfConnect";
+import { UsersTab } from "./settings/UsersTab";
+import { RolesTab } from "./settings/RolesTab";
+import { usePermissions } from "../auth/usePermissions";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -783,10 +786,13 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "ai" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "cloudflare" | "theme";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "ai" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "cloudflare" | "theme" | "users" | "roles";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
+  // Вкладки администрирования показываем по привилегии. ⚠️ Это косметика:
+  // настоящая граница — `require_identity` на сервере (см. usePermissions).
+  const { user, can } = usePermissions();
 
   const tabs: { id: SubTab; label: string }[] = [
     { id: "remnawave",   label: "Remnawave" },
@@ -801,8 +807,15 @@ export function Settings() {
     { id: "infra",       label: "Инфраструктура" },
     { id: "cloudflare",  label: "Cloudflare" },
     { id: "haproxy",     label: "HAProxy" },
+    ...(can("admin.users") ? [{ id: "users" as SubTab, label: "Пользователи" }] : []),
+    ...(can("admin.roles") ? [{ id: "roles" as SubTab, label: "Роли" }] : []),
     { id: "theme",       label: "Тема" },
   ];
+
+  // Привилегию могли снять, пока вкладка была открыта, — иначе остался бы
+  // экран, который на каждый запрос отвечает 403.
+  const visible = tabs.some(t => t.id === sub);
+  const active: SubTab = visible ? sub : "remnawave";
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -815,20 +828,25 @@ export function Settings() {
 
         <div className="seg seg-wrap" style={{ marginBottom: 24 }}>
           {tabs.map(t => (
-            <button key={t.id} className={sub === t.id ? "on" : ""} onClick={() => setSub(t.id)}>
+            <button key={t.id} className={active === t.id ? "on" : ""} onClick={() => setSub(t.id)}>
               {t.label}
             </button>
           ))}
         </div>
 
-        {sub === "remnawave"    && <RemnavaveTab />}
-        {sub === "defaults"     && <DeployDefaultsTab />}
-        {sub === "optimization" && <OptimizationTab />}
-        {sub === "monitoring"   && <MonitoringTab />}
-        {sub === "testservers"  && <TestServersTab />}
+        {active === "users" && (
+          <UsersTab meId={user?.id ?? ""} meIsSuperuser={!!user?.is_superuser} />
+        )}
+        {active === "roles" && <RolesTab myRoleIds={user?.role_ids ?? []} />}
+
+        {active === "remnawave"    && <RemnavaveTab />}
+        {active === "defaults"     && <DeployDefaultsTab />}
+        {active === "optimization" && <OptimizationTab />}
+        {active === "monitoring"   && <MonitoringTab />}
+        {active === "testservers"  && <TestServersTab />}
         {/* Ассистент, вход в провайдеров и MCP — одна вкладка: это части одной
             подсистемы, и раньше настройка одного требовала прыгать в другую. */}
-        {sub === "ai" && (
+        {active === "ai" && (
           <div className="flex flex-col gap-4 max-w-2xl">
             <AiSettingsTab />
             <div style={{ height: 1, background: "var(--line-soft)" }} />
@@ -837,13 +855,13 @@ export function Settings() {
             <McpTab />
           </div>
         )}
-        {sub === "tokens"       && <ApiTokensTab />}
-        {sub === "transfer"     && <DataTransfer />}
-        {sub === "updates"      && <UpdatesTab />}
-        {sub === "infra"        && <InfraTab />}
-        {sub === "haproxy"      && <div className="max-w-3xl"><HaproxyConnect /></div>}
-        {sub === "cloudflare"   && <div className="max-w-3xl"><CfConnect /></div>}
-        {sub === "theme"        && <ThemeTab />}
+        {active === "tokens"       && <ApiTokensTab />}
+        {active === "transfer"     && <DataTransfer />}
+        {active === "updates"      && <UpdatesTab />}
+        {active === "infra"        && <InfraTab />}
+        {active === "haproxy"      && <div className="max-w-3xl"><HaproxyConnect /></div>}
+        {active === "cloudflare"   && <div className="max-w-3xl"><CfConnect /></div>}
+        {active === "theme"        && <ThemeTab />}
       </div>
     </div>
   );
