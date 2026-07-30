@@ -11,6 +11,9 @@ interface AiConfig {
   base_url: string;
   model: string;
   max_steps: number;
+  /** Потолок ВЫВОДА за один тёрн. Не хватало 1024 — тело одной карточки
+   *  хостинга обрывалось посреди JSON, и в чат приходил пустой пузырь. */
+  max_tokens: number;
   readonly: boolean;
   has_key: boolean;
   gateway: "none" | "cliproxy";
@@ -23,11 +26,29 @@ interface AiConfig {
   // сейчас, — поэтому видимость поля ключа считается локально (см. needsWebKey).
   web_needs_key: boolean;
   has_web_key: boolean;
+  /** Адрес выводится из провайдера, а не хранится. Закрывает класс ошибок
+   *  «сменил провайдера — адрес остался прежним — 401 с верным ключом». */
+  base_url_auto: boolean;
+  /** Штатные адреса провайдеров ОТ СЕРВЕРА. Своей копии не держим: она отстанет,
+   *  а цена рассинхрона — запрос с верным ключом по чужому адресу. */
+  provider_defaults?: Record<string, string>;
 }
 
-const DEFAULTS: Record<AiConfig["provider"], { base_url: string; model: string }> = {
-  openai: { base_url: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-  anthropic: { base_url: "https://api.anthropic.com/v1", model: "claude-haiku-4-5-20251001" },
+/** Адрес выбранного провайдера. Источник — серверный каталог; литералы ниже
+ *  нужны лишь на случай старого бэкенда, который поля ещё не отдаёт. */
+function providerUrl(cfg: AiConfig, provider: AiConfig["provider"]): string {
+  return cfg.provider_defaults?.[provider] ?? FALLBACK_URLS[provider];
+}
+
+const FALLBACK_URLS: Record<AiConfig["provider"], string> = {
+  openai: "https://api.openai.com/v1",
+  anthropic: "https://api.anthropic.com/v1",
+};
+
+/** Модель по умолчанию — чтобы не перетирать ту, что человек выбрал сам. */
+const DEFAULT_MODELS: Record<AiConfig["provider"], string> = {
+  openai: "gpt-4o-mini",
+  anthropic: "claude-haiku-4-5-20251001",
 };
 
 // Зеркало `ai_web.WEB_PROVIDERS` + `ai_web.needs_key`. Дублируем на клиенте
@@ -148,8 +169,14 @@ export function AiSettingsTab() {
             <select className="selectbox" value={cfg.provider} disabled={saving}
               onChange={e => {
                 const p = e.target.value as AiConfig["provider"];
-                // Keep base_url when routing via a gateway (points at CLIProxyAPI, not the provider).
-                patchCfg(cfg.gateway === "cliproxy" ? { provider: p } : { provider: p, ...DEFAULTS[p] });
+                // В авторежиме адрес выводит сервер — здесь только показываем,
+                // куда он поедет. Модель подставляем лишь когда текущая явно
+                // «чужая»: перетереть выбранную модель при смене формата
+                // протокола раздражает больше, чем помогает.
+                const next: Partial<AiConfig> = { provider: p };
+                if (cfg.base_url_auto) next.base_url = providerUrl(cfg, p);
+                if (cfg.model === DEFAULT_MODELS[cfg.provider]) next.model = DEFAULT_MODELS[p];
+                patchCfg(next);
               }}>
               <option value="openai">OpenAI-совместимый</option>
               <option value="anthropic">Anthropic</option>
@@ -175,9 +202,31 @@ export function AiSettingsTab() {
             )}
           </label>
           <label className="flex flex-col gap-1 sm:col-span-2">
-            <span className="micro">Base URL</span>
-            <input className="input font-mono text-xs" value={cfg.base_url} disabled={saving}
+            <span className="micro flex items-center gap-2">
+              Base URL
+              <label className="normal-case tracking-normal font-normal flex items-center gap-1">
+                <input type="checkbox" checked={cfg.base_url_auto} disabled={saving}
+                  onChange={e => {
+                    const auto = e.target.checked;
+                    patchCfg(auto ? { base_url_auto: true, base_url: providerUrl(cfg, cfg.provider) }
+                                  : { base_url_auto: false });
+                  }} />
+                по провайдеру
+              </label>
+            </span>
+            <input className="input font-mono text-xs" value={cfg.base_url}
+              disabled={saving || cfg.base_url_auto}
               onChange={e => patchCfg({ base_url: e.target.value })} />
+            <p className="hint">
+              {cfg.gateway === "cliproxy"
+                // Локальный шлюз подменяет адрес на стороне сервера, поэтому поле
+                // здесь ни на что не влияет — сказать об этом честнее, чем дать
+                // человеку править значение, которое не применится.
+                ? "При работе через шлюз запрос уходит в контейнер CLIProxyAPI — этот адрес используется только если шлюз внешний."
+                : cfg.base_url_auto
+                  ? "Адрес подставляется по выбранному провайдеру. Снимите галочку для стороннего OpenAI-совместимого эндпоинта (OpenRouter, локальная модель)."
+                  : "Ручной режим: убедитесь, что ключ выдан именно для этого адреса."}
+            </p>
           </label>
           <label className="flex flex-col gap-1 sm:col-span-2">
             <span className="micro">API-ключ {cfg.has_key && <span className="text-[var(--ok)]">(сохранён)</span>}</span>
@@ -248,9 +297,19 @@ export function AiSettingsTab() {
             <Toggle checked={cfg.readonly} disabled={saving} label="Только чтение"
               onChange={() => patchCfg({ readonly: !cfg.readonly })} />
             <label className="flex flex-col gap-1 w-28">
-              <span className="micro">Лимит шагов</span>
-              <input type="number" min={1} max={20} className="input" value={cfg.max_steps} disabled={saving}
+              <span className="micro" title="Сколько обращений к модели за один ответ">
+                Шагов агента
+              </span>
+              <input type="number" min={1} max={40} className="input" value={cfg.max_steps} disabled={saving}
                 onChange={e => patchCfg({ max_steps: Number(e.target.value) })} />
+            </label>
+            <label className="flex flex-col gap-1 w-32">
+              <span className="micro" title="Больше — длиннее ответ и крупнее тело запроса за раз">
+                Токенов на ответ
+              </span>
+              <input type="number" min={256} max={64000} step={1024} className="input"
+                value={cfg.max_tokens} disabled={saving}
+                onChange={e => patchCfg({ max_tokens: Number(e.target.value) })} />
             </label>
             <button onClick={save} disabled={saving}
               className="ml-auto self-end flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] disabled:opacity-50">

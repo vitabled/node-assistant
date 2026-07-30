@@ -16,6 +16,7 @@ Two providers are supported behind one interface: an OpenAI-compatible
   {"type": "tool_call",   "name", "args"}
   {"type": "tool_result", "name", "ok", "preview"}
   {"type": "text",        "delta"}
+  {"type": "status",      "phase": thinking|tools|done, "step", "steps", "tokens"}
   {"type": "done"}
   {"type": "error",       "message"}
 so the API layer can stream them and the UI can show tool-calls as they happen.
@@ -26,6 +27,7 @@ NEVER logged. All errors are redacted before surfacing.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -39,7 +41,8 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import settings
 from app.models.settings import AiConfig, AppSettings
-from app.services import ai_context, ai_tools, ai_web, net_guard, prompt_presets_store, storage
+from app.services import (ai_attachments, ai_context, ai_tools, ai_web, net_guard,
+                          prompt_presets_store, storage)
 
 # Cap on a single tool result serialized back into the message history (prevents
 # unbounded growth / token blow-up across the tool-calling loop).
@@ -48,7 +51,18 @@ from app.services import ai_context, ai_tools, ai_web, net_guard, prompt_presets
 # ручек панели и текст веб-страниц, и на 4000 символов список из тридцати нод
 # обрывался на середине — модель делала выводы по огрызку. Потолок держит
 # `max_steps` (по умолчанию 6), так что худший случай ограничен.
-_TOOL_RESULT_CAP = 12_000
+# ⚠️ ДОЛЖЕН быть больше `ai_tools.ATTACHMENT_CHUNK` вместе с обёрткой JSON.
+# Пока было 12 000 против куска в 30 000, `read_attachment` отдавал 30k, а в
+# историю попадало 12k, ОБРЕЗАННЫХ ПОСРЕДИ JSON: модель видела битый огрызок,
+# не могла его разобрать и шла читать/искать заново — отсюда и хождение по
+# кругу, которое съедало весь бюджет шагов.
+_TOOL_RESULT_CAP = 34_000
+
+# Потолок на СУММУ результатов инструментов в истории. Без него длинный перенос
+# упирается не в наши лимиты, а в окно модели: 25 кусков по 30k — это ~200 тысяч
+# токенов только на файл. Старые результаты вытесняются: если модель следует
+# инструкции и пишет по ходу, они уже не нужны.
+_HISTORY_RESULT_BUDGET = 120_000
 
 log = logging.getLogger("ai")
 
@@ -81,6 +95,14 @@ def decrypt_key(enc: str) -> Optional[str]:
         return None
 
 
+def users_current_id() -> str:
+    """Личность текущего запроса. Отдельной функцией — её зовут и мост, и
+    хранилище вложений, а импорт `users` держим ленивым (цикл)."""
+    from app.services import users
+
+    return (users.current_user.get() or {}).get("id") or ""
+
+
 def _cfg(account_id: Optional[str] = None) -> AiConfig:
     return AppSettings(**storage.load_settings(account_id)).ai
 
@@ -91,6 +113,10 @@ def _cfg(account_id: Optional[str] = None) -> AiConfig:
 # режим только-чтение, запрет удаления). Здесь только псевдоним для обратной
 # совместимости: `api/ai.py` и тесты считают инструменты через `ai_agent.TOOLS`.
 TOOLS = ai_tools.TOOLS
+
+#: Заглушка для неизвестного имени: считаем его читающим, а настоящий отказ
+#: выдаст `_run_tool` — решение о доступе принимается там, а не здесь.
+_READONLY_TOOL = ai_tools.Tool('?', '', {}, None, write=False)  # type: ignore[arg-type]
 
 
 def build_context(config: AiConfig, account_id: str,
@@ -263,21 +289,38 @@ def effective_target(config: AiConfig) -> tuple[AiConfig, str]:
     мастер-ключу. Раньше агент требовал `api_key_enc` независимо от режима, и
     после успешного OAuth-входа ассистент всё равно просил ключ.
     """
+    # Адрес выводим из провайдера, если не включён ручной режим: иначе смена
+    # провайдера оставляла прежний адрес, ключ уезжал не туда, и провайдер
+    # отвечал 401 — неотличимо от «ключ неверный».
+    resolved_url = config.effective_base_url()
+    if resolved_url != config.base_url:
+        config = config.model_copy(update={"base_url": resolved_url})
+
     if getattr(config, "gateway", "none") != "cliproxy":
         return config, decrypt_key(config.api_key_enc) or ""
 
     from app.services import cliproxy_server
 
-    key = cliproxy_server.decrypt(getattr(config, "cliproxy_master_key_enc", "") or "") or ""
-    # Внешний (не наш) шлюз пускает по своему ключу — его кладут в поле API-ключа.
-    if not key:
-        key = decrypt_key(config.api_key_enc) or ""
+    # ⚠️ Мастер-ключ действителен ТОЛЬКО против нашего контейнера — это ключ,
+    # которым мы сами засеяли его `config.yaml`. Раньше он выбирался всегда,
+    # когда был сохранён, а ключ пользователя брался лишь как фолбэк на пустой
+    # мастер-ключ. Из-за этого выбранный в UI шлюз при выключенном контейнере
+    # (`cliproxy_enabled=false`) отправлял наш случайный токен на публичный
+    # `base_url` — и провайдер отвечал 401/403 «проверьте API-ключ», хотя ключ
+    # был верный и просто не доехал.
     if _gateway_is_ours(config):
+        key = cliproxy_server.decrypt(
+            getattr(config, "cliproxy_master_key_enc", "") or "") or ""
+        # Мастер-ключа ещё нет (контейнер не поднимали) — пробуем ключ из формы,
+        # чтобы не молчать там, где человек мог настроить всё вручную.
+        key = key or decrypt_key(config.api_key_enc) or ""
         # `/v1` дописываем здесь: `internal_base_url()` отдаёт корень контейнера,
         # а тёрны собирают `{base_url}/chat/completions`.
         base = cliproxy_server.internal_base_url().rstrip("/") + "/v1"
         return config.model_copy(update={"base_url": base}), key
-    return config, key
+
+    # Внешний (не наш) шлюз пускает по СВОЕМУ ключу — его кладут в поле API-ключа.
+    return config, decrypt_key(config.api_key_enc) or ""
 
 
 def _check_base_url(config: AiConfig) -> None:
@@ -349,6 +392,69 @@ async def _provider_turn(
     return await _openai_turn(config, key, messages, with_tools, mcp, ctx)
 
 
+
+# ── повтор при сбое провайдера ────────────────────────────────
+#
+# ⚠️ Один 500 убивал ВЕСЬ ответ вместе со всей проделанной работой: агент мог
+# сделать полтора десятка вызовов, прочитать полфайла — и потерять это из-за
+# секундной неполадки на чужой стороне. 5xx и обрыв связи почти всегда
+# преходящи, а тёрн к провайдеру не имеет побочных эффектов, поэтому его
+# безопасно повторить.
+#
+# 4xx НЕ повторяем: неверный ключ, неизвестная модель и слишком большой запрос
+# сами не починятся, а повтор превратит понятную ошибку в тройную задержку.
+_RETRY_ATTEMPTS = 3
+_RETRY_DELAYS = (1.0, 3.0)
+
+
+#: ⚠️ Раздельные таймауты, а не одно число: генерация длинного тела запроса
+#: (8192 токенов вывода) идёт минутами, и общий таймаут в 120 с обрывал ЖИВОЙ
+#: ответ. Подключение при этом должно падать быстро — ждать 5 минут коннекта к
+#: недоступному хосту незачем.
+_TIMEOUT = httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=15.0)
+
+
+def _describe_exc(exc: Exception) -> str:
+    """У таймаутов httpx текст пустой, и сообщение вырождалось в «Провайдер
+    недоступен: » — из него ничего не понять. Имя класса говорит главное:
+    ReadTimeout это не то же самое, что ConnectError."""
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+async def _post_retrying(url: str, *, json_body: dict, headers: dict,
+                         key: str, shrink=None) -> httpx.Response:
+    """POST с повтором на 5xx и сетевых сбоях. Бросает `AgentError` — уже
+    отредактированную, без ключа в тексте.
+
+    `shrink` вызывается ПЕРЕД повтором и ужимает тело: половина сбоев этого рода
+    — «запрос слишком большой», на который провайдеры отвечают то 500, то
+    таймаутом. Меньший запрос и обрабатывается быстрее.
+    """
+    last_err = ""
+    for attempt in range(_RETRY_ATTEMPTS):
+        if attempt and shrink:
+            shrink(attempt)
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+                r = await c.post(url, json=json_body, headers=headers)
+        except Exception as exc:  # noqa: BLE001 — сеть
+            last_err = f"Провайдер недоступен ({_describe_exc(exc)})."
+        else:
+            if r.status_code < 500:
+                return r
+            last_err = _provider_error(r, key)
+            log.info("ai.provider_5xx", extra={"status": r.status_code,
+                                               "attempt": attempt + 1})
+        if attempt < len(_RETRY_DELAYS):
+            await asyncio.sleep(_RETRY_DELAYS[attempt])
+    raise AgentError(
+        f"{last_err} Повторили {_RETRY_ATTEMPTS} раза — не помогло. Обычно это "
+        f"перегрузка на стороне провайдера или слишком большой запрос: "
+        f"напишите «Продолжи», прочитанное не потеряно."
+    )
+
+
 async def _openai_turn(
     config: AiConfig, key: str, messages: list[dict], with_tools: bool = True,
     mcp: Optional[list[dict]] = None, ctx: Optional[ai_tools.ToolContext] = None,
@@ -358,11 +464,13 @@ async def _openai_turn(
     if with_tools:
         body["tools"] = _tool_specs_openai(mcp, ctx)
         body["tool_choice"] = "auto"
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as c:
-            r = await c.post(url, json=body, headers={"Authorization": f"Bearer {key}"})
-    except Exception as exc:
-        raise AgentError(f"Провайдер недоступен: {redact(str(exc), key)}")
+    # Каждая следующая попытка режет историю вдвое: если провайдер споткнулся на
+    # объёме, повтор тем же телом споткнётся снова.
+    def _shrink(attempt: int) -> None:
+        _trim_history(body["messages"], _HISTORY_RESULT_BUDGET // (2 ** attempt))
+
+    r = await _post_retrying(url, json_body=body, key=key, shrink=_shrink,
+                             headers={"Authorization": f"Bearer {key}"})
     if r.status_code >= 400:
         raise AgentError(_provider_error(r, key))
     # Parsing is guarded too — a 200 with a malformed/HTML body must not escape the
@@ -382,7 +490,9 @@ async def _openai_turn(
             tool_calls.append(
                 {"id": tc.get("id"), "name": fn.get("name"), "args": args}
             )
-        return {"text": msg.get("content") or "", "tool_calls": tool_calls, "raw": msg}
+        return {"text": msg.get("content") or "", "tool_calls": tool_calls,
+                "raw": msg, "usage": _usage_openai(data),
+                "stop": (data.get("choices") or [{}])[0].get("finish_reason") or ""}
     except Exception as exc:
         raise AgentError(
             f"Некорректный ответ провайдера: {redact(str(exc), key)[:200]}"
@@ -397,25 +507,20 @@ async def _anthropic_turn(
     url = f"{config.base_url.rstrip('/')}/messages"
     body: dict = {
         "model": config.model,
-        "max_tokens": 1024,
+        "max_tokens": max(256, int(getattr(config, "max_tokens", 8192))),
         "system": system or _SYSTEM,  # Anthropic takes system at top level, NOT in messages
         "messages": messages,
     }
     if with_tools:
         body["tools"] = _tool_specs_anthropic(mcp, ctx)
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as c:
-            r = await c.post(
-                url,
-                json=body,
-                headers={
-                    "x-api-key": key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-            )
-    except Exception as exc:
-        raise AgentError(f"Провайдер недоступен: {redact(str(exc), key)}")
+    def _shrink(attempt: int) -> None:
+        _trim_anthropic(body["messages"], _HISTORY_RESULT_BUDGET // (2 ** attempt))
+
+    r = await _post_retrying(url, json_body=body, key=key, shrink=_shrink, headers={
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    })
     if r.status_code >= 400:
         raise AgentError(_provider_error(r, key))
     try:
@@ -437,11 +542,32 @@ async def _anthropic_turn(
             "text": "".join(text_parts),
             "tool_calls": tool_calls,
             "raw": data.get("content") or [],
+            "usage": _usage_anthropic(data),
+            "stop": data.get("stop_reason") or "",
         }
     except Exception as exc:
         raise AgentError(
             f"Некорректный ответ провайдера: {redact(str(exc), key)[:200]}"
         )
+
+
+def _usage_openai(data: dict) -> int:
+    """Сколько токенов стоил тёрн. 0 — если провайдер не сказал: показать «0»
+    честнее, чем выдумать число."""
+    u = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(u, dict):
+        return 0
+    total = u.get("total_tokens")
+    if isinstance(total, int):
+        return total
+    return int(u.get("prompt_tokens") or 0) + int(u.get("completion_tokens") or 0)
+
+
+def _usage_anthropic(data: dict) -> int:
+    u = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(u, dict):
+        return 0
+    return int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0)
 
 
 def _provider_error(r: httpx.Response, key: str) -> str:
@@ -456,11 +582,36 @@ def _provider_error(r: httpx.Response, key: str) -> str:
     except Exception:
         detail = r.text[:200]
     if r.status_code in (401, 403):
-        return "Провайдер отклонил ключ (401/403) — проверьте API-ключ и модель."
+        # ⚠️ Называем ХОСТ, которому не понравился ключ. Без этого сообщение
+        # одинаково для «неверный ключ OpenAI» и «мы отправили ключ не туда»
+        # (например, шлюз выбран, а контейнер выключен), и человек чинит не то.
+        # Сам ключ сюда не попадает — только адрес назначения.
+        host = (urlparse(str(r.request.url)).hostname or "?") if r.request else "?"
+        return (f"{host} отклонил ключ (401/403). Проверьте, что ключ выдан именно "
+                f"для этого адреса, и что модель доступна вашему аккаунту.")
     return f"Ошибка провайдера {r.status_code}: {redact(str(detail), key)[:300]}"
 
 
 # ── message assembly (append tool results per provider) ───────
+#: Чем заменяем вытесненный результат: модель должна понимать, что данные БЫЛИ,
+#: а не решить, что вызов не состоялся.
+_EVICTED = "(результат вытеснен из контекста — он уже обработан; при "            "необходимости запроси нужный участок заново)"
+
+
+def _trim_history(messages: list[dict],
+                  budget: int = _HISTORY_RESULT_BUDGET) -> None:
+    """Вытеснить САМЫЕ СТАРЫЕ результаты инструментов, пока их сумма больше
+    бюджета. Свежие важнее: по ним модель работает прямо сейчас."""
+    idx = [i for i, m in enumerate(messages)
+           if m.get("role") == "tool" and m.get("content") != _EVICTED]
+    total = sum(len(messages[i].get("content") or "") for i in idx)
+    for i in idx:
+        if total <= budget:
+            break
+        total -= len(messages[i].get("content") or "")
+        messages[i]["content"] = _EVICTED
+
+
 def _append_tool_results_openai(
     messages: list[dict], assistant_raw: dict, results: list[dict]
 ) -> None:
@@ -475,6 +626,22 @@ def _append_tool_results_openai(
                 ],
             }
         )
+    _trim_history(messages)
+
+
+def _trim_anthropic(messages: list[dict],
+                    budget: int = _HISTORY_RESULT_BUDGET) -> None:
+    """То же для Anthropic: результаты лежат блоками внутри user-сообщений."""
+    blocks = [b for m in messages if isinstance(m.get("content"), list)
+              for b in m["content"]
+              if isinstance(b, dict) and b.get("type") == "tool_result"
+              and b.get("content") != _EVICTED]
+    total = sum(len(b.get("content") or "") for b in blocks)
+    for b in blocks:
+        if total <= budget:
+            break
+        total -= len(b.get("content") or "")
+        b["content"] = _EVICTED
 
 
 def _append_tool_results_anthropic(
@@ -496,6 +663,7 @@ def _append_tool_results_anthropic(
             ],
         }
     )
+    _trim_anthropic(messages)
 
 
 _SYSTEM = (
@@ -554,8 +722,50 @@ async def build_system(account_id: str, config: AiConfig,
 
 # ── Вложения чата ─────────────────────────────────────────────
 MAX_ATTACHMENTS = 5
-MAX_TEXT_CHARS = 40_000          # на файл: дальше промпт вытесняет сам вопрос
+
+#: Сколько символов файла КЛАДЁТСЯ В ПРОМПТ сразу.
+#:
+#: ⚠️ Раньше это был потолок на весь файл, и вложение молча резалось до 40 000
+#: символов. На каталоге хостингов в 22 МБ (666 тыс. символов полезных данных)
+#: модель видела 0,18% и делала единственный доступный ей вывод — «файл обрезан,
+#: в нём два провайдера». Обрезал его не автор файла, а мы, и никому об этом не
+#: сообщили. Теперь в промпт уходит только НАЧАЛО, а остальное читается
+#: инструментами `read_attachment` / `search_attachment` — по кускам, сколько
+#: нужно, вместо попытки впихнуть мегабайты в одно сообщение.
+INLINE_TEXT_CHARS = 20_000
+
+#: Сколько символов файла вообще принимаем и держим доступным инструментам.
+MAX_TEXT_CHARS = 2_000_000
+
 _IMAGE_MIME = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+#: Встроенные картинки в data-URI.
+#:
+#: ⚠️ Их НЕЛЬЗЯ ни оставить в тексте, ни выбросить. Оставить — в каталоге
+#: хостингов на них приходилось 97% объёма (21 МБ из 22), и в лимит не влезали
+#: сами данные. Выбросить — потерять то, что пользователь как раз и просит
+#: перенести: у карточки хостинга есть вложения (`HostingBody.media`).
+#: Поэтому картинки уходят в ОТДЕЛЬНЫЙ канал (`ToolContext.attachments[i]
+#: ["images"]`), а в тексте остаётся маркер с номером — по нему модель понимает,
+#: к какой записи картинка относится, и сохраняет её `save_attachment_image`.
+_DATA_URI_RE = re.compile(
+    r"data:(image/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)", re.I)
+
+#: Маркер, который видит модель вместо самой картинки.
+IMAGE_MARKER = "«изображение #{}»"
+
+
+def extract_data_uris(text: str, start_index: int = 0) -> tuple[str, list[dict]]:
+    """`(текст с маркерами вместо картинок, [{index, mime, data_b64}])`."""
+    images: list[dict] = []
+
+    def _sub(m: re.Match) -> str:
+        idx = start_index + len(images)
+        images.append({"index": idx, "mime": m.group(1).lower(),
+                       "data_b64": m.group(2)})
+        return IMAGE_MARKER.format(idx)
+
+    return _DATA_URI_RE.sub(_sub, text or ""), images
 
 
 def build_user_content(prompt: str, attachments: Optional[list[dict]], provider: str):
@@ -574,11 +784,23 @@ def build_user_content(prompt: str, attachments: Optional[list[dict]], provider:
 
     text = prompt
     for a in texts:
-        body = (a.get("text") or "")[:MAX_TEXT_CHARS]
+        body, _imgs = extract_data_uris((a.get("text") or "")[:MAX_TEXT_CHARS])
         if not body:
             continue
         name = (a.get("name") or "файл").replace("`", "'")
-        text += f"\n\n--- Вложение: {name} ---\n{body}"
+        head = body[:INLINE_TEXT_CHARS]
+        text += f"\n\n--- Вложение: {name} ---\n{head}"
+        if len(body) > INLINE_TEXT_CHARS:
+            # ⚠️ Говорим ЯВНО, что показано не всё, и чем дочитать. Молчаливый
+            # обрез — это когда модель уверенно отвечает по началу файла и
+            # объявляет отсутствующим то, что просто не доехало.
+            text += (
+                f"\n\n[Показаны первые {INLINE_TEXT_CHARS} из {len(body)} символов "
+                f"файла «{name}». ЭТО НЕ ВЕСЬ ФАЙЛ. Остальное читай инструментом "
+                f"read_attachment(name='{name}', offset=…) или ищи в нём через "
+                f"search_attachment. Не делай выводов о полноте данных по этому "
+                f"фрагменту.]"
+            )
 
     if not images:
         return text
@@ -634,24 +856,107 @@ def build_history(history: Optional[list[dict]]) -> list[dict]:
     return out
 
 
+_COMPACT_SYSTEM = (
+    "Сожми переписку в краткую выжимку для продолжения разговора. Сохрани: что "
+    "пользователь хочет получить, принятые решения и договорённости, названия "
+    "сущностей и точные значения (адреса, имена, числа), на чём остановились и "
+    "что делать дальше. Выброси: приветствия, рассуждения вслух, повторы, "
+    "сообщения об ошибках, которые уже исправлены. Пиши по-русски, по пунктам, "
+    "не длиннее 300 слов. Не выдумывай то, чего в переписке не было."
+)
+
+
+async def compact(config: AiConfig, account_id: str,
+                  history: Optional[list[dict]]) -> str:
+    """Краткая выжимка из переписки — для команды `/compact`.
+
+    ⚠️ Ходит БЕЗ инструментов и одним тёрном: задача чисто текстовая, а лишний
+    доступ к панели здесь означал бы, что «сжатие» способно что-то изменить.
+
+    Бросает `AgentError` с человеческим текстом — вызов делает человек нажатием,
+    и он должен понимать, почему не вышло (в отличие от инструментов агента, где
+    контракт «не бросать»).
+    """
+    config, key = effective_target(config)
+    if not key:
+        raise AgentError("Нечем авторизоваться у провайдера.")
+    prior = build_history(history)
+    if not prior:
+        raise AgentError("Сжимать нечего — переписка пуста.")
+
+    # Переписку кладём ОДНИМ пользовательским сообщением, а не ролями: иначе
+    # модель продолжает диалог, вместо того чтобы описать его со стороны.
+    transcript = "\n\n".join(
+        f"{'Пользователь' if m['role'] == 'user' else 'Ассистент'}: {m['content']}"
+        for m in prior
+    )
+    messages = (
+        [{"role": "user", "content": transcript}]
+        if config.provider == "anthropic"
+        else [{"role": "system", "content": _COMPACT_SYSTEM},
+              {"role": "user", "content": transcript}]
+    )
+    turn = await _provider_turn(config, key, messages, with_tools=False,
+                                system=_COMPACT_SYSTEM)
+    text = (turn.get("text") or "").strip()
+    if not text:
+        raise AgentError("Провайдер вернул пустую выжимку.")
+    return text
+
+
 async def run_agent(
     prompt: str, config: AiConfig, account_id: str, key: Optional[str] = None,
     attachments: Optional[list[dict]] = None,
     history: Optional[list[dict]] = None,
+    session_id: str = "",
 ) -> AsyncIterator[dict]:
     """Drive the tool-calling loop, yielding events. Never raises — errors become
     an {"type":"error"} event."""
     config, resolved = effective_target(config)
     key = key if key is not None else resolved
     if not key:
-        yield {"type": "error", "message": (
-            "Шлюз CLIProxyAPI не запущен — включите его в Настройках → AI."
-            if getattr(config, "gateway", "none") == "cliproxy"
-            else "API-ключ провайдера не задан."
-        )}
+        # Три разных положения — три разных совета. Одно сообщение на все случаи
+        # отправляло человека искать несуществующий ключ там, где на самом деле
+        # выключен контейнер, и наоборот.
+        if getattr(config, "gateway", "none") != "cliproxy":
+            message = "API-ключ провайдера не задан."
+        elif _gateway_is_ours(config):
+            message = ("Шлюз CLIProxyAPI не запущен — включите его в "
+                       "«Настройки → AI».")
+        else:
+            message = ("Выбран шлюз CLIProxyAPI, но локальный контейнер выключен. "
+                       "Либо включите его в «Настройках → AI», либо укажите "
+                       "API-ключ внешнего шлюза — мастер-ключ локального шлюза "
+                       "внешнему адресу не подходит.")
+        yield {"type": "error", "message": message}
         return
 
     ctx = build_context(config, account_id)
+    # Текстовые вложения кладём в контекст инструментов: в промпт уходит только
+    # начало большого файла, остальное модель дочитывает read_attachment.
+    for a in (attachments or []):
+        if (a.get("mime") or "") in _IMAGE_MIME:
+            continue
+        # Картинки клиент уже мог вынести в `images` (тогда в тексте маркеры);
+        # если пришёл сырой текст с data-URI — выносим здесь, чтобы оба пути
+        # вели себя одинаково.
+        images = [dict(i) for i in (a.get("images") or [])]
+        body, found = extract_data_uris((a.get("text") or "")[:MAX_TEXT_CHARS],
+                                        start_index=len(images))
+        images += found
+        if body or images:
+            ctx.attachments.append({"name": a.get("name") or "файл",
+                                    "text": body, "images": images})
+
+    # ⚠️ Вложение живёт ВЕСЬ разговор, а не одно сообщение. Работа с большим
+    # файлом по своей природе занимает несколько сообщений («Продолжи»), и без
+    # этого на втором из них файла уже не было: агент шёл искать данные там, где
+    # их нет, и отвечал чепухой.
+    user_id = (users_current_id() or account_id)
+    if ctx.attachments:
+        ai_attachments.remember(user_id, session_id, ctx.attachments)
+    elif session_id:
+        ctx.attachments = ai_attachments.recall(user_id, session_id)
     system = await build_system(account_id, config, ctx)
     content = build_user_content(prompt, attachments, config.provider)
     prior = build_history(history)
@@ -674,6 +979,12 @@ async def run_agent(
                "preview": f"Подключено инструментов Remnawave: {len(mcp_tools)}"}
 
     steps = max(1, config.max_steps)
+    # ⚠️ Состояние отдаём СРАЗУ, до первого обращения к провайдеру: первый тёрн
+    # с большим файлом идёт десятки секунд, и всё это время в чате не было
+    # ничего — «вроде работает, вроде нет». Пустой лог не отличить от зависшего.
+    tokens = 0
+    yield {"type": "status", "phase": "thinking", "step": 1, "steps": steps,
+           "tokens": 0}
     for step in range(steps):
         # Reserve the LAST step for a tools-off turn so the model must synthesize a
         # final answer from what it fetched, instead of dead-ending on the budget.
@@ -687,38 +998,95 @@ async def run_agent(
             yield {"type": "error", "message": str(exc)}
             return
 
+        tokens += int(turn.get("usage") or 0)
         if not turn["tool_calls"]:
+            # ⚠️ Пустой текст без вызовов = модель «замолчала». Раньше мы просто
+            # закрывали стрим, и в чате оставался пустой пузырь — не отличить от
+            # зависшего агента. Молчание надо назвать.
             if turn["text"]:
                 yield {"type": "text", "delta": turn["text"]}
+                # ⚠️ Последний шаг идёт БЕЗ инструментов, поэтому модель на нём
+                # часто описывает план («смотрю схему записи…»), которого уже не
+                # может выполнить. Молча выдать это за ответ — значит соврать:
+                # человек ждёт продолжения, а его не будет.
+                if is_last and ctx.used:
+                    yield {"type": "text", "delta": (
+                        f"\n\n— бюджет в {steps} шагов исчерпан, поэтому "
+                        f"действия на этом остановлены. Напишите «Продолжи»: "
+                        f"файл и контекст сохранены. Если задача большая, "
+                        f"поднимите «Шагов агента» в «Настройки → AI».")}
+            elif turn.get("stop") in ("length", "max_tokens"):
+                # Обрыв по потолку вывода — самая частая причина пустоты: тело
+                # одной записи не поместилось, и разбирать стало нечего.
+                yield {"type": "text", "delta": (
+                    f"(ответ не поместился в лимит вывода в "
+                    f"{getattr(config, 'max_tokens', 8192)} токенов — поднимите "
+                    f"«Токенов на ответ» в «Настройки → AI» или попросите "
+                    f"обрабатывать данные меньшими порциями)")}
+            else:
+                yield {"type": "text", "delta": (
+                    "(модель вернула пустой ответ — попробуйте переспросить; "
+                    "если файл большой, попросите обрабатывать его частями)")}
+            yield {"type": "status", "phase": "done", "step": step + 1,
+                   "steps": steps, "tokens": tokens}
             yield {"type": "done"}
             return
 
-        # Execute each requested tool, stream call + result events (with the call
-        # id so the UI can match result→call even if calls are ever parallelized).
+        yield {"type": "status", "phase": "tools", "step": step + 1,
+               "steps": steps, "tokens": tokens}
+
+        # ⚠️ Инструменты одного тёрна выполняются ПАРАЛЛЕЛЬНО. Модель часто просит
+        # сразу несколько чтений или запросов к панели, и последовательное
+        # выполнение складывало их задержки: пять чтений по секунде — это пять
+        # секунд на ровном месте.
+        #
+        # Изменяющие вызовы из общей пачки ИСКЛЮЧЕНЫ и идут по очереди после
+        # чтений: у них важен порядок, а два одновременных POST в один и тот же
+        # стор — это гонка за файлом (сторы читают-меняют-пишут целиком).
+        for tc in turn["tool_calls"]:
+            yield {"type": "tool_call", "id": tc["id"], "name": tc["name"],
+                   "args": tc["args"]}
+
+        reads = [tc for tc in turn["tool_calls"]
+                 if not (TOOLS.get(tc["name"]) or _READONLY_TOOL).write]
+        writes = [tc for tc in turn["tool_calls"] if tc not in reads]
+
+        done: dict[str, tuple[bool, Any]] = {}
+        if reads:
+            outs = await asyncio.gather(
+                *[_run_tool(tc["name"], tc["args"], account_id, config, ctx)
+                  for tc in reads],
+                return_exceptions=True,
+            )
+            for tc, res in zip(reads, outs):
+                done[tc["id"]] = ((False, redact(str(res)))
+                                  if isinstance(res, BaseException) else res)
+        for tc in writes:
+            done[tc["id"]] = await _run_tool(tc["name"], tc["args"], account_id,
+                                             config, ctx)
+
         results = []
         for tc in turn["tool_calls"]:
-            yield {
-                "type": "tool_call",
-                "id": tc["id"],
-                "name": tc["name"],
-                "args": tc["args"],
-            }
-            ok, out = await _run_tool(tc["name"], tc["args"], account_id, config, ctx)
-            preview = json.dumps(out, ensure_ascii=False)
-            yield {
-                "type": "tool_result",
-                "id": tc["id"],
-                "name": tc["name"],
-                "ok": ok,
-                "preview": preview[:500],
-            }
+            ok, out = done.get(tc["id"], (False, "инструмент не выполнился"))
+            yield {"type": "tool_result", "id": tc["id"], "name": tc["name"],
+                   "ok": ok, "preview": json.dumps(out, ensure_ascii=False)[:500]}
             results.append({"id": tc["id"], "result": out})
 
         if config.provider == "anthropic":
             _append_tool_results_anthropic(messages, turn["raw"], results)
         else:
             _append_tool_results_openai(messages, turn["raw"], results)
+        if step + 1 < steps:
+            yield {"type": "status", "phase": "thinking", "step": step + 2,
+                   "steps": steps, "tokens": tokens}
 
-    # Defensive: the tools-off last turn should already have returned above.
-    yield {"type": "text", "delta": "(достигнут лимит шагов агента)"}
+    # Сюда попадаем, если даже последний тёрн без инструментов запросил вызовы.
+    # Лимит шагов — штатная ситуация на большой задаче, поэтому говорим не «всё
+    # плохо», а что именно делать: продолжить или поднять потолок.
+    yield {"type": "text", "delta": (
+        f"(достигнут предел в {steps} шагов за один ответ. Напишите «Продолжи» — "
+        f"файл и контекст сохранены; либо поднимите «Шагов агента» в "
+        f"«Настройки → AI»)")}
+    yield {"type": "status", "phase": "done", "step": steps, "steps": steps,
+           "tokens": tokens}
     yield {"type": "done"}

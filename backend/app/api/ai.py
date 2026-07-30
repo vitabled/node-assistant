@@ -12,13 +12,15 @@ AI agent config + chat API (Ф4). Account-gated.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import json
 
-from app.services import accounts, ai_agent, ai_tools, ai_web, net_guard, storage
+from app.models.settings import PROVIDER_BASE_URLS
+from app.services import (accounts, ai_agent, ai_runs, ai_tools, ai_web,
+                          net_guard, storage)
 
 router = APIRouter(prefix="/api/ai")
 
@@ -30,9 +32,18 @@ class AiConfigBody(BaseModel):
     enabled: bool = False
     provider: str = "openai"
     base_url: str = Field("https://api.openai.com/v1", max_length=300)
+    # Пусто = «выводить из провайдера». Ручной режим — для сторонних
+    # OpenAI-совместимых эндпоинтов (OpenRouter, локальная llama.cpp).
+    base_url_auto: bool = True
     model: str = Field("gpt-4o-mini", max_length=120)
     api_key: str | None = None  # write-only; blank/None keeps the existing key
-    max_steps: int = Field(6, ge=1, le=20)
+    # Потолок 60: измеренный перенос каталога на 205 записей занял 33 вызова
+    # (2 открытия + поиск + 25 чтений + 5 пакетных записей). Ниже — не влезает
+    # в один заход, выше — уже про разгон, а не про работу.
+    max_steps: int = Field(12, ge=1, le=60)
+    # Потолок вывода за тёрн. Нижняя граница не «1»: на 256 токенах не помещается
+    # даже короткое тело запроса, и агент упирался бы в обрыв на каждом шаге.
+    max_tokens: int = Field(8192, ge=256, le=64000)
     readonly: bool = True
     active_preset_id: str = Field("", max_length=64)  # Plan I; "" = default preset
     gateway: str = "none"  # Plan J; none | cliproxy
@@ -77,6 +88,14 @@ class AiConfigBody(BaseModel):
         return v
 
 
+class AttachmentImage(BaseModel):
+    """Картинка, вынесенная из текста вложения. В промпт НЕ попадает: модель
+    видит на её месте маркер «изображение #N» и сохраняет её по номеру."""
+    index: int = Field(0, ge=0)
+    mime: str = Field("image/jpeg", max_length=60)
+    data_b64: str = Field("", max_length=25_000_000)
+
+
 class Attachment(BaseModel):
     """Вложение чата. Файлы НЕ персистятся: они относятся к одному вопросу, а не
     к аккаунту, поэтому едут в теле запроса и живут ровно столько же."""
@@ -84,8 +103,14 @@ class Attachment(BaseModel):
     mime: str = Field("", max_length=100)
     # Текстовый файл — как есть; картинка — base64 (форму блока выбирает
     # ai_agent.build_user_content, она у провайдеров разная).
+    # ⚠️ Потолок — на ВЕСЬ файл, а не на то, что уедет в промпт: в сообщение
+    # кладётся только начало, остальное читается инструментами. Прежние
+    # 40 000 резали каталог на 22 МБ до 0,18%, и модель делала вывод, что
+    # данных в файле нет.
     text: str = Field("", max_length=ai_agent.MAX_TEXT_CHARS)
     data_b64: str = Field("", max_length=6_000_000)
+    # Картинки из текстового файла едут отдельно от текста — см. AttachmentImage.
+    images: list[AttachmentImage] = Field(default_factory=list, max_length=500)
 
 
 class HistoryMsg(BaseModel):
@@ -101,6 +126,9 @@ class ChatBody(BaseModel):
                                           max_length=ai_agent.MAX_ATTACHMENTS)
     history: list[HistoryMsg] = Field(
         default_factory=list, max_length=ai_agent.MAX_HISTORY_MESSAGES * 2)
+    # Идентификатор разговора: по нему вложение доживает до следующего
+    # сообщения. Пусто = вложение живёт один запрос, как раньше.
+    session_id: str = Field("", max_length=64)
 
 
 def _public(account_id: str | None = None) -> dict:
@@ -108,9 +136,16 @@ def _public(account_id: str | None = None) -> dict:
     return {
         "enabled": cfg.enabled,
         "provider": cfg.provider,
-        "base_url": cfg.base_url,
+        # Отдаём АДРЕС НАЗНАЧЕНИЯ, а не сырое поле: в авторежиме он выводится из
+        # провайдера, и форма должна показывать то же, куда реально уйдёт запрос.
+        "base_url": cfg.effective_base_url(),
+        "base_url_auto": cfg.base_url_auto,
+        # Каталог штатных адресов — чтобы форма не держала свою копию: она
+        # отстанет, а цена рассинхрона — 401 с верным ключом.
+        "provider_defaults": dict(PROVIDER_BASE_URLS),
         "model": cfg.model,
         "max_steps": cfg.max_steps,
+        "max_tokens": cfg.max_tokens,
         "readonly": cfg.readonly,
         "active_preset_id": cfg.active_preset_id,
         "gateway": cfg.gateway,
@@ -143,8 +178,10 @@ async def save_config(body: AiConfigBody) -> dict:
         "enabled": body.enabled,
         "provider": body.provider,  # already validated to be a known provider
         "base_url": body.base_url.strip(),
+        "base_url_auto": body.base_url_auto,
         "model": body.model.strip(),
         "max_steps": body.max_steps,
+        "max_tokens": body.max_tokens,
         "readonly": body.readonly,
         "active_preset_id": body.active_preset_id.strip(),
         "gateway": body.gateway,
@@ -179,21 +216,102 @@ async def list_models() -> dict:
 
 @router.post("/chat")
 async def chat(body: ChatBody) -> StreamingResponse:
+    """Запустить ответ и стримить его.
+
+    ⚠️ Цикл агента крутится ФОНОВОЙ задачей (`ai_runs`), а этот поток лишь читает
+    её буфер: обрыв соединения — перезагрузка страницы, потеря сети — работу не
+    прекращает. Раньше запрос жил внутри HTTP-ответа и умирал вместе с ним.
+    """
     account_id = accounts.current_account.get() or ""
+    user_id = ai_agent.users_current_id() or account_id
+    session_id = body.session_id or "default"
     cfg = ai_agent._cfg(account_id)
 
-    async def gen():
-        if not cfg.enabled:
+    if not cfg.enabled:
+        async def off():
             yield json.dumps({"type": "error", "message": "ИИ-агент выключен."}) + "\n"
-            return
-        async for event in ai_agent.run_agent(
+        return StreamingResponse(off(), media_type="application/x-ndjson")
+
+    def make_events():
+        return ai_agent.run_agent(
             body.prompt, cfg, account_id,
             attachments=[a.model_dump() for a in body.attachments],
             history=[m.model_dump() for m in body.history],
-        ):
+            session_id=session_id,
+        )
+
+    run = ai_runs.start(user_id, session_id, make_events)
+
+    async def gen():
+        async for event in ai_runs.follow(run):
             yield json.dumps(event, ensure_ascii=False) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+@router.get("/chat/state")
+async def chat_state(session_id: str = "") -> dict:
+    """Идёт ли ответ в этом разговоре. Клиент спрашивает на загрузке страницы:
+    после F5 он не знает, оставил ли работу."""
+    account_id = accounts.current_account.get() or ""
+    user_id = ai_agent.users_current_id() or account_id
+    run = ai_runs.get(user_id, session_id or "default")
+    if run is None:
+        return {"active": False, "events": 0}
+    return {"active": not run.done, "events": len(run.events)}
+
+
+@router.get("/chat/resume")
+async def chat_resume(session_id: str = "", start: int = 0) -> StreamingResponse:
+    """Переподключиться к идущему (или только что завершённому) ответу.
+
+    Отдаём события С НАЧАЛА: после перезагрузки клиент не знает, сколько он
+    успел применить, а восстановить последнюю реплику по полному списку проще и
+    надёжнее, чем вести учёт смещений на диске.
+    """
+    account_id = accounts.current_account.get() or ""
+    user_id = ai_agent.users_current_id() or account_id
+    run = ai_runs.get(user_id, session_id or "default")
+
+    async def gen():
+        if run is None:
+            yield json.dumps({"type": "done"}) + "\n"
+            return
+        async for event in ai_runs.follow(run, start):
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+@router.post("/chat/stop")
+async def chat_stop(session_id: str = "") -> dict:
+    account_id = accounts.current_account.get() or ""
+    user_id = ai_agent.users_current_id() or account_id
+    return {"stopped": ai_runs.stop(user_id, session_id or "default")}
+
+
+class CompactBody(BaseModel):
+    history: list[HistoryMsg] = Field(
+        default_factory=list, max_length=ai_agent.MAX_HISTORY_MESSAGES * 4)
+
+
+@router.post("/compact")
+async def compact_history(body: CompactBody) -> dict:
+    """Сжать переписку в выжимку — команда `/compact` в чате.
+
+    Сессии хранит клиент, поэтому сюда приезжает вся переписка целиком, а обратно
+    уезжает текст, которым клиент её заменит. Сервер по-прежнему ничего не хранит.
+    """
+    cfg = ai_agent._cfg()
+    if not cfg.enabled:
+        raise HTTPException(400, "ИИ-агент выключен.")
+    try:
+        summary = await ai_agent.compact(
+            cfg, accounts.current_account.get() or "",
+            [m.model_dump() for m in body.history])
+    except ai_agent.AgentError as exc:
+        raise HTTPException(400, str(exc))
+    return {"summary": summary}
 
 
 @router.get("/tools")

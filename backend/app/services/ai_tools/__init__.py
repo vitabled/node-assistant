@@ -26,6 +26,7 @@
 """
 from __future__ import annotations
 
+import base64
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
@@ -59,6 +60,18 @@ class ToolContext:
     web_calls: int = 0
     #: Имена инструментов, уже отработавших в этом ответе (для диагностики).
     used: list[str] = field(default_factory=list)
+    #: Подписи уже сделанных вызовов (инструмент + аргументы). ⚠️ Модель охотно
+    #: ищет одно и то же по кругу: в реальном прогоне шесть из десяти шагов ушли
+    #: на повторный `search_attachment` с теми же аргументами, и бюджет
+    #: кончился, не начав работы. Повтор возвращает напоминание вместо данных.
+    calls: set[str] = field(default_factory=set)
+    #: Текстовые вложения этого сообщения: `{name, text}`. Живут ровно один
+    #: ответ — как и само вложение, которое нигде не персистится.
+    #: ⚠️ Существуют потому, что целиком в промпт большой файл не влезает: в
+    #: сообщение уходит только начало, а инструменты читают остальное кусками.
+    #: Без этого файл на 666 тыс. символов виделся моделью на 3%, и она честно
+    #: сообщала, что данных в нём нет.
+    attachments: list[dict] = field(default_factory=list)
 
 
 #: Потолок сетевых обращений на один ответ.
@@ -73,6 +86,8 @@ class Tool:
     fn: Callable[[dict, ToolContext], Awaitable[Any]]
     write: bool = False
     web: bool = False
+    #: Имеет смысл только когда к сообщению приложен файл.
+    needs_attachment: bool = False
 
 
 _EMPTY = {"type": "object", "properties": {}}
@@ -144,6 +159,234 @@ async def _t_open(args: dict, ctx: ToolContext) -> Any:
     if denied:
         return {"error": denied}
     return await ai_web.fetch(str(args.get("url") or ""))
+
+
+# ── вложения ──────────────────────────────────────────────────
+#: Сколько символов отдаём за один вызов. Больше — и один кусок вытеснит из окна
+#: и вопрос, и всё, что модель уже собрала.
+ATTACHMENT_CHUNK = 30_000
+_SEARCH_HITS = 20
+_SEARCH_CONTEXT = 400
+
+
+def _find_attachment(ctx: ToolContext, name: str) -> Optional[dict]:
+    """Ищем по точному имени, иначе по подстроке: модель регулярно пишет имя
+    приблизительно, а отказ «нет такого файла» при одном приложенном файле —
+    худший из возможных ответов."""
+    items = ctx.attachments or []
+    if not items:
+        return None
+    name = (name or "").strip()
+    if not name:
+        return items[0] if len(items) == 1 else None
+    exact = next((a for a in items if (a.get("name") or "") == name), None)
+    if exact:
+        return exact
+    low = name.lower()
+    part = [a for a in items if low in (a.get("name") or "").lower()]
+    if len(part) == 1:
+        return part[0]
+    return items[0] if len(items) == 1 else None
+
+
+async def _t_read_attachment(args: dict, ctx: ToolContext) -> Any:
+    item = _find_attachment(ctx, str(args.get("name") or ""))
+    if item is None:
+        return {"error": "к сообщению не приложено такого файла",
+                "attachments": [a.get("name") for a in ctx.attachments or []]}
+    text = item.get("text") or ""
+    try:
+        offset = max(0, int(args.get("offset") or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = int(args.get("limit") or ATTACHMENT_CHUNK)
+    except (TypeError, ValueError):
+        limit = ATTACHMENT_CHUNK
+    limit = max(1, min(limit, ATTACHMENT_CHUNK))
+    chunk = text[offset:offset + limit]
+    end = offset + len(chunk)
+    return {
+        "name": item.get("name"), "total": len(text),
+        "offset": offset, "next_offset": end if end < len(text) else None,
+        "eof": end >= len(text), "text": chunk,
+    }
+
+
+async def _t_search_attachment(args: dict, ctx: ToolContext) -> Any:
+    item = _find_attachment(ctx, str(args.get("name") or ""))
+    if item is None:
+        return {"error": "к сообщению не приложено такого файла",
+                "attachments": [a.get("name") for a in ctx.attachments or []]}
+    text = item.get("text") or ""
+    needle = str(args.get("query") or "")
+    if not needle:
+        return {"error": "пустой запрос"}
+    # Обычный поиск подстроки, без регулярок: выражение от модели легко
+    # оказывается катастрофически backtracking-ищущим на файле в сотни тысяч
+    # символов, а пользы против простого поиска почти нет.
+    hits, start = [], 0
+    low_text, low_needle = text.lower(), needle.lower()
+    while len(hits) < _SEARCH_HITS:
+        i = low_text.find(low_needle, start)
+        if i < 0:
+            break
+        a = max(0, i - _SEARCH_CONTEXT // 2)
+        hits.append({"offset": i,
+                     "excerpt": text[a:i + len(needle) + _SEARCH_CONTEXT // 2]})
+        start = i + len(needle)
+    total = low_text.count(low_needle)
+    return {"name": item.get("name"), "query": needle, "total": total,
+            "shown": len(hits), "hits": hits}
+
+
+#: Сколько картинок сохраняем за один вызов. Каждая — запись файла на диск;
+#: без потолка модель попросит все 171 разом и займёт воркер надолго.
+MAX_SAVE_IMAGES = 30
+
+
+async def _t_save_images(args: dict, ctx: ToolContext) -> Any:
+    """Сохранить картинки вложения в медиатеку и вернуть их id.
+
+    ⚠️ Возвращает ИМЕННО id, потому что дальше они кладутся в поле `media`
+    карточки хостинга: картинка обязана попасть к своему провайдеру, а не в общую
+    кучу. Какой номер чей — видно из самого файла (в тексте маркеры стоят там,
+    где стояли картинки).
+    """
+    from app.services import media_store
+
+    item = _find_attachment(ctx, str(args.get("name") or ""))
+    if item is None:
+        return {"error": "к сообщению не приложено такого файла"}
+    images = {int(i.get("index", -1)): i for i in (item.get("images") or [])}
+    if not images:
+        return {"error": "в этом файле не было встроенных картинок"}
+
+    raw = args.get("indices")
+    if raw is None and args.get("index") is not None:
+        raw = [args.get("index")]
+    wanted: list[int] = []
+    for x in (raw or []):
+        try:
+            wanted.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    if not wanted:
+        return {"error": "укажите indices — номера картинок из маркеров "
+                         "«изображение #N»",
+                "available": f"0..{max(images)}"}
+
+    saved, missing = [], []
+    for idx in wanted[:MAX_SAVE_IMAGES]:
+        img = images.get(idx)
+        if img is None:
+            missing.append(idx)
+            continue
+        try:
+            data = base64.b64decode(img.get("data_b64") or "", validate=False)
+            rec = media_store.add(
+                f"{args.get('prefix') or 'вложение'}-{idx}",
+                data, img.get("mime") or "image/jpeg", ctx.account_id)
+            saved.append({"index": idx, "media_id": rec.get("id")})
+        except Exception as exc:  # noqa: BLE001 — одна битая картинка не должна
+            missing.append(idx)   # ронять перенос остальных
+            log.info("ai_tools.image_failed",
+                     extra={"idx": idx, "err": str(exc)[:200]})
+    out: dict[str, Any] = {"saved": saved,
+                           "media_ids": [s["media_id"] for s in saved]}
+    if missing:
+        out["failed"] = missing
+    if len(wanted) > MAX_SAVE_IMAGES:
+        out["note"] = (f"за один вызов сохраняется не больше {MAX_SAVE_IMAGES} "
+                       f"картинок — остальные запроси следующим вызовом")
+    return out
+
+
+
+async def _t_open_library_file(args: dict, ctx: ToolContext) -> Any:
+    """Открыть файл Библиотеки как вложение — дальше работают read_attachment /
+    search_attachment / save_attachment_image.
+
+    ⚠️ Существует потому, что через `panel_get` файл прочитать НЕЛЬЗЯ: ответ моста
+    режется по `MAX_RESULT_CHARS`, и от 22-мегабайтного каталога доезжали первые
+    12 тысяч символов — шапка и стили. Отдельная ручка с offset решала бы только
+    половину задачи; здесь же файл попадает в тот же конвейер, что и вложение
+    чата, вместе с выносом картинок.
+    """
+    from app.services import ai_agent, library_store
+
+    item_id = str(args.get("id") or "").strip()
+    if not item_id:
+        files = [{"id": i["id"], "name": i.get("name"), "size": i.get("size")}
+                 for i in library_store.list_items(ctx.account_id)
+                 if i.get("kind") == "file"]
+        return {"error": "укажите id файла", "files": files[:50]}
+
+    got = library_store.get_file(item_id, ctx.account_id)
+    if got is None:
+        return {"error": "файла с таким id в Библиотеке нет"}
+    raw, name, _mime = got
+    text = raw.decode("utf-8", errors="replace")[:ai_agent.MAX_TEXT_CHARS]
+    body, images = ai_agent.extract_data_uris(text)
+
+    # Заменяем одноимённое, чтобы повторный вызов не плодил копии файла в
+    # контексте (а он их плодил бы: модель охотно открывает файл заново).
+    ctx.attachments = [a for a in ctx.attachments if a.get("name") != name]
+    ctx.attachments.append({"name": name, "text": body, "images": images})
+    return {"name": name, "chars": len(body), "images": len(images),
+            "note": "файл открыт: читай read_attachment(offset=…) до eof, "
+                    "ищи search_attachment"}
+
+
+#: Сколько записей создаём за один вызов. Больше — и один ответ инструмента
+#: раздувается так, что вытесняет из окна сами данные.
+MAX_BULK_ITEMS = 50
+
+
+async def _t_write_many(args: dict, ctx: ToolContext) -> Any:
+    """Создать/обновить МНОГО записей одним вызовом.
+
+    ⚠️ Ради этого инструмента всё и затевалось: по одной записи за шаг перенос
+    170 провайдеров невозможен ни при каком разумном лимите шагов. Границы те же,
+    что у `panel_write` — денилист, режим только-чтение, запрет после веба.
+    """
+    if ctx.readonly:
+        return {"ok": False, "error":
+                "ассистент в режиме только для чтения — разрешите запись в "
+                "«Настройки → AI»"}
+    if ctx.web_tainted:
+        return {"ok": False, "error":
+                "в этом ответе использовались данные из интернета — изменения "
+                "заблокированы; попросите отдельным сообщением без веб-поиска"}
+
+    path = str(args.get("path") or "")
+    method = str(args.get("method") or "POST")
+    items = args.get("items")
+    if not isinstance(items, list) or not items:
+        return {"ok": False, "error": "items должен быть непустым списком тел запроса"}
+
+    created, failed = [], []
+    for i, body in enumerate(items[:MAX_BULK_ITEMS]):
+        if not isinstance(body, dict):
+            failed.append({"index": i, "error": "элемент не объект"})
+            continue
+        res = await bridge.call(method, path, ctx.account_id, body=body,
+                                readonly=False, user_id=ctx.user_id)
+        if res.get("ok"):
+            data = res.get("data")
+            created.append({"index": i,
+                            "id": (data or {}).get("id") if isinstance(data, dict) else None,
+                            "name": body.get("name")})
+        else:
+            # Текст ошибки нужен целиком: по нему модель чинит следующее тело.
+            failed.append({"index": i, "name": body.get("name"),
+                           "error": str(res.get("error") or res.get("data"))[:300]})
+    out: dict[str, Any] = {"ok": not failed, "created": len(created),
+                           "failed": failed, "items": created}
+    if len(items) > MAX_BULK_ITEMS:
+        out["note"] = (f"за вызов обрабатывается не больше {MAX_BULK_ITEMS} "
+                       f"записей — остальные пришлите следующим вызовом")
+    return out
 
 
 # ── контекст ──────────────────────────────────────────────────
@@ -351,7 +594,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
     Tool(
         "panel_endpoints",
         "Каталог доступных REST-ручек панели node-assistant с описанием. "
-        "Используй, чтобы найти нужный путь для panel_get/panel_write. "
+        "Используй, чтобы найти нужный путь для panel_get (и panel_write, если "
+        "он есть в списке твоих инструментов). "
         "Параметр contains фильтрует по подстроке пути (например 'hosting', "
         "'billing', 'checker').",
         _obj(contains={"type": "string", "description": "подстрока пути"}),
@@ -380,6 +624,74 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
             body={"type": "object", "description": "тело запроса"},
         ),
         _t_write, write=True,
+    ),
+    Tool(
+        "read_attachment",
+        "Прочитать кусок приложенного к сообщению файла. В само сообщение "
+        "попадает только начало большого файла — остальное берётся отсюда. "
+        "offset — с какого символа, limit — сколько (не больше 30000). В ответе "
+        "next_offset для следующего куска и eof=true на конце. Чтобы обработать "
+        "файл целиком, иди по кускам до eof. Встроенные картинки заменены "
+        "маркерами «изображение #N» РОВНО НА СВОИХ МЕСТАХ: картинка принадлежит "
+        "той записи, внутри которой стоит её маркер — так и определяй, к какому "
+        "объекту её привязывать.",
+        _obj(
+            name={"type": "string", "description": "имя файла (можно опустить, "
+                                                   "если приложен один)"},
+            offset={"type": "integer", "description": "с какого символа"},
+            limit={"type": "integer", "description": "сколько символов"},
+        ),
+        _t_read_attachment, needs_attachment=True,
+    ),
+    Tool(
+        "search_attachment",
+        "Найти подстроку в приложенном файле. Возвращает число совпадений и "
+        "фрагменты вокруг них со смещениями — дальше можно дочитать нужное место "
+        "через read_attachment. Быстрее, чем перебирать файл кусками.",
+        _obj(
+            name={"type": "string", "description": "имя файла"},
+            query={"type": "string", "description": "что искать"},
+        ),
+        _t_search_attachment, needs_attachment=True,
+    ),
+    Tool(
+        "save_attachment_image",
+        "Сохранить картинки из приложенного файла в медиатеку и получить их id. "
+        "indices — номера из маркеров «изображение #N». Полученные media_id "
+        "клади в поле media той записи, к которой картинка относится (например "
+        "в карточку хостинга) — иначе картинки окажутся в общей куче без "
+        "привязки. За вызов не больше 30 штук.",
+        _obj(
+            name={"type": "string", "description": "имя файла"},
+            indices={"type": "array", "items": {"type": "integer"},
+                     "description": "номера картинок"},
+            prefix={"type": "string", "description": "префикс имени файла "
+                                                     "(например имя хостинга)"},
+        ),
+        _t_save_images, write=True, needs_attachment=True,
+    ),
+    Tool(
+        "open_library_file",
+        "Открыть файл из Библиотеки для чтения по частям. Без id вернёт список "
+        "файлов. После открытия работают read_attachment / search_attachment / "
+        "save_attachment_image — как с приложенным к сообщению файлом. Через "
+        "panel_get файл читать НЕЛЬЗЯ: ответ обрезается.",
+        _obj(id={"type": "string", "description": "id файла из Библиотеки"}),
+        _t_open_library_file,
+    ),
+    Tool(
+        "panel_write_many",
+        "Создать или обновить МНОГО записей одним вызовом: items — список тел "
+        "запроса. Именно так переносят массивы данных: по одной записи за шаг "
+        "большой перенос не помещается в лимит шагов. Возвращает, что создалось "
+        "и что нет, с текстом ошибки по каждой. За вызов не больше 50.",
+        _obj(
+            method={"type": "string", "enum": ["POST", "PUT", "PATCH"]},
+            path={"type": "string", "description": "путь вида /api/hostings"},
+            items={"type": "array", "items": {"type": "object"},
+                   "description": "тела запросов"},
+        ),
+        _t_write_many, write=True,
     ),
     Tool(
         "web_search",
@@ -458,6 +770,10 @@ def available(ctx: ToolContext) -> list[Tool]:
             continue
         if tool.web and not ctx.web_enabled:
             continue
+        # Инструменты вложений без вложений — просто шум в списке: модель тратит
+        # на них внимание, а вызвать нечего.
+        if tool.needs_attachment and not ctx.attachments:
+            continue
         out.append(tool)
     return out
 
@@ -474,6 +790,28 @@ async def run(name: str, args: dict, ctx: ToolContext) -> tuple[bool, Any]:
         return False, "ассистент работает в режиме только для чтения"
     if tool.web and not ctx.web_enabled:
         return False, "доступ в интернет выключен"
+    if tool.needs_attachment and not ctx.attachments:
+        return False, "к сообщению не приложено файлов"
+
+    # Повтор того же вызова с теми же аргументами данных не добавит: результат
+    # уже в истории. Возвращаем напоминание — это дешевле шага и разворачивает
+    # модель к работе. `read_attachment` с другим offset — другие аргументы,
+    # поэтому последовательное чтение файла сюда не попадает.
+    import json as _json
+
+    try:
+        sig = f"{name}:{_json.dumps(args or {}, sort_keys=True, ensure_ascii=False)}"
+    except Exception:  # noqa: BLE001 — несериализуемые аргументы просто не дедупим
+        sig = ""
+    if sig and sig in ctx.calls:
+        ctx.used.append(name)
+        return True, {"repeat": True, "note":
+                      "этот вызов уже делался с теми же аргументами в этом "
+                      "ответе — результат выше по переписке и не изменился. Не "
+                      "повторяй его: действуй по уже полученным данным или "
+                      "запроси ДРУГОЙ участок (другой offset/запрос)."}
+    if sig:
+        ctx.calls.add(sig)
     ctx.used.append(name)
     try:
         return True, await tool.fn(args or {}, ctx)
@@ -488,4 +826,37 @@ def describe(ctx: ToolContext) -> str:
     mode = "чтение и запись" if not ctx.readonly else "только чтение"
     web = (f"веб-поиск через {ai_web.provider_label(ctx.web_provider)}"
            if ctx.web_enabled else "интернет выключен")
-    return (f"Доступные инструменты ({mode}; {web}): {', '.join(names)}.")
+    out = f"Доступные инструменты ({mode}; {web}): {', '.join(names)}."
+    if ctx.attachments:
+        # ⚠️ Без этого модель тратит весь бюджет шагов на разведку: ищет одно и
+        # то же по кругу, «изучает схему», а записывать начинает тогда, когда
+        # шаги уже кончились. В реальном прогоне так ушло десять шагов из
+        # двенадцати, и не создалось ни одной записи.
+        names_list = ", ".join(a.get("name") or "файл" for a in ctx.attachments)
+        out += (
+            f" К сообщению приложено: {names_list}. Как работать с большим файлом:"
+            " (1) НЕ ищи повторно то, что уже нашёл — результаты прошлых вызовов"
+            " выше по переписке; (2) читай последовательно read_attachment со"
+            " сдвигом offset до eof; (3) после КАЖДОГО куска сразу записывай"
+            " найденное, не откладывая на конец — шаги ограничены, и"
+            " отложенная запись не случится вовсе; (4) в конце ответа скажи, на"
+            " каком offset остановился, чтобы можно было продолжить."
+            " Записывай ПАКЕТАМИ через panel_write_many (до 50 записей за"
+            " вызов): по одной записи за шаг большой перенос не помещается"
+            " ни в какой лимит шагов."
+        )
+    else:
+        # Файл могли положить в Библиотеку, а не приложить к сообщению — и через
+        # `panel_get` его не прочитать, ответ моста обрезается.
+        out += (" Большой файл из Библиотеки открывается инструментом"
+                " open_library_file, дальше — read_attachment/search_attachment.")
+    if ctx.readonly:
+        # ⚠️ Без этой строки модель обещает записать данные, потому что видит
+        # упоминания panel_write в описаниях ручек, а инструмента у неё нет — и
+        # упирается в отказ уже после того, как разобрала весь файл. Пусть знает
+        # заранее и сразу предлагает то, что реально может.
+        out += (" Запись ВЫКЛЮЧЕНА: изменять данные панели ты не можешь. Если "
+                "просят что-то создать или изменить — скажи, что владелец должен "
+                "снять «Только чтение» в «Настройки → AI», и предложи подготовить "
+                "готовый JSON, который он вставит сам.")
+    return out

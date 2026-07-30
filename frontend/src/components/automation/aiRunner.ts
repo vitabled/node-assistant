@@ -1,0 +1,251 @@
+// Исполнитель запроса к ассистенту — ВНЕ компонента.
+//
+// Две потери прогресса лечатся здесь и на сервере:
+//
+// 1. Уход в другой раздел панели размонтировал чат и обрывал поток. Поэтому
+//    запрос ведёт модуль-синглтон: компонент при возврате просто ПОДКЛЮЧАЕТСЯ
+//    к идущему ответу.
+// 2. Перезагрузка страницы убивает и модуль вместе с соединением. Поэтому сам
+//    цикл агента крутится ФОНОВОЙ задачей на сервере (`services/ai_runs.py`), а
+//    здешний поток — только читатель её буфера. После F5 `resume()` спрашивает
+//    сервер, не осталось ли незаконченного ответа, и дочитывает его.
+//
+// ⚠️ Хранилище сессий тоже живёт здесь, а не в компоненте: иначе задача решалась
+// бы наполовину — работа продолжается, а писать ответ некуда, `setState`
+// размонтированного компонента ничего не делает.
+//
+// ⚠️ Автоматической отмены нет вовсе. Только явная кнопка «Остановить», и она
+// просит остановиться СЕРВЕР — обрыв нашего чтения работу не прекращает.
+
+import {
+  appendMessages, getActive, load, replaceMessages, save,
+  type Msg, type SessionsState,
+} from "./aiSessions";
+
+export interface AgentStatus {
+  phase: "thinking" | "tools" | "done";
+  step: number;
+  steps: number;
+  tokens: number;
+  /** Инструмент, который выполняется прямо сейчас. */
+  tool?: string;
+}
+
+export interface RunState {
+  busy: boolean;
+  status: AgentStatus | null;
+  /** Когда начался текущий ответ (мс). Часы считает подписчик — так их тик не
+   *  заставляет перерисовываться тех, кто на другой странице. */
+  startedAt: number;
+  /** В каком разговоре идёт ответ: чужой прогресс показывать нельзя. */
+  sessionId: string;
+}
+
+const IDLE: RunState = { busy: false, status: null, startedAt: 0, sessionId: "" };
+
+let state: RunState = IDLE;
+let ac: AbortController | null = null;
+const listeners = new Set<() => void>();
+
+let sessions: SessionsState | null = null;
+let sessionsUid: string | null = null;
+
+/** Версия — снимок для `useSyncExternalStore`. Число сравнивается по значению,
+ *  поэтому не нужно собирать стабильный объект на каждый рендер. */
+let version = 0;
+
+function bump() {
+  version += 1;
+  for (const l of listeners) l();
+}
+
+function emit(next: RunState) {
+  state = next;
+  bump();
+}
+
+export function subscribe(l: () => void): () => void {
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
+
+export function getVersion(): number {
+  return version;
+}
+
+export function getRunState(): RunState {
+  return state;
+}
+
+/** Поднять сессии пользователя. Перечитываем ТОЛЬКО при настоящей смене
+ *  личности: иначе ответ `/api/auth/me` затирал бы уже начатый разговор. */
+export function ensureSessions(uid: string | null): SessionsState {
+  if (sessions === null || sessionsUid !== uid) {
+    sessions = load(uid);
+    sessionsUid = uid;
+    bump();
+  }
+  return sessions;
+}
+
+export function getSessions(): SessionsState {
+  return sessions ?? load(null);
+}
+
+/** Изменить сессии и сохранить. Единственная точка записи — и из компонента,
+ *  и из идущего ответа. */
+export function updateSessions(fn: (s: SessionsState) => SessionsState): void {
+  const next = fn(getSessions());
+  sessions = next;
+  save(sessionsUid, next);
+  bump();
+}
+
+/** Сбросить состояние модуля: он синглтон, и его память переживает
+ *  размонтирование компонента — в этом весь смысл. Нужна там, где хранилище
+ *  сменилось под ним: смена пользователя, очистка localStorage в тестах. */
+export function reset(): void {
+  ac?.abort();
+  ac = null;
+  sessions = null;
+  sessionsUid = null;
+  state = IDLE;
+  bump();
+}
+
+/** Явная остановка. Просит остановиться СЕРВЕР: работа идёт там, и обрыв
+ *  нашего чтения её не прекратил бы. */
+export function stop(): void {
+  const sid = state.sessionId;
+  ac?.abort();
+  ac = null;
+  if (sid) {
+    void fetch(`/api/ai/chat/stop?session_id=${encodeURIComponent(sid)}`,
+               { method: "POST" }).catch(() => {});
+  }
+  emit({ ...IDLE });
+}
+
+export interface SendArgs {
+  prompt: string;
+  attachments: unknown[];
+  history: { role: string; content: string }[];
+}
+
+export async function send(args: SendArgs): Promise<void> {
+  if (state.busy) return;
+  const sessionId = getActive(getSessions()).id;
+
+  updateSessions(s => appendMessages(s, [
+    { role: "user", text: args.prompt,
+      files: args.attachments.length
+        ? args.attachments.map(a => (a as { name: string }).name) : undefined },
+    { role: "assistant", text: "", tools: [] },
+  ]));
+  emit({ busy: true, status: null, startedAt: Date.now(), sessionId });
+
+  await consume("/api/ai/chat", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    // session_id: по нему и вложение доживает до следующего сообщения, и
+    // сервер узнаёт свой идущий ответ при переподключении.
+    body: JSON.stringify({ prompt: args.prompt, attachments: args.attachments,
+                           history: args.history, session_id: sessionId }),
+  });
+}
+
+/** Подключиться к ответу, который идёт на сервере.
+ *
+ *  ⚠️ Ради этого всё и делалось: перезагрузка убивает наш поток, но не работу.
+ *  События приходят С НАЧАЛА — клиент не знает, сколько успел применить до F5,
+ *  поэтому последняя реплика собирается заново, а не дописывается. */
+export async function resume(uid: string | null): Promise<void> {
+  if (state.busy) return;
+  ensureSessions(uid);
+  const sessionId = getActive(getSessions()).id;
+  try {
+    const res = await fetch(
+      `/api/ai/chat/state?session_id=${encodeURIComponent(sessionId)}`);
+    const st = res.ok ? await res.json() : null;
+    if (!st?.active) return;
+  } catch {
+    return;
+  }
+
+  // Место под восстанавливаемую реплику: недописанную заменяем целиком.
+  updateSessions(s => {
+    const cur = getActive(s).messages;
+    const last = cur[cur.length - 1];
+    const head = last && last.role === "assistant" ? cur.slice(0, -1) : cur;
+    return replaceMessages(s, [...head, { role: "assistant", text: "", tools: [] }]);
+  });
+  emit({ busy: true, status: null, startedAt: Date.now(), sessionId });
+
+  await consume(
+    `/api/ai/chat/resume?session_id=${encodeURIComponent(sessionId)}`, {});
+}
+
+/** Читать ndjson-поток событий и раскладывать его по хранилищу и прогрессу.
+ *  ОДИН код на отправку и на переподключение: разойдись они — восстановленный
+ *  ответ отличался бы от живого. */
+async function consume(url: string, init: RequestInit): Promise<void> {
+  // Чистое обновление: последняя реплика заменяется НОВЫМ объектом (без мутации
+  // на месте — безопасно под двойным вызовом React StrictMode).
+  const patchLast = (fn: (m: Extract<Msg, { role: "assistant" }>) => void) =>
+    updateSessions(s => {
+      const cur = getActive(s).messages;
+      const last = cur[cur.length - 1];
+      if (!last || last.role !== "assistant") return s;
+      const next = { ...last, tools: last.tools.map(t => ({ ...t })) };
+      fn(next);
+      return replaceMessages(s, [...cur.slice(0, -1), next]);
+    });
+
+  const controller = new AbortController();
+  ac = controller;
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    if (!res.ok || !res.body) throw new Error("stream failed");
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const ln of lines) {
+        if (!ln.trim()) continue;
+        let ev: any;
+        try { ev = JSON.parse(ln); } catch { continue; }
+        if (ev.type === "text") patchLast(a => { a.text += ev.delta; });
+        else if (ev.type === "tool_call") {
+          patchLast(a => { a.tools.push({ id: ev.id, name: ev.name }); });
+          emit({ ...state, status: state.status
+            ? { ...state.status, tool: ev.name } : state.status });
+        } else if (ev.type === "tool_result") {
+          patchLast(a => {
+            const t = a.tools.find(x => (ev.id ? x.id === ev.id
+              : x.name === ev.name && x.ok === undefined));
+            if (t) t.ok = ev.ok;
+          });
+        } else if (ev.type === "status") {
+          emit({ ...state, status: {
+            phase: ev.phase, step: ev.step, steps: ev.steps, tokens: ev.tokens,
+            // Инструмент сбрасываем на новом «думает»: он уже отработал.
+            tool: ev.phase === "thinking" ? undefined : state.status?.tool,
+          } });
+        } else if (ev.type === "error") {
+          patchLast(a => { a.text += `\n⚠️ ${ev.message}`; });
+        }
+      }
+    }
+  } catch {
+    if (!controller.signal.aborted) {
+      patchLast(a => { a.text += "\n⚠️ Ошибка соединения с ИИ."; });
+    }
+  } finally {
+    if (ac === controller) ac = null;
+    emit({ ...IDLE });
+  }
+}

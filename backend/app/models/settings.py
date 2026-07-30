@@ -91,6 +91,16 @@ class McpConfig(BaseModel):
     auth_token_enc: str = ""  # Fernet ciphertext (base64); never plaintext
 
 
+#: Штатный адрес каждого провайдера. ЕДИНСТВЕННЫЙ источник правды: отсюда его
+#: берут и агент, и форма настроек (через `/api/ai/config`). Копия на клиенте
+#: отстала бы, а цена рассинхрона — запрос с верным ключом по чужому адресу и
+#: неотличимое от «неверный ключ» 401.
+PROVIDER_BASE_URLS: dict[str, str] = {
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com/v1",
+}
+
+
 class AiConfig(BaseModel):
     """Config for the built-in AI agent (Ф4). The provider API key is stored
     Fernet-encrypted (`api_key_enc`) and NEVER returned to the client (masked)."""
@@ -98,9 +108,24 @@ class AiConfig(BaseModel):
     enabled: bool = False
     provider: str = "openai"  # openai (OpenAI-compatible) | anthropic
     base_url: str = "https://api.openai.com/v1"
+    #: Адрес выводится из провайдера, а не хранится. Закрывает целый класс ошибок:
+    #: сменил провайдера — адрес остался прежним — ключ уехал не туда — «провайдер
+    #: отклонил ключ». Ручной режим нужен для OpenAI-совместимых сторонних
+    #: эндпоинтов (OpenRouter, локальная llama.cpp), поэтому он остаётся, но
+    #: включается осознанно.
+    base_url_auto: bool = True
     model: str = "gpt-4o-mini"
     api_key_enc: str = ""  # Fernet ciphertext (base64); never plaintext
-    max_steps: int = 6  # tool-calling loop cap (anti-runaway)
+    # ⚠️ Шесть шагов мало для реальной работы: агент тратит их на разведку
+    # (сводка → каталог ручек → чтение файла) и упирается в предел, не начав
+    # дела. Потолок остаётся защитой от разгона, но не мешает задаче.
+    max_steps: int = 12  # tool-calling loop cap (anti-runaway)
+    # ⚠️ Потолок ВЫВОДА за один тёрн. Был жёстко зашит в 1024 у Anthropic, и
+    # этого не хватало на одно тело `panel_write` с тарифами и оценками: ответ
+    # обрезался посреди JSON, разобрать его было нечем, и до пользователя
+    # доходил пустой пузырь. Anthropic поле требует, OpenAI-совместимым не шлём
+    # (у них своё умолчание, а имя параметра разъехалось по версиям API).
+    max_tokens: int = 8192
     readonly: bool = True  # only read-only tools exposed to the agent
     active_preset_id: str = ""  # active system-prompt preset (Plan I; "" = default)
     gateway: str = "none"  # Plan J: none | cliproxy (route via CLIProxyAPI gateway)
@@ -127,6 +152,28 @@ class AiConfig(BaseModel):
     # NOTE: the shared container's owner is tracked GLOBALLY in
     # DATA_DIR/cliproxy_owner.json (cliproxy_server._OWNER_FILE), NOT here — a
     # per-account field made every non-owner look like the owner (Wave-7 review).
+
+    @model_validator(mode="after")
+    def _infer_base_url_auto(self) -> "AiConfig":
+        """Сохранить чужой эндпоинт при обновлении.
+
+        ⚠️ Поле появилось позже самой настройки, поэтому у существующих установок
+        его в `settings.json` нет — и умолчание `True` молча переключило бы
+        OpenRouter или локальную llama.cpp на `api.openai.com`. Поэтому, когда
+        значение не задано ЯВНО, режим выводится из адреса: штатный адрес (или
+        пустой) — автоматический, любой другой — ручной.
+        """
+        if "base_url_auto" not in self.model_fields_set:
+            url = (self.base_url or "").strip().rstrip("/")
+            known = {v.rstrip("/") for v in PROVIDER_BASE_URLS.values()}
+            self.base_url_auto = (not url) or url in known
+        return self
+
+    def effective_base_url(self) -> str:
+        """Адрес, по которому реально надо ходить."""
+        if self.base_url_auto:
+            return PROVIDER_BASE_URLS.get(self.provider) or self.base_url
+        return self.base_url
 
 
 class HaproxyConfig(BaseModel):
