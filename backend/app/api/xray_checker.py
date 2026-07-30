@@ -27,7 +27,7 @@ from app.services import metrics_store
 from app.services import checker_registry
 from app.services import net_guard
 from app.services import storage
-from app.services import accounts
+from app.services import accounts, users
 from app.services import worker_lease
 from app.models.settings import AppSettings
 
@@ -480,9 +480,11 @@ async def autostart_checker() -> None:
         return
     if state in ("running", "no-docker"):
         return
-    for acc in accounts.list_accounts():
+    # Настройки чекера принадлежат области — перебирать её пользователей значило
+    # бы проверять один и тот же конфиг по разу на каждого.
+    for aid in users.list_workspaces():
         try:
-            cfg = AppSettings(**storage.load_settings(acc["id"])).xray_checker
+            cfg = AppSettings(**storage.load_settings(aid)).xray_checker
         except Exception:
             continue
         if not cfg.enabled:
@@ -515,8 +517,7 @@ async def poller_loop() -> None:
             enabled_intervals = []
             local_cfg = None
             remote_targets: list[tuple[str, str]] = []  # (instance_id, base_url)
-            for acc in accounts.list_accounts():
-                aid = acc["id"]
+            for aid in users.list_workspaces():
                 try:
                     cfg = AppSettings(**storage.load_settings(aid)).xray_checker
                 except Exception:

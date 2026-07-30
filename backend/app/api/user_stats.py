@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field, field_validator
 
-from app.services import accounts, storage
+from app.services import storage, users
 from app.services import worker_lease
 from app.services import user_stats_store as store
 from app.services.remnawave_client import RemnavaveClient
@@ -218,12 +218,14 @@ async def collector_loop() -> None:
             if not worker_lease.acquire(worker_lease.MONITORING):
                 await asyncio.sleep(_COLLECT_INTERVAL)
                 continue
-            for acc in accounts.list_accounts():
+            # Снимок пишется в стор области — на каждого её пользователя он
+            # означал бы N одинаковых опросов панели Remnawave.
+            for aid in users.list_workspaces():
                 try:
-                    await _collect_account(acc["id"])
+                    await _collect_account(aid)
                 except Exception as exc:
                     log.warning("stats.collect.account_failed",
-                                extra={"account": acc["id"], "err": str(exc)[:200]})
+                                extra={"account": aid, "err": str(exc)[:200]})
         except Exception:
             pass  # never let the loop die
         await asyncio.sleep(_COLLECT_INTERVAL)

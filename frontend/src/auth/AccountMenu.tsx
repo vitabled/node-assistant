@@ -1,13 +1,16 @@
 import { useState, useRef, useEffect } from "react";
-import { LogOut, Plus, Trash2, ChevronDown, Check } from "lucide-react";
+import { LogOut, LogIn, Trash2, ChevronDown, Check } from "lucide-react";
 import { useAuth } from "./useAuth";
+import { usePermissions } from "./usePermissions";
 import { switchTo, logoutActive, forget } from "./store";
 import { AuthScreen } from "./AuthScreen";
 
 // Google-style account switcher for the topbar. Lists accounts already signed
-// in on this device (instant switch, no password), plus add / logout / remove.
+// in on this device (instant switch, no password), plus sign-in as someone else
+// / logout / remove.
 export function AccountMenu() {
   const { accounts, activeId } = useAuth();
+  const { user } = usePermissions();
   const active = accounts.find(a => a.id === activeId);
   const others = accounts.filter(a => a.id !== activeId);
   const [open, setOpen] = useState(false);
@@ -22,6 +25,14 @@ export function AccountMenu() {
   }, [open]);
 
   if (!active) return null;
+
+  // Роли показываем только у активного пользователя: остальные записи устройства
+  // — чужие сессии, их прав мы не запрашивали и придумывать не будем.
+  const rolesLabel = user?.is_superuser
+    ? "суперпользователь"
+    : user?.roles?.length
+      ? user.roles.map(r => r.name).join(", ")
+      : "активный аккаунт";
 
   const avatar = (login: string, size = 22) => (
     <span className="rounded-full bg-[var(--accent-dim)] text-[var(--accent-hi)] grid place-items-center font-semibold flex-none"
@@ -49,7 +60,7 @@ export function AccountMenu() {
             {avatar(active.login, 32)}
             <div style={{ minWidth: 0 }}>
               <p style={{ fontSize: 13, fontWeight: 600, color: "var(--t-hi)" }} className="trunc">{active.login}</p>
-              <p style={{ fontSize: 10.5, color: "var(--t-low)" }}>активный аккаунт</p>
+              <p style={{ fontSize: 10.5, color: "var(--t-low)" }} className="trunc" title={rolesLabel}>{rolesLabel}</p>
             </div>
             <Check size={15} style={{ marginLeft: "auto", color: "var(--ok)" }} />
           </div>
@@ -71,8 +82,9 @@ export function AccountMenu() {
             </div>
           ))}
 
+          {/* Регистрации больше нет — это именно вход другой учётной записью. */}
           <button className="navitem" onClick={() => { setAdding(true); setOpen(false); }}>
-            <Plus size={15} style={{ flex: "none" }} /> <span>Добавить аккаунт</span>
+            <LogIn size={15} style={{ flex: "none" }} /> <span>Войти другим пользователем</span>
           </button>
           <button className="navitem" onClick={() => { logoutActive(); setOpen(false); }}>
             <LogOut size={15} style={{ flex: "none" }} /> <span>Выйти из аккаунта</span>

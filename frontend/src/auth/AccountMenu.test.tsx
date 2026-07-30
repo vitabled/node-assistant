@@ -28,8 +28,10 @@ describe("AccountMenu", () => {
     addAccount(A);
     render(<AccountMenu />);
     openMenu();
+    // Роли текущего пользователя подписью не показаны: /api/auth/me в этом тесте
+    // не отвечает, и вместо выдумки остаётся прежняя нейтральная подпись.
     expect(screen.getByText("активный аккаунт")).toBeInTheDocument();
-    expect(screen.getByText("Добавить аккаунт")).toBeInTheDocument();
+    expect(screen.getByText("Войти другим пользователем")).toBeInTheDocument();
     expect(screen.getByText("Выйти из аккаунта")).toBeInTheDocument();
   });
 

@@ -25,7 +25,7 @@ import logging
 import time
 from typing import Any, Optional
 
-from app.services import accounts, infra_billing_store as store, vault_store, worker_lease
+from app.services import users, infra_billing_store as store, vault_store, worker_lease
 from app.services.hosting_providers import registry
 
 log = logging.getLogger("provider_sync")
@@ -162,8 +162,9 @@ async def loop() -> None:
                 await asyncio.sleep(_TICK)
                 continue
             now = int(time.time())
-            for acc in accounts.list_accounts():
-                aid = acc["id"]
+            # По областям: обращения к API хостера идут его кредами, и лишний
+            # обход на каждого пользователя — это лишний запрос в чужой лимит.
+            for aid in users.list_workspaces():
                 try:
                     if not await _auto_sync_enabled(aid):
                         continue

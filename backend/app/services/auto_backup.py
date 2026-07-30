@@ -20,7 +20,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import settings as app_settings
 from app.models.settings import AppSettings, AutoBackupConfig
-from app.services import accounts, export_service, storage, telegram, worker_lease
+from app.services import export_service, storage, telegram, users, worker_lease
 
 log = logging.getLogger("auto_backup")
 
@@ -99,13 +99,15 @@ async def loop() -> None:
                 await asyncio.sleep(_LOOP_INTERVAL)
                 continue
             now = int(time.time())
-            for acc in accounts.list_accounts():
+            # Бэкапится область, а не человек: обход по пользователям отправил бы
+            # один и тот же архив столько раз, сколько у неё владельцев.
+            for aid in users.list_workspaces():
                 try:
-                    cfg = _cfg(acc["id"])
+                    cfg = _cfg(aid)
                     if not cfg.enabled:
                         continue
                     if now >= cfg.last_run + cfg.interval_hours * 3600:
-                        await run_once(acc["id"])
+                        await run_once(aid)
                 except Exception as exc:
                     log.warning("auto_backup.account_failed: %s", str(exc)[:200])
         except Exception:

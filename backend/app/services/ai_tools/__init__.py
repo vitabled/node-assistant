@@ -41,6 +41,9 @@ class ToolContext:
     """Всё, что инструменту нужно знать о текущем ответе."""
 
     account_id: str
+    #: Личность, от имени которой ассистент ходит в REST. Пусто = ходить нечем:
+    #: права берутся у пользователя, а не у рабочей области (Волна 13).
+    user_id: str = ""
     readonly: bool = True
     web_enabled: bool = True
     web_provider: str = "duckduckgo"
@@ -90,6 +93,7 @@ async def _t_get(args: dict, ctx: ToolContext) -> Any:
     return await bridge.call(
         "GET", str(args.get("path") or ""), ctx.account_id,
         query=query if isinstance(query, dict) else None, readonly=True,
+        user_id=ctx.user_id,
     )
 
 
@@ -108,7 +112,7 @@ async def _t_write(args: dict, ctx: ToolContext) -> Any:
     return await bridge.call(
         str(args.get("method") or "POST"), str(args.get("path") or ""),
         ctx.account_id, body=body if isinstance(body, dict) else None,
-        readonly=False,
+        readonly=False, user_id=ctx.user_id,
     )
 
 

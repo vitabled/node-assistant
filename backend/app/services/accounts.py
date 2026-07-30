@@ -74,6 +74,12 @@ def _verify_password(password: str, hashed: str) -> bool:
         return False
 
 
+# Публичные имена для `services/users.py`: схема хеширования у пользователей и у
+# прежних аккаунтов ОДНА, иначе миграция потребовала бы у людей сменить пароль.
+hash_password = _hash_password
+verify_password = _verify_password
+
+
 # A throwaway hash used to spend the same bcrypt time on an unknown login as on a
 # known one, so response timing doesn't reveal which logins exist.
 _DUMMY_HASH = bcrypt.hashpw(b"timing-equalizer", bcrypt.gensalt()).decode("ascii")

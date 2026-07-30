@@ -93,10 +93,20 @@ def _cfg(account_id: Optional[str] = None) -> AiConfig:
 TOOLS = ai_tools.TOOLS
 
 
-def build_context(config: AiConfig, account_id: str) -> ai_tools.ToolContext:
-    """Контекст одного ответа: кто спрашивает, что разрешено, чем ходить в веб."""
+def build_context(config: AiConfig, account_id: str,
+                  user_id: str = "") -> ai_tools.ToolContext:
+    """Контекст одного ответа: кто спрашивает, что разрешено, чем ходить в веб.
+
+    `user_id` берётся из текущей сессии, если не передан явно: мост ходит в REST
+    от имени ПОЛЬЗОВАТЕЛЯ, иначе ассистент стал бы способом обойти роли.
+    """
+    if not user_id:
+        from app.services import users
+
+        user_id = (users.current_user.get() or {}).get("id") or ""
     return ai_tools.ToolContext(
         account_id=account_id,
+        user_id=user_id,
         readonly=bool(getattr(config, "readonly", True)),
         web_enabled=bool(getattr(config, "web_enabled", True)),
         web_provider=getattr(config, "web_provider", "duckduckgo"),

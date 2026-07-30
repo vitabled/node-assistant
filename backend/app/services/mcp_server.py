@@ -201,10 +201,17 @@ async def start(account_id: Optional[str] = None) -> None:
     # The container authenticates to our backend with a managed, revocable
     # readonly API token (rotated on every start) instead of a raw session JWT.
     # Fall back to a session JWT if token issuance fails for any reason.
+    # ⚠️ Волна 13: и токен, и фолбэк привязываются к ПОЛЬЗОВАТЕЛЮ, включившему
+    # интеграцию. Прежний фолбэк на `accounts.issue_token(aid)` выдал бы
+    # контейнеру права рабочей области — то есть больше, чем у его хозяина.
+    from app.services import users
+
+    owner_id = (users.current_user.get() or {}).get("id") or ""
     try:
-        na_jwt = api_tokens.mint_managed("mcp-container", readonly=True, account_id=aid)
+        na_jwt = api_tokens.mint_managed("mcp-container", readonly=True,
+                                         account_id=aid, user_id=owner_id)
     except Exception:
-        na_jwt = accounts.issue_token(aid or "")
+        na_jwt = users.issue_token(owner_id) if owner_id else ""
 
     await _docker("rm", "-f", CONTAINER_NAME, timeout=30)
 

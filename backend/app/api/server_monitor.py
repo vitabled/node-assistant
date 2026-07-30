@@ -20,7 +20,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from app.services import accounts
+from app.services import users
 from app.services import net_guard
 from app.services import storage
 from app.services import subscription_import
@@ -392,12 +392,14 @@ async def monitor_loop() -> None:
             if not worker_lease.acquire(worker_lease.MONITORING):
                 await asyncio.sleep(_MONITOR_INTERVAL)
                 continue
-            for acc in accounts.list_accounts():
+            # Пробы принадлежат области, а не человеку: обход по пользователям
+            # означал бы N проб одного и того же сервера.
+            for aid in users.list_workspaces():
                 try:
-                    await _monitor_account(acc["id"])
+                    await _monitor_account(aid)
                 except Exception as exc:
                     log.warning("server_monitor.account_failed",
-                                extra={"account": acc["id"], "err": str(exc)[:200]})
+                                extra={"account": aid, "err": str(exc)[:200]})
         except Exception:
             pass
         await asyncio.sleep(_MONITOR_INTERVAL)
