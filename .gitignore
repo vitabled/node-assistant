@@ -19,3 +19,8 @@ frontend/dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Локальные дампы и временные данные
+api-1.json
+.tmpdata2/
+testpanel.sh
