@@ -84,3 +84,45 @@ describe("Dashboard › Xray uptime hiding", () => {
     });
   });
 });
+
+describe("Dashboard › скрытие истории доступности (Wave-4)", () => {
+  function installFetchWithIncident() {
+    const fn = vi.fn(async (url: string, opts?: any) => {
+      const ok = (body: any) => ({ ok: true, status: 200, json: async () => body } as any);
+      if (url.startsWith("/api/checker/instances")) return ok({ instances: [{ id: "local", name: "Локальный" }] });
+      if (url.startsWith("/api/checker/statuspage")) return ok(statuspage(NODES));
+      if (url.startsWith("/api/checker/incidents")) return ok({ incidents: [
+        { start: 1786000000, durationSec: 300, name: "Alpha", group: "Germany", reason: "timeout", ongoing: false },
+      ] });
+      if (url.startsWith("/api/subscriptions/status")) return ok([]);
+      if (url === "/api/stats/users/hidden/checker") return ok({ hidden: {} });
+      if (url.startsWith("/api/checker/")) return ok({});
+      return ok({});
+    });
+    (globalThis as any).fetch = fn;
+    return fn;
+  }
+
+  afterEach(() => { localStorage.removeItem("ni_hide_incidents"); });
+
+  it("eye-кнопка скрывает список и запоминает выбор в localStorage", async () => {
+    installFetchWithIncident();
+    render(<Dashboard />);
+    // инцидент виден
+    expect(await screen.findByText(/была недоступна/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle("Скрыть историю"));
+    expect(screen.queryByText(/была недоступна/)).toBeNull();
+    expect(localStorage.getItem("ni_hide_incidents")).toBe("1");
+    // и возвращается обратно
+    fireEvent.click(screen.getByTitle("Показать историю"));
+    expect(await screen.findByText(/была недоступна/)).toBeInTheDocument();
+  });
+
+  it("скрытое состояние восстанавливается из localStorage", async () => {
+    localStorage.setItem("ni_hide_incidents", "1");
+    installFetchWithIncident();
+    render(<Dashboard />);
+    await screen.findByText(/История доступности/);
+    expect(screen.queryByText(/была недоступна/)).toBeNull();
+  });
+});

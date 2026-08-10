@@ -7,6 +7,7 @@ import {
 import { FlagChip } from "./common/FlagChip";
 import { ImportFromSubscription } from "./ImportFromSubscription";
 import { resolveCountryCode, splitFlagEmoji } from "../utils/countryAliases";
+import { Page } from "../theme/ui";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
 type TickStatus = "up" | "slow" | "down";
@@ -89,22 +90,20 @@ type DashTab = "xray" | "server";
 export function Dashboard() {
   const [tab, setTab] = useState<DashTab>("xray");
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="ni-pagebody max-w-5xl mx-auto px-6 py-6">
-        {/* Horizontal tabs */}
-        <div className="flex rounded-lg border border-[var(--line-soft)] overflow-hidden mb-5 w-fit">
-          {([["xray", "Xray uptime", <Radio size={13} key="i" />],
-             ["server", "Server uptime", <Server size={13} key="i" />]] as const).map(([id, label, icon]) => (
-            <button key={id} onClick={() => setTab(id as DashTab)}
-              className={`flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-colors ${
-                tab === id ? "bg-[var(--bg3)] text-[var(--t-hi)]" : "text-[var(--t-low)] hover:text-[var(--t-mid)]"}`}>
-              {icon}{label}
-            </button>
-          ))}
-        </div>
-        {tab === "xray" ? <XrayUptime /> : <ServerUptime />}
+    <Page max={1024}>
+      {/* Horizontal tabs */}
+      <div className="flex rounded-lg border border-[var(--line-soft)] overflow-hidden mb-5 w-fit">
+        {([["xray", "Xray uptime", <Radio size={13} key="i" />],
+           ["server", "Server uptime", <Server size={13} key="i" />]] as const).map(([id, label, icon]) => (
+          <button key={id} onClick={() => setTab(id as DashTab)}
+            className={`flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-colors ${
+              tab === id ? "bg-[var(--bg3)] text-[var(--t-hi)]" : "text-[var(--t-low)] hover:text-[var(--t-mid)]"}`}>
+            {icon}{label}
+          </button>
+        ))}
       </div>
-    </div>
+      {tab === "xray" ? <XrayUptime /> : <ServerUptime />}
+    </Page>
   );
 }
 
@@ -126,18 +125,37 @@ function HealthBanner({ state, primary, secondary, stats }: {
 }
 
 function IncidentLog({ incidents }: { incidents: Incident[] }) {
+  // Секцию можно скрыть (Wave-4): состояние device-global, данные продолжают
+  // грузиться — раскрытие мгновенное.
+  const [hidden, setHidden] = useState(() => {
+    try { return localStorage.getItem("ni_hide_incidents") === "1"; } catch { return false; }
+  });
+  const toggleHidden = () => setHidden(h => {
+    const next = !h;
+    try { localStorage.setItem("ni_hide_incidents", next ? "1" : "0"); } catch {}
+    return next;
+  });
   return (
     <div className="mt-6 rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-4">
       <p className="micro mb-3 flex items-center gap-2">
         <Clock size={12} /> История доступности за последние 7 дней
+        <button type="button" className="iconbtn" style={{ marginLeft: "auto", width: 24, height: 24 }}
+          onClick={toggleHidden} title={hidden ? "Показать историю" : "Скрыть историю"}
+          aria-label={hidden ? "Показать историю доступности" : "Скрыть историю доступности"}>
+          {hidden ? <EyeOff size={13} /> : <Eye size={13} />}
+        </button>
       </p>
-      {incidents.length === 0 ? (
-        <p className="text-xs text-[var(--t-faint)] py-3 text-center">Инцидентов не зафиксировано — все ноды были стабильны. ✓</p>
+      {hidden ? null : incidents.length === 0 ? (
+        <p className="text-xs text-[var(--t-faint)] py-3 text-center">Инцидентов не зафиксировано — все ноды были стабильны.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {incidents.slice(0, 50).map((it, i) => (
-            <li key={i} className="flex items-start gap-2.5 text-xs">
-              <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${it.ongoing ? "bg-[var(--err)] animate-pulse" : "bg-[var(--t-faint)]"}`} />
+            // Активный инцидент — с severity-кромкой слева: важность считывается
+            // до чтения текста. Прозрачная кромка у решённых держит выравнивание.
+            <li key={i} className="flex items-start gap-2.5 text-xs"
+              style={{ borderLeft: `2px solid ${it.ongoing ? "var(--err)" : "transparent"}`, paddingLeft: 10, marginLeft: -12 }}>
+              <span className={it.ongoing ? "dot pulse mt-1" : "dot mt-1"}
+                style={{ background: it.ongoing ? "var(--err)" : "var(--t-faint)" }} />
               <span className="text-[var(--t-low)] tabular-nums shrink-0">{fmtWhen(it.start)}</span>
               <span className="text-[var(--t-mid)]">
                 Нода <span className="text-[var(--t-hi)] font-medium">{it.name}</span>
