@@ -168,7 +168,9 @@ def test_cf_error_becomes_502_with_redacted_token(monkeypatch):
 
     _mock_transport(monkeypatch, handler)
     r = client.get("/api/cloudflare/zones", headers=h)
-    assert r.status_code == 403          # upstream status is preserved
+    # Downstream 401/403 НЕ пробрасываем наружу (apiClient считает любой 401
+    # смертью сессии — wave-4 PR-1): 502 со статусом апстрима в тексте.
+    assert r.status_code == 502 and "ответил 403" in r.json()["detail"]
     detail = r.json()["detail"]
     assert TOKEN not in detail and "«redacted»" in detail
 

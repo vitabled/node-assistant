@@ -1,6 +1,7 @@
 import uuid as _uuid
 from typing import Optional
 from fastapi import APIRouter, HTTPException
+from app.api.downstream import downstream_exception
 from pydantic import BaseModel
 from app.services import storage
 from app.models.settings import (
@@ -242,7 +243,7 @@ async def check_remnawave(body: Optional[RemnawaveCheckBody] = None):
         info = await client.check_connection()
         return {"ok": True, "detail": info}
     except RemnavaveError as exc:
-        raise HTTPException(exc.status or 502, exc.detail)
+        raise downstream_exception(exc.status, exc.detail, "Панель Remnawave")
     except Exception as exc:
         raise HTTPException(502, str(exc))
 
@@ -265,7 +266,7 @@ async def get_internal_squads():
         squads = await client.list_internal_squads()
         return [{"uuid": s["uuid"], "name": s["name"]} for s in squads]
     except RemnavaveError as exc:
-        raise HTTPException(exc.status or 502, exc.detail)
+        raise downstream_exception(exc.status, exc.detail, "Панель Remnawave")
     except Exception as exc:
         raise HTTPException(502, str(exc))
 
@@ -278,7 +279,7 @@ async def get_external_squads():
         squads = await client.list_external_squads()
         return [{"uuid": s["uuid"], "name": s["name"]} for s in squads]
     except RemnavaveError as exc:
-        raise HTTPException(exc.status or 502, exc.detail)
+        raise downstream_exception(exc.status, exc.detail, "Панель Remnawave")
     except Exception as exc:
         raise HTTPException(502, str(exc))
 
@@ -291,7 +292,7 @@ async def get_node_plugins():
         plugins = await client.list_node_plugins()
         return [{"uuid": p["uuid"], "name": p["name"]} for p in plugins]
     except RemnavaveError as exc:
-        raise HTTPException(exc.status or 502, exc.detail)
+        raise downstream_exception(exc.status, exc.detail, "Панель Remnawave")
     except Exception as exc:
         raise HTTPException(502, str(exc))
 
@@ -309,7 +310,7 @@ async def get_balancers():
     try:
         tpls = await client.list_subscription_templates()
     except RemnavaveError as exc:
-        raise HTTPException(exc.status or 502, exc.detail)
+        raise downstream_exception(exc.status, exc.detail, "Панель Remnawave")
     except Exception as exc:
         raise HTTPException(502, str(exc))
 

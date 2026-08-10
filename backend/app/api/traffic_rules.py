@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, HTTPException
+from app.api.downstream import downstream_exception
 from app.services import storage
 from app.models.settings import AppSettings
 from app.models.traffic_rules import TrafficRule, TrafficRuleCreate, TrafficRuleUpdate, GiB
@@ -187,6 +188,6 @@ async def get_remnawave_nodes():
             for n in nodes
         ]
     except RemnavaveError as exc:
-        raise HTTPException(exc.status or 502, exc.detail)
+        raise downstream_exception(exc.status, exc.detail, "Панель Remnawave")
     except Exception as exc:
         raise HTTPException(502, str(exc))

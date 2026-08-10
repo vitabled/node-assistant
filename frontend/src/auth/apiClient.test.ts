@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 // Build a fresh module graph: mock original fetch, install the interceptor over
 // it, and hand back the store + the captured mock so tests can assert headers.
-async function setup(status = 200) {
+async function setup(status = 200, headers?: Record<string, string>) {
   vi.resetModules();
   localStorage.clear();
   const store = await import("./store");
   const { installApiClient } = await import("./apiClient");
-  const original = vi.fn(async () => new Response("{}", { status }));
+  const original = vi.fn(async () => new Response("{}", { status, headers }));
   // installApiClient captures window.fetch as the "original" at call time.
   (globalThis as unknown as { fetch: typeof fetch }).fetch = original as unknown as typeof fetch;
   installApiClient();
@@ -63,12 +63,21 @@ describe("auth fetch interceptor", () => {
     expect(headerOf(original).get("Authorization")).toBe("Bearer TKN");
   });
 
-  it("401 on a protected /api route forgets the active session", async () => {
-    const { store } = await setup(401);
+  it("401 with x-session-invalid marker forgets the active session", async () => {
+    const { store } = await setup(401, { "x-session-invalid": "1" });
     store.addAccount(ACC);
     expect(store.getActiveId()).toBe("id-a");
     await window.fetch("/api/settings");
     expect(store.getActiveId()).toBeNull(); // logged out
+  });
+
+  it("401 WITHOUT the marker keeps the session (downstream errors)", async () => {
+    // 401 от downstream (панель Remnawave с плохим токеном, старый backend) —
+    // не смерть сессии: иначе оператора выбивало бы в вечный логаут.
+    const { store } = await setup(401);
+    store.addAccount(ACC);
+    await window.fetch("/api/settings/remnawave/check", { method: "POST" });
+    expect(store.getActiveId()).toBe("id-a"); // still signed in
   });
 
   it("401 on an /api/auth route does NOT force logout", async () => {

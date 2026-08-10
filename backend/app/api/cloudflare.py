@@ -28,6 +28,7 @@ import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from app.api.downstream import downstream_exception
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.settings import AppSettings, CloudflareConfig
@@ -107,7 +108,7 @@ def _acc_or_400(cfg: CloudflareConfig) -> str:
 
 def _fail(exc: cf_client.CfError) -> HTTPException:
     """CfError.detail is already token-redacted by the client — safe to surface."""
-    return HTTPException(exc.status or 502, exc.detail)
+    return downstream_exception(exc.status, exc.detail, "Cloudflare")
 
 
 @router.get("/config")
