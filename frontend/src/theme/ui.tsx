@@ -2,9 +2,10 @@
 import type { ReactNode } from "react";
 
 export function Page({ children, max = 1060 }: { children: ReactNode; max?: number }) {
+  // .ni-pagebody — чтобы применялся мобильный padding-override из index.css.
   return (
     <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-      <div style={{ maxWidth: max, margin: "0 auto", padding: "22px 26px 40px" }}>{children}</div>
+      <div className="ni-pagebody" style={{ maxWidth: max, margin: "0 auto", padding: "22px 26px 40px" }}>{children}</div>
     </div>
   );
 }
@@ -16,7 +17,9 @@ export function PageHeader({ icon, title, subtitle, actions }: {
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, marginBottom: 18 }}>
       <div style={{ minWidth: 0 }}>
         <h1 className="h1" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {icon && <span style={{ color: "var(--accent-hi)", display: "flex" }}>{icon}</span>}
+          {/* .ni-pageicon — хук для тайла иконки под скином nodeflow; на
+              остальных скинах стилей не имеет и ничего не меняет. */}
+          {icon && <span className="ni-pageicon" style={{ color: "var(--accent-hi)", display: "flex" }}>{icon}</span>}
           {title}
         </h1>
         {subtitle && <p className="sub">{subtitle}</p>}

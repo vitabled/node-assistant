@@ -52,6 +52,8 @@ const consoleLight = { ...consoleDark, ...block(':root[data-theme="light"]') };
 const appleLight = { ...consoleLight, ...block(':root[data-skin="apple"][data-theme="light"]') };
 const appleDark = { ...consoleDark, ...block(':root[data-skin="apple"]:not([data-theme="light"])') };
 const neon = { ...consoleDark, ...block(':root[data-skin="neon"]') };
+const nodeflowDark = { ...consoleDark, ...block(':root[data-skin="nodeflow"]:not([data-theme="light"])') };
+const nodeflowLight = { ...consoleLight, ...block(':root[data-skin="nodeflow"][data-theme="light"]') };
 
 const PALETTES: Record<string, Record<string, string>> = {
   "console-dark": consoleDark,
@@ -59,6 +61,8 @@ const PALETTES: Record<string, Record<string, string>> = {
   "apple-light": appleLight,
   "apple-dark": appleDark,
   neon,
+  "nodeflow-dark": nodeflowDark,
+  "nodeflow-light": nodeflowLight,
 };
 
 const INKS = ["--t-faint", "--t-low", "--t-mid", "--t-hi"];
@@ -66,37 +70,14 @@ const SURFACES = ["--bg1", "--bg2", "--bg3"];
 const AA = 4.5; // обычный текст <18px
 
 /**
- * Известные провалы на момент Ф1, с измеренными коэффициентами. Каждая строка —
- * долг, который снимают Ф4/Ф5. Формат ключа: "<палитра> <fg> on <bg>".
- * Заполняется реальными числами прогона (см. вывод describe ниже).
+ * Известные провалы, с измеренными коэффициентами. Формат ключа:
+ * "<палитра> <fg> on <bg>". Заполняется реальными числами прогона.
+ *
+ * Пуст: Ф4 перетюнила --t-faint/--t-low во всех палитрах (минимум 4.5 на
+ * bg1/bg2/bg3), а хардкод #fff на акценте в apple-скине заменён на a.ink.
+ * Тест «no stale entry» не даёт списку гнить: починил провал — убери строку.
  */
-const KNOWN_FAILURES = new Set<string>([
-  // --t-faint задуман как плейсхолдер/disabled, но по факту используется и для
-  // контента (Ф5 правит StepProgress), а сам токен перетюнивается в Ф4.
-  // Измерено: 1.96–3.32 при пороге 4.5.
-  "console-dark --t-faint on --bg1",   // 3.32
-  "console-dark --t-faint on --bg2",   // 3.11
-  "console-dark --t-faint on --bg3",   // 2.79
-  "console-light --t-faint on --bg1",  // 2.26
-  "console-light --t-faint on --bg2",  // 2.42
-  "console-light --t-faint on --bg3",  // 1.96 — худшее значение во всей матрице
-  "apple-light --t-faint on --bg1",    // 2.26
-  "apple-light --t-faint on --bg2",    // 2.42
-  "apple-light --t-faint on --bg3",    // 1.96
-  "apple-dark --t-faint on --bg1",     // 2.92
-  "apple-dark --t-faint on --bg2",     // 2.59
-  "apple-dark --t-faint on --bg3",     // 2.11
-  "neon --t-faint on --bg1",           // 3.32 (neon не переопределяет --t-faint/--bg*)
-  "neon --t-faint on --bg2",           // 3.11
-  "neon --t-faint on --bg3",           // 2.79
-
-  // НЕ предусмотрено планом — найдено этим измерением: --t-low (вторичный, но
-  // «всё ещё читаемый» по замыслу) проваливается на самой светлой поверхности.
-  // Ф4 обязана поднять и его, а не только --t-faint.
-  "console-light --t-low on --bg3",    // 4.10
-  "apple-light --t-low on --bg3",      // 4.10
-  "apple-dark --t-low on --bg3",       // 3.96
-]);
+const KNOWN_FAILURES = new Set<string>([]);
 
 describe("contrast: ink on surfaces", () => {
   const failures: string[] = [];

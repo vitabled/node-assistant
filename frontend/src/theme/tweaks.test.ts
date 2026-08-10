@@ -3,7 +3,7 @@ import {
   applyAccent, applyDensity, applyThemeMode, resolveThemeMode,
   loadAccent, loadDensity, loadThemeMode,
   saveAccent, saveDensity, saveThemeMode, THEME_MODES,
-  applySkin, loadSkin, saveSkin, SKINS,
+  applySkin, loadSkin, saveSkin, SKINS, resolveAccentForSkin,
 } from "./tweaks";
 
 // jsdom has no matchMedia — install a controllable stub. `_light` flips the
@@ -85,6 +85,35 @@ describe("accent", () => {
     saveAccent("violet");
     expect(loadAccent()).toBe("violet");
   });
+
+  it("nodeflow accent uses its light variant on light theme and reverts on dark", () => {
+    mockMatchMedia(false);
+    applyThemeMode("light");
+    applyAccent("nodeflow");
+    const s = document.documentElement.style;
+    expect(s.getPropertyValue("--accent")).toBe("#157A2B");
+    expect(s.getPropertyValue("--accent-ink")).toBe("#FFFFFF");
+    // Смена темы переприменяет текущий акцент — без ручного повтора applyAccent.
+    applyThemeMode("dark");
+    expect(s.getPropertyValue("--accent")).toBe("#48BD54");
+    expect(s.getPropertyValue("--accent-ink")).toBe("#062110");
+  });
+
+  it("accents without a light variant stay identical on light theme", () => {
+    mockMatchMedia(false);
+    applyThemeMode("light");
+    applyAccent("blue");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#4C8DFF");
+  });
+
+  it("resolveAccentForSkin: saved choice wins, nodeflow skin defaults to its green", () => {
+    expect(resolveAccentForSkin("nodeflow")).toBe("nodeflow");
+    expect(resolveAccentForSkin("apple")).toBe("blue");
+    saveAccent("violet");
+    expect(resolveAccentForSkin("nodeflow")).toBe("violet"); // явный выбор важнее дефолта скина
+    localStorage.setItem("ni_accent", "chartreuse");
+    expect(resolveAccentForSkin("nodeflow")).toBe("nodeflow"); // мусор = «не выбирал»
+  });
 });
 
 describe("density", () => {
@@ -123,7 +152,7 @@ describe("skin", () => {
     expect(loadSkin("acc1")).toBe("apple");
   });
 
-  it("exposes exactly the two skin options", () => {
-    expect(SKINS.map(s => s.key)).toEqual(["apple", "console"]);
+  it("exposes exactly the four skin options", () => {
+    expect(SKINS.map(s => s.key)).toEqual(["apple", "console", "neon", "nodeflow"]);
   });
 });

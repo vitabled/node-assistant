@@ -12,8 +12,8 @@
   --line-soft:#1A2232;      /* hairline            */
   --t-hi:#EDF2FB;           /* headings, values    */
   --t-mid:#B4C0D3;          /* body                */
-  --t-low:#8291A8;          /* secondary — still readable */
-  --t-faint:#5A6780;        /* placeholders, disabled only */
+  --t-low:#93A1B8;          /* secondary — still readable */
+  --t-faint:#8593AA;        /* muted meta — AA на всех поверхностях (Ф4) */
   --ok:#3ECF8E;   --ok-dim:rgba(62,207,142,.11);   --ok-line:rgba(62,207,142,.32);
   --warn:#F0B054; --warn-dim:rgba(240,176,84,.11); --warn-line:rgba(240,176,84,.32);
   --err:#F0716E;  --err-dim:rgba(240,113,110,.11); --err-line:rgba(240,113,110,.34);
@@ -235,7 +235,7 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 :root[data-theme="light"]{
   --bg0:#ECECEF; --bg1:#F7F7F9; --bg2:#FFFFFF; --bg3:#E7E7EC;
   --line:#D7D7DD; --line-soft:#E7E7EC;
-  --t-hi:#1D1D1F; --t-mid:#3E3E46; --t-low:#6E6E77; --t-faint:#A6A6AE;
+  --t-hi:#1D1D1F; --t-mid:#3E3E46; --t-low:#60606A; --t-faint:#676771;
   --ok:#1B9E4B; --ok-dim:rgba(40,167,69,.13); --ok-line:rgba(40,167,69,.30);
   --warn:#B25E00; --warn-dim:rgba(178,94,0,.12); --warn-line:rgba(178,94,0,.28);
   --err:#D70015; --err-dim:rgba(215,0,21,.09); --err-line:rgba(215,0,21,.28);
@@ -256,8 +256,10 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 :root[data-skin="apple"]{
   --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",system-ui,sans-serif;
   --r-sm:7px; --r-md:10px; --r-lg:14px;
-  --accent-ink:#fff; --primary-ink:#fff; --brand-ink:#fff;
-  --nav-active-bg:var(--accent); --nav-active-fg:#fff;
+  /* Чернила на акценте НЕ переопределяем: applyAccent() всегда ставит a.ink —
+     он проходит AA на всех семи акцентах, белый не проходит ни на одном
+     (измерено, см. theme/contrast.test.ts «ink on accents»). */
+  --nav-active-bg:var(--accent); --nav-active-fg:var(--accent-ink);
   --glass-blur:22px; letter-spacing:-.006em;
 }
 :root[data-skin="apple"] .navitem{font-weight:450;border-radius:8px}
@@ -286,7 +288,7 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 :root[data-skin="apple"][data-theme="light"]{
   --bg0:#ECECEF; --bg1:#F7F7F9; --bg2:#FFFFFF; --bg3:#E7E7EC;
   --line:#D7D7DD; --line-soft:#E7E7EC;
-  --t-hi:#1D1D1F; --t-mid:#3E3E46; --t-low:#6E6E77; --t-faint:#A6A6AE;
+  --t-hi:#1D1D1F; --t-mid:#3E3E46; --t-low:#60606A; --t-faint:#676771;
   --ok:#28A745;   --ok-dim:rgba(52,199,89,.13);   --ok-line:rgba(40,167,69,.28);
   --warn:#B25E00; --warn-dim:rgba(255,149,0,.14);  --warn-line:rgba(178,94,0,.26);
   --err:#D70015;  --err-dim:rgba(255,59,48,.10);   --err-line:rgba(215,0,21,.26);
@@ -305,7 +307,7 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 :root[data-skin="apple"]:not([data-theme="light"]){
   --bg0:#1C1C1E; --bg1:#232325; --bg2:#2C2C2E; --bg3:#3A3A3C;
   --line:#3A3A3C; --line-soft:#2E2E30;
-  --t-hi:#F5F5F7; --t-mid:#D0D0D6; --t-low:#98989F; --t-faint:#6A6A70;
+  --t-hi:#F5F5F7; --t-mid:#D0D0D6; --t-low:#BABAC2; --t-faint:#A9A9B1;
   --ok:#30D158;   --ok-dim:rgba(48,209,88,.15);   --ok-line:rgba(48,209,88,.32);
   --warn:#FF9F0A; --warn-dim:rgba(255,159,10,.15); --warn-line:rgba(255,159,10,.32);
   --err:#FF453B;  --err-dim:rgba(255,69,58,.14);   --err-line:rgba(255,69,58,.34);
@@ -384,6 +386,72 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 :root[data-skin="neon"] .btn-primary,
 :root[data-skin="neon"] .navitem.active{ box-shadow:var(--glow) }
 :root[data-skin="neon"] .neon-text{ text-shadow:0 0 8px var(--accent-glow) }
+
+/* ════════ NodeFlow skin — четвёртый data-skin, аддитивный (как neon) ════════
+   Визуальный язык панели NodeFlow: «лесная» зелёная палитра, Inter, глубокая
+   зелёная primary-кнопка, 2px кромка активного пункта, press-отдача. Акцентных
+   токенов тут НЕТ: их ставит тема-зависимый applyAccent (ACCENTS.nodeflow +
+   его .light-вариант), а инлайн перебивает любой stylesheet. Палитры — hex:
+   их читает как текст контраст-гейт (theme/contrast.test.ts, палитры
+   nodeflow-dark/nodeflow-light). */
+:root[data-skin="nodeflow"]{
+  --font:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --r-sm:8px; --r-md:8px; --r-lg:10px;
+  --nav-active-bg:var(--bg2); --nav-active-fg:var(--t-hi);
+}
+/* Активный пункт — фон surface-raised + кромка 2px у самого края (NodeFlow),
+   без выноса влево как у console-скина. */
+:root[data-skin="nodeflow"] .navitem.active::before{
+  left:0; width:2px; top:11px; bottom:11px; border-radius:2px;
+}
+/* Press-отдача — фирменная тактильность NodeFlow (ease из его темы). */
+:root[data-skin="nodeflow"] .btn,
+:root[data-skin="nodeflow"] .iconbtn{ transition:background .14s cubic-bezier(.25,1,.5,1),border-color .14s cubic-bezier(.25,1,.5,1),color .14s cubic-bezier(.25,1,.5,1),transform .14s cubic-bezier(.25,1,.5,1) }
+:root[data-skin="nodeflow"] .btn:active:not(:disabled),
+:root[data-skin="nodeflow"] .iconbtn:active{ transform:translateY(1px) }
+/* Primary-кнопка — глубокий зелёный NodeFlow #187A36 (не яркий акцент):
+   белый текст на нём 5.42. Это осознанный хардкод-подпись скина. */
+:root[data-skin="nodeflow"] .btn-primary{ background:#187A36; color:#fff }
+:root[data-skin="nodeflow"] .btn-primary:hover:not(:disabled){ background:#14672E }
+/* Тайл иконки заголовка страницы — визитная карточка хедеров NodeFlow.
+   (inline display:flex у .ni-pageicon сохраняется; тут только размеры,
+   центрирование и поверхность.) */
+:root[data-skin="nodeflow"] .ni-pageicon{
+  width:34px; height:34px; align-items:center; justify-content:center;
+  background:var(--accent-dim); border:1px solid var(--accent-line); border-radius:var(--r-sm);
+}
+
+/* NodeFlow · Dark (палитра; oklch оригинала конвертирован в hex) */
+:root[data-skin="nodeflow"]:not([data-theme="light"]){
+  --bg0:#060E0D; --bg1:#0A1512; --bg2:#0F1D18; --bg3:#13271D;
+  --line:rgba(158,177,161,.21); --line-soft:rgba(158,177,161,.13);
+  --t-hi:#E2EAE4; --t-mid:#9DACA0; --t-low:#8F9D91; --t-faint:#808D82;
+  --ok:#47BE8B;   --ok-dim:rgba(71,190,139,.12);   --ok-line:rgba(71,190,139,.34);
+  --warn:#E0AF3B; --warn-dim:rgba(224,175,59,.12); --warn-line:rgba(224,175,59,.34);
+  --err:#F05F5A;  --err-dim:rgba(240,95,90,.13);   --err-line:rgba(240,95,90,.36);
+  --raised:rgba(10,21,18,.6); --row-hover:rgba(19,39,29,.45); --overlay:rgba(4,10,8,.72);
+  --topbar-bg:rgba(10,21,18,.7); --sidebar-bg:#060E0D; --term-bg:#050B09;
+  --scroll-thumb:#1A2E24;
+  --viz-1:#48BD54;
+}
+
+/* NodeFlow · Light */
+:root[data-skin="nodeflow"][data-theme="light"]{
+  --bg0:#F2F6F3; --bg1:#FFFFFF; --bg2:#EDF4EF; --bg3:#E3EEE6;
+  --line:rgba(48,78,61,.22); --line-soft:rgba(48,78,61,.13);
+  --t-hi:#14231A; --t-mid:#2E3E34; --t-low:#52665A; --t-faint:#5A6C60;
+  --ok:#12703A;   --ok-dim:rgba(18,112,58,.12);   --ok-line:rgba(18,112,58,.3);
+  --warn:#7A5C00; --warn-dim:rgba(122,92,0,.12);  --warn-line:rgba(122,92,0,.3);
+  --err:#C03430;  --err-dim:rgba(192,52,48,.1);   --err-line:rgba(192,52,48,.3);
+  --raised:#F5F8F6; --row-hover:rgba(20,35,26,.04); --overlay:rgba(20,35,26,.3);
+  --topbar-bg:rgba(255,255,255,.78); --sidebar-bg:#EAF1EC; --term-bg:#0F1D18;
+  --scroll-thumb:rgba(20,35,26,.22);
+  --viz-1:#157A2B;
+}
+:root[data-skin="nodeflow"][data-theme="light"] .card{box-shadow:0 1px 2px rgba(20,35,26,.06)}
+:root[data-skin="nodeflow"][data-theme="light"] .toast.ok{background:rgba(238,248,241,.95);color:#0E5A2E}
+:root[data-skin="nodeflow"][data-theme="light"] .toast.err{background:rgba(253,240,240,.95);color:#C03430}
+:root[data-skin="nodeflow"][data-theme="light"] .toast.info{background:rgba(245,248,246,.96);color:var(--t-mid)}
 
 /* Shimmer skeleton — animated only when motion is allowed. */
 @media (prefers-reduced-motion: no-preference){

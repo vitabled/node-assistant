@@ -53,13 +53,14 @@ import { Toaster }                        from "./components/infra/Toast";
 import { StepProgress, RENEW_STEPS }       from "./components/StepProgress";
 import { TerminalOutput }                  from "./components/TerminalOutput";
 import { useTaskStream, type StatusFrame } from "./hooks/useTaskStream";
+import { useRemnawaveStatus, type RwStatus } from "./hooks/useRemnawaveStatus";
 import { AccountMenu }                     from "./auth/AccountMenu";
 import { usePermissions }                  from "./auth/usePermissions";
 import { tabKey, getActiveId, certJobsKey } from "./auth/store";
 import {
   applyAccent, applyDensity, applyThemeMode, applySkin,
-  loadAccent, loadDensity, loadThemeMode, loadSkin,
-  loadNeonGlow, applyNeonGlow,
+  loadDensity, loadThemeMode, loadSkin,
+  loadNeonGlow, applyNeonGlow, resolveAccentForSkin,
 } from "./theme/tweaks";
 import { motion } from "motion/react";
 import { tabFade, useMotionEnabled } from "./theme/motion";
@@ -82,6 +83,15 @@ function Screen({ tabKey: k, children }: { tabKey: string; children: ReactNode }
 
 const SIDEBAR_KEY = "sidebar_collapsed";
 
+// Вид чипа статуса Remnawave в топбаре по состоянию живой пробы
+// (useRemnawaveStatus). «Не настроена» — нейтральная, без красной тревоги.
+const RW_VIEW: Record<RwStatus, { dot: string; pulse: boolean; chip: string; text: string }> = {
+  loading:      { dot: "var(--t-faint)", pulse: true,  chip: "neutral", text: "проверка…"   },
+  online:       { dot: "var(--ok)",      pulse: false, chip: "ok",      text: "онлайн"      },
+  offline:      { dot: "var(--err)",     pulse: true,  chip: "err",     text: "недоступна"  },
+  unconfigured: { dot: "var(--t-faint)", pulse: false, chip: "neutral", text: "не настроена" },
+};
+
 const INITIAL_CERT_STATUS: StatusFrame = {
   status: "pending", current_step: 0, total_steps: RENEW_STEPS.length,
 };
@@ -90,7 +100,7 @@ const INITIAL_CERT_STATUS: StatusFrame = {
 // Экспортируется ради теста: связь «группа в сайдбаре ↔ первый элемент крошки»
 // рукописная, TypeScript её не проверяет (обе стороны — обычные строки).
 export const CRUMB: Record<Tab, [string, string]> = {
-  "dashboard":       ["Node Installer", "Дешборд"],
+  "dashboard":       ["Node Installer", "Дашборд"],
   "deploy":          ["Node Installer", "Деплой ноды"],
   "certs":           ["Node Installer", "Управление SSL"],
   "templates":       ["Node Installer", "Шаблоны"],
@@ -188,9 +198,11 @@ export default function App() {
   // re-read and its matchMedia listener re-armed. The controls live in
   // Settings → Тема and call apply*/save* imperatively; nothing to lift here.
   useEffect(() => {
-    applySkin(loadSkin(getActiveId()));
+    const skin = loadSkin(getActiveId());
+    applySkin(skin);
     applyThemeMode(loadThemeMode(getActiveId()));
-    applyAccent(loadAccent());
+    // Акцент ПОСЛЕ темы: applyAccent тема-зависим (light-вариант у nodeflow).
+    applyAccent(resolveAccentForSkin(skin));
     applyDensity(loadDensity());
     applyNeonGlow(loadNeonGlow());
   }, []);
@@ -257,6 +269,7 @@ export default function App() {
   }, [certStepStatus.status]);
 
   const crumb = CRUMB[tab];
+  const rw = RW_VIEW[useRemnawaveStatus()];
 
   return (
     <div style={{ display: "flex", height: "100%", position: "relative" }}>
@@ -276,14 +289,15 @@ export default function App() {
             <ChevronRight size={13} style={{ color: "var(--t-faint)", flex: "none" }} />
             <span className="hi trunc" style={{ fontWeight: 600 }}>{crumb[1]}</span>
           </nav>
-          {/* Remnawave status — centered in the header (hidden ≤820px via .ni-clock) */}
+          {/* Remnawave status — centered in the header (hidden ≤820px via .ni-clock).
+              Живой: опрашивает сохранённую конфигурацию панели каждые 60 с. */}
           <div className="ni-clock" style={{
             position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)",
             display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, whiteSpace: "nowrap",
           }}>
-            <span className="dot" style={{ background: "var(--ok)" }} />
+            <span className={rw.pulse ? "dot pulse" : "dot"} style={{ background: rw.dot }} />
             <span className="dim">Remnawave</span>
-            <span className="chip ok" style={{ padding: "1px 7px", fontSize: 10 }}>онлайн</span>
+            <span className={`chip ${rw.chip}`} style={{ padding: "1px 7px", fontSize: 10 }}>{rw.text}</span>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
             <AccountMenu />
