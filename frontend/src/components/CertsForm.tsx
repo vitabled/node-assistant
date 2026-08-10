@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Loader2, ShieldCheck, Eye, EyeOff } from "lucide-react";
+import { Loader2, ShieldCheck, Eye, EyeOff, ScanSearch } from "lucide-react";
+import { ScanDomainsModal } from "./ScanDomainsModal";
 
 export interface CertsFormData {
   ip:            string;
@@ -100,12 +101,15 @@ function Field({ label, name, value, onChange, error, hint, type = "text", place
 interface Props {
   onSubmit: (data: CertsFormData) => Promise<void>;
   disabled: boolean;
+  /** «Авто» добавил домены — родитель обновляет «Домены». */
+  onDomainsAdded?: () => void;
 }
 
-export function CertsForm({ onSubmit, disabled }: Props) {
+export function CertsForm({ onSubmit, disabled, onDomainsAdded }: Props) {
   const [form,    setForm]    = useState<CertsFormData>(DEFAULT);
   const [errors,  setErrors]  = useState<Partial<Record<keyof CertsFormData, string>>>({});
   const [touched, setTouched] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
 
   const set = (name: keyof CertsFormData, value: string) =>
     setForm((f) => {
@@ -144,9 +148,31 @@ export function CertsForm({ onSubmit, disabled }: Props) {
       <div className="grid grid-cols-2 gap-3">
         <Field label="Порт подключения" name="ssh_port" value={form.ssh_port} onChange={set}
           placeholder="22" error={errors.ssh_port} disabled={f} />
-        <Field label="Домен" name="domain" value={form.domain} onChange={set}
-          placeholder="node1.example.com" error={errors.domain} disabled={f} />
+        <div>
+          <div className="flex items-center justify-between">
+            <span />
+            {/* «Авто» — сервис сам собирает домены сервера по SSH (Wave-4 PR-3) */}
+            <button type="button" className="text-[11px] font-semibold flex items-center gap-1
+                       hover:underline disabled:opacity-40"
+              style={{ color: "var(--accent-hi)" }}
+              disabled={f}
+              onClick={() => setScanOpen(true)}>
+              <ScanSearch size={11} /> Авто
+            </button>
+          </div>
+          <Field label="Домен" name="domain" value={form.domain} onChange={set}
+            placeholder="node1.example.com" error={errors.domain} disabled={f} />
+        </div>
       </div>
+
+      {scanOpen && (
+        <ScanDomainsModal
+          defaults={{ ip: form.ip, ssh_user: form.ssh_user,
+                      ssh_password: form.ssh_password, ssh_port: form.ssh_port }}
+          onClose={() => setScanOpen(false)}
+          onAdded={() => onDomainsAdded?.()}
+        />
+      )}
 
       <p className="text-[11px] font-semibold uppercase tracking-widest mt-1" style={{ color: "var(--t-faint)" }}>
         Сертификат

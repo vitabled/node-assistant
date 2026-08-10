@@ -47,6 +47,87 @@ DEPLOY_STEP_LABELS = [
 DEPLOY_TOTAL = len(DEPLOY_STEP_LABELS)
 
 
+# ── Domain auto-scan (Wave-4 PR-3) ─────────────────────────────
+# «Авто» рядом с полем домена: по SSH собираем ВСЕ домены сервера из nginx/
+# apache server_name, certbot live, конфигов xray/remnanode и env масксайта.
+# Скрипт read-only; пароль живёт только в SSH-сессии запроса.
+
+class ScanDomainsRequest(BaseModel):
+    ip: str
+    ssh_port: int = 22
+    ssh_user: str
+    ssh_password: str
+
+
+_SCAN_SCRIPT = r"""
+echo '== nginx =='
+grep -rhoE 'server_name[[:space:]]+[^;]+' /etc/nginx /etc/apache2 2>/dev/null
+echo '== certbot =='
+ls /etc/letsencrypt/live 2>/dev/null
+echo '== xray =='
+grep -rhoE '"(dest|serverName)"[[:space:]]*:[[:space:]]*"[^"]+"' \
+  /usr/local/etc/xray /opt/remnanode /etc/xray 2>/dev/null
+echo '== env =='
+grep -hE '^(SELFSTEAL|SELF_STEAL|FAKE_SITE|MASK|DOMAIN|SERVER_NAME)=' \
+  /opt/remnanode/.env 2>/dev/null
+docker ps --format '{{.Names}}' 2>/dev/null | while read c; do \
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null; \
+done | grep -E '^(SELFSTEAL|SELF_STEAL|FAKE_SITE|MASK|DOMAIN|SERVER_NAME)='
+"""
+
+
+def _parse_scan(out: str) -> list[dict]:
+    """Разбор вывода _SCAN_SCRIPT → [{domain, sources}]. Чистая функция (тесты)."""
+    domains: dict[str, set[str]] = {}
+
+    def add(raw: str, source: str) -> None:
+        d = raw.strip().strip('"').strip("'").lower().rstrip(".")
+        if not d or d == "_" or d.startswith("*.") or d == "default_server":
+            return
+        if _DOMAIN_RE.match(d):
+            domains.setdefault(d, set()).add(source)
+
+    section = ""
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("== "):
+            section = line.strip("= ").strip()
+            continue
+        if not line:
+            continue
+        if section == "nginx":
+            # "server_name a.com b.com" — имён может быть несколько
+            for tok in re.split(r"[\s;,]+", line.split("server_name", 1)[-1]):
+                add(tok, "nginx")
+        elif section == "certbot":
+            # каталоги live/<domain>[-0001]
+            add(re.sub(r"-\d{4}$", "", line), "certbot")
+        elif section == "xray":
+            m = re.match(r'"(?:dest|serverName)"\s*:\s*"([^"]+)"', line)
+            if m:
+                for tok in m.group(1).split(","):
+                    # dest часто "domain:port"
+                    add(tok.strip().split(":")[0], "xray")
+        elif section == "env":
+            _, _, val = line.partition("=")
+            v = re.sub(r"^https?://", "", val.strip()).split("/")[0]
+            add(v, "env")
+    return [{"domain": d, "sources": sorted(s)} for d, s in sorted(domains.items())]
+
+
+@router.post("/certs/scan-domains")
+async def scan_domains(req: ScanDomainsRequest):
+    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    try:
+        await ssh.connect()
+        out = await ssh.get_script_output(_SCAN_SCRIPT, timeout=60)
+    except Exception as exc:
+        raise HTTPException(502, f"Сканирование не удалось: {exc}")
+    finally:
+        await ssh.close()
+    return {"domains": _parse_scan(out)}
+
+
 @router.post("/certs/deploy")
 async def deploy_cert(req: DeployCertRequest, background_tasks: BackgroundTasks):
     task = task_store.create(total_steps=DEPLOY_TOTAL)
