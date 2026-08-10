@@ -39,7 +39,12 @@ export function installApiClient() {
     const res = await original(input, init);
 
     // Session no longer valid → forget it so the app returns to the login gate.
-    if (res.status === 401 && isApi(url) && !isAuthRoute(url)) {
+    // Разлогиниваем ТОЛЬКО по маркеру x-session-invalid: 401 от downstream
+    // (например, панель Remnawave с плохим токеном, проброшенный старым
+    // backend'ом) сессии не касается — иначе оператора выбивало бы в вечный
+    // логаут (см. backend/app/api/downstream.py).
+    if (res.status === 401 && isApi(url) && !isAuthRoute(url) &&
+        res.headers.get("x-session-invalid") === "1") {
       const id = getActiveId();
       if (id) forget(id);
     }

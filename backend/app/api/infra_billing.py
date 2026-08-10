@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
+from app.api.downstream import downstream_exception
 from pydantic import BaseModel, Field, field_validator
 
 from app.services import storage
@@ -43,7 +44,7 @@ def _client() -> RemnavaveClient:
 
 def _wrap_rw(exc: Exception) -> HTTPException:
     if isinstance(exc, RemnavaveError):
-        return HTTPException(exc.status or 502, exc.detail)
+        return downstream_exception(exc.status, exc.detail, "Cloudflare")
     return HTTPException(502, str(exc))
 
 

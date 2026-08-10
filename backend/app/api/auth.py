@@ -82,7 +82,8 @@ async def bootstrap(body: BootstrapBody) -> dict:
 async def login(body: Credentials) -> dict:
     user = users.authenticate(body.login.strip(), body.password)
     if not user:
-        raise HTTPException(401, "Неверный логин или пароль")
+        raise HTTPException(401, "Неверный логин или пароль",
+                            headers={"x-session-invalid": "1"})
     return _session(user)
 
 
@@ -113,7 +114,11 @@ async def require_identity(request: Request,
         user = users.resolve_token(token)
 
     if not user:
-        raise HTTPException(401, "Требуется авторизация")
+        # Заголовок-маркер: apiClient разлогинивает ТОЛЬКО по нему. 401 от
+        # downstream (панель Remnawave с плохим токеном и т.п.) сессии не
+        # касается и маркера не несёт (см. api/downstream.py).
+        raise HTTPException(401, "Требуется авторизация",
+                            headers={"x-session-invalid": "1"})
 
     if readonly_token:
         if request.method not in _SAFE_METHODS:
