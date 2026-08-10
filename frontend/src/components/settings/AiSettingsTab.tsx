@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2, Bot, Globe, AlertTriangle } from "lucide-react";
 import { toast } from "../infra/Toast";
 import { PromptPresets } from "./PromptPresets";
+import { CliproxyOAuth } from "./CliproxyOAuth";
 
 type WebProvider = "duckduckgo" | "tavily" | "brave" | "searxng";
 
@@ -91,6 +92,9 @@ export function AiSettingsTab() {
   const [cfg, setCfg] = useState<AiConfig | null>(null);
   const [keyInput, setKeyInput] = useState("");
   const [webKeyInput, setWebKeyInput] = useState("");
+  // Метод входа — локальный UI-переключатель (Wave-4 PR-5): при OAuth поле
+  // API-ключа заменяется формой «Вход через CLIProxyAPI», и api_key не шлётся.
+  const [authMethod, setAuthMethod] = useState<"api-key" | "oauth">("api-key");
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [loadErr, setLoadErr] = useState(false);
@@ -123,8 +127,9 @@ export function AiSettingsTab() {
     try {
       const body: any = { ...cfg };
       // Оба ключа write-only и симметричны: пустое поле НЕ уезжает на сервер,
-      // иначе сохранение любой соседней настройки стирало бы ключ.
-      if (keyInput.trim()) body.api_key = keyInput.trim();
+      // иначе сохранение любой соседней настройки стирало бы ключ. При выбранном
+      // OAuth-входе api_key не отправляется вовсе.
+      if (authMethod === "api-key" && keyInput.trim()) body.api_key = keyInput.trim();
       if (webKeyInput.trim()) body.web_api_key = webKeyInput.trim();
       const r = await fetch("/api/ai/config", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -229,10 +234,25 @@ export function AiSettingsTab() {
             </p>
           </label>
           <label className="flex flex-col gap-1 sm:col-span-2">
-            <span className="micro">API-ключ {cfg.has_key && <span className="text-[var(--ok)]">(сохранён)</span>}</span>
-            <input className="input" type="password" autoComplete="off" value={keyInput} disabled={saving}
-              placeholder={cfg.has_key ? "•••• (оставьте пустым, чтобы не менять)" : "sk-..."}
-              onChange={e => setKeyInput(e.target.value)} />
+            <span className="micro flex items-center gap-3">
+              Метод входа
+              <span className="seg mini" style={{ display: "inline-flex" }}>
+                <button type="button" className={authMethod === "api-key" ? "on" : ""}
+                  onClick={() => setAuthMethod("api-key")}>API-ключ</button>
+                <button type="button" className={authMethod === "oauth" ? "on" : ""}
+                  onClick={() => setAuthMethod("oauth")}>OAuth</button>
+              </span>
+              {authMethod === "api-key" && cfg.has_key && (
+                <span className="text-[var(--ok)] normal-case tracking-normal">(ключ сохранён)</span>
+              )}
+            </span>
+            {authMethod === "api-key" ? (
+              <input className="input" type="password" autoComplete="off" value={keyInput} disabled={saving}
+                placeholder={cfg.has_key ? "•••• (оставьте пустым, чтобы не менять)" : "sk-..."}
+                onChange={e => setKeyInput(e.target.value)} />
+            ) : (
+              <CliproxyOAuth />
+            )}
           </label>
         </div>
 
