@@ -1,7 +1,7 @@
 // Appearance tweaks — accent colour + density. Writes CSS variables on :root,
 // fully self-contained (no other component needs to know). Persisted locally.
 
-export type AccentKey = "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime";
+export type AccentKey = "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime" | "nodeflow";
 export type Density = "comfortable" | "compact";
 export type ThemeMode = "light" | "dark" | "system";
 
@@ -13,15 +13,26 @@ export const THEME_MODES: { key: ThemeMode; label: string }[] = [
 
 // Design skin — a second, independent theme axis on :root (data-skin), on top of
 // the light/dark data-theme axis. "apple" = System-Settings aesthetic (SF font,
-// iOS controls, glass); "console" = the JetBrains-Mono default. Apple is default.
-export type AppSkin = "apple" | "console" | "neon";
+// iOS controls, glass); "console" = the JetBrains-Mono default; "neon" = glow;
+// "nodeflow" = лесная зелёная палитра панели NodeFlow + Inter. Apple is default.
+export type AppSkin = "apple" | "console" | "neon" | "nodeflow";
 export const SKINS: { key: AppSkin; label: string }[] = [
-  { key: "apple",   label: "Apple" },
-  { key: "console", label: "Консоль" },
-  { key: "neon",    label: "Неон" },
+  { key: "apple",    label: "Apple" },
+  { key: "console",  label: "Консоль" },
+  { key: "neon",     label: "Неон" },
+  { key: "nodeflow", label: "NodeFlow" },
 ];
 
-export const ACCENTS: Record<AccentKey, { base: string; hi: string; ink: string }> = {
+interface AccentDef {
+  base: string; hi: string; ink: string;
+  // Тема-зависимый вариант: берётся на data-theme="light". Инлайн от
+  // applyAccent перебивает любой stylesheet, поэтому «светлый акцент» не может
+  // быть CSS-блоком и живёт здесь. Задан только у nodeflow: яркий #48BD54 на
+  // белом — 2.42 (недопустим текстом), глубокий #157A2B — 5.45.
+  light?: { base: string; hi: string; ink: string };
+}
+
+export const ACCENTS: Record<AccentKey, AccentDef> = {
   blue:    { base: "#4C8DFF", hi: "#82AEFF", ink: "#0A0E16" },
   green:   { base: "#3ECF8E", hi: "#63E0A7", ink: "#04140D" },
   violet:  { base: "#9D7BFF", hi: "#B9A0FF", ink: "#0E0A1A" },
@@ -30,6 +41,9 @@ export const ACCENTS: Record<AccentKey, { base: string; hi: string; ink: string 
   // Neon-forward hues — work on every skin, but "fire" under the neon skin's glow.
   magenta: { base: "#FF4D9D", hi: "#FF80BC", ink: "#1A0510" },
   lime:    { base: "#B4FF3A", hi: "#CDFF77", ink: "#0C1400" },
+  // NodeFlow green (oklch 71% .18 145 → hex) — дефолт скина nodeflow.
+  nodeflow: { base: "#48BD54", hi: "#6FDA75", ink: "#062110",
+              light: { base: "#157A2B", hi: "#157A2B", ink: "#FFFFFF" } },
 };
 
 function hexA(hex: string, a: number): string {
@@ -37,8 +51,15 @@ function hexA(hex: string, a: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 }
 
+// Текущий акцент в module-scope: applyThemeMode (и системный matchMedia-
+// листенер) переприменяют его после смены темы — иначе light-вариант акцента
+// не подхватился бы при переключении темы.
+let _currentAccent: AccentKey = "blue";
+
 export function applyAccent(key: AccentKey): void {
-  const a = ACCENTS[key] || ACCENTS.blue;
+  _currentAccent = key in ACCENTS ? key : "blue";
+  const entry = ACCENTS[_currentAccent];
+  const a = (document.documentElement.dataset.theme === "light" && entry.light) ? entry.light : entry;
   const r = document.documentElement.style;
   r.setProperty("--accent", a.base);
   r.setProperty("--accent-hi", a.hi);
@@ -81,9 +102,14 @@ export function applyThemeMode(mode: ThemeMode): void {
   _mqRef = null;
   // The light/dark palettes live under :root[data-theme="…"]; :root itself is dark.
   document.documentElement.dataset.theme = resolveThemeMode(mode);
+  // Акцент тема-зависим (ACCENTS.*.light) — переприменяем после смены темы.
+  applyAccent(_currentAccent);
   const mq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
   if (mode === "system" && mq) {
-    _sysListener = e => { document.documentElement.dataset.theme = e.matches ? "light" : "dark"; };
+    _sysListener = e => {
+      document.documentElement.dataset.theme = e.matches ? "light" : "dark";
+      applyAccent(_currentAccent);
+    };
     mq.addEventListener("change", _sysListener);
     _mqRef = mq;
   }
@@ -104,6 +130,15 @@ export function loadAccent(): AccentKey {
   const v = localStorage.getItem(ACCENT_KEY);
   return v && v in ACCENTS ? (v as AccentKey) : "blue";
 }
+
+// Акцент по умолчанию зависит от скина: nodeflow несёт свой фирменный зелёный,
+// но ТОЛЬКО если пользователь никогда не выбирал акцент явно — сохранённый
+// выбор всегда побеждает (пикер продолжает работать на любом скине).
+export function resolveAccentForSkin(skin: AppSkin): AccentKey {
+  const v = localStorage.getItem(ACCENT_KEY);
+  if (v && v in ACCENTS) return v as AccentKey;
+  return skin === "nodeflow" ? "nodeflow" : "blue";
+}
 export function loadDensity(): Density {
   return localStorage.getItem(DENSITY_KEY) === "compact" ? "compact" : "comfortable";
 }
@@ -118,7 +153,7 @@ export function saveThemeMode(accountId: string | null | undefined, m: ThemeMode
 }
 export function loadSkin(accountId?: string | null): AppSkin {
   const v = localStorage.getItem(skinKey(accountId));
-  return v === "console" || v === "neon" ? v : "apple";
+  return v === "console" || v === "neon" || v === "nodeflow" ? v : "apple";
 }
 export function saveSkin(accountId: string | null | undefined, s: AppSkin): void {
   localStorage.setItem(skinKey(accountId), s);

@@ -8,6 +8,7 @@ import {
   loadAccent, loadDensity, loadThemeMode, loadSkin,
   saveAccent, saveDensity, saveThemeMode, saveSkin,
   loadMotion, saveMotion, loadNeonGlow, saveNeonGlow, applyNeonGlow,
+  resolveAccentForSkin,
 } from "../theme/tweaks";
 import { getActiveId } from "../auth/store";
 import { CheckerControls } from "./monitoring/CheckerControls";
@@ -610,7 +611,15 @@ export function ThemeTab() {
     }).catch(() => {});
   };
 
-  const pickSkin = (s: AppSkin) => { setSkin(s); applySkin(s); saveSkin(accountId, s); mirror({ skin: s }); };
+  const pickSkin = (s: AppSkin) => {
+    setSkin(s); applySkin(s); saveSkin(accountId, s);
+    // Дефолтный акцент скина (nodeflow → фирменный зелёный) применяется сразу,
+    // но только если акцент не выбирался явно — saveAccent НЕ зовём, явный
+    // выбор пользователя (ni_accent) остаётся главнее любого дефолта скина.
+    const a = resolveAccentForSkin(s);
+    setAccent(a); applyAccent(a);
+    mirror({ skin: s, accent: a });
+  };
   const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); mirror({ mode: m }); };
   const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); mirror({ accent: a }); };
   const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); mirror({ density: d }); };
@@ -621,6 +630,7 @@ export function ThemeTab() {
     apple: "Системный вид macOS/iOS",
     console: "Моноширинный, консольный",
     neon: "Неон, свечения и градиенты",
+    nodeflow: "Лесная зелень и Inter, как в панели NodeFlow",
   };
 
   return (
