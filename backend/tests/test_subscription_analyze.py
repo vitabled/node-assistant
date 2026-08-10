@@ -68,7 +68,7 @@ def test_analyze_dedups_hosts_and_aggregates_names(monkeypatch):
     """Item 4/5: the same host in several links → ONE row with all its names."""
     import asyncio
 
-    async def fake_fetch(url):
+    async def fake_fetch(url, user_agent=""):
         return "ignored"
 
     cand = {
@@ -207,7 +207,7 @@ def test_analyze_route_empty_input():
 def test_analyze_route_monkeypatched(monkeypatch):
     a = _auth()
 
-    async def _fake(raw):
+    async def _fake(raw, user_agent=""):
         return [{"host": "x.com", "ip": "1.2.3.4",
                  "asn": {"number": 42, "name": "Foo", "website": "https://foo"},
                  "geo_actual": {"cc": "NL", "city": "AMS"}, "geo_registry": {"cc": "NL"}}]
@@ -250,3 +250,76 @@ def test_to_hostings_no_asn_400():
     results = [{"host": "d.com", "ip": "3.3.3.3", "asn": {"number": 0}}]
     assert client.post("/api/subscription-analyze/to-hostings", headers=a,
                        json={"results": results}).status_code == 400
+
+
+# ── Wave-4 PR-4: фиксированный UA, расшифровка IP, источник website ──
+def test_fetch_fixed_user_agent_skips_chain(monkeypatch):
+    """Селектор UA в UI → только этот UA, цепочка не ходит."""
+    import asyncio
+    seen = []
+    _fake_httpx(monkeypatch, lambda ua: b'[{"outbounds":[]}]', seen)
+    body = asyncio.run(sa.fetch_subscription("https://p.example.com/sub", "v2rayNG/1.9.39"))
+    assert seen == ["v2rayNG/1.9.39"]          # ровно один запрос, выбранным UA
+    assert "outbounds" in body                  # тело возвращается как есть
+
+
+def test_resolve_ip_net_and_website_source(monkeypatch):
+    """net-расшифровка из _ip_api попадает в строку; website_source = peeringdb
+    при пустом RDAP и rdap, когда RDAP отдал сайт."""
+    import asyncio
+
+    async def ip_api(ip, c):
+        return {"cc": "US", "city": "NY", "asn_number": 42, "asn_name": "Foo",
+                "net": {"org": "FooNet LLC", "isp": "Foo ISP",
+                        "ptr": "host.foo.example", "hosting": True, "proxy": False}}
+
+    async def rdap_autnum_empty(asn, c):
+        return ("FooNet", "")
+
+    async def peeringdb(asn, c):
+        return "https://foo.example"
+
+    monkeypatch.setattr(sa, "_ip_api", ip_api)
+    monkeypatch.setattr(sa, "_ipwho", None)
+    monkeypatch.setattr(sa, "_rdap_ip_cc", lambda ip, c: asyncio.sleep(0, "US"))
+    monkeypatch.setattr(sa, "_ripestat_cc", lambda ip, c: asyncio.sleep(0, ""))
+    monkeypatch.setattr(sa, "_traceroute_last_hop", lambda ip: asyncio.sleep(0, None))
+    monkeypatch.setattr(sa, "_rdap_autnum", rdap_autnum_empty)
+    monkeypatch.setattr(sa, "_peeringdb_website", peeringdb)
+
+    row = asyncio.run(sa._resolve_ip("1.1.1.1", None, {}))
+    assert row["net"]["org"] == "FooNet LLC"
+    assert row["net"]["ptr"] == "host.foo.example"
+    assert row["net"]["hosting"] is True
+    assert row["asn"]["website"] == "https://foo.example"
+    assert row["asn"]["website_source"] == "peeringdb"
+
+    async def rdap_autnum_site(asn, c):
+        return ("FooNet", "https://rdap-site.example")
+
+    async def peeringdb_unused(asn, c):
+        raise AssertionError("не должен зваться, когда RDAP дал сайт")
+
+    monkeypatch.setattr(sa, "_rdap_autnum", rdap_autnum_site)
+    monkeypatch.setattr(sa, "_peeringdb_website", peeringdb_unused)
+    row = asyncio.run(sa._resolve_ip("1.1.1.1", None, {}))
+    assert row["asn"]["website"] == "https://rdap-site.example"
+    assert row["asn"]["website_source"] == "rdap"
+
+
+def test_analyze_route_passes_user_agent(monkeypatch):
+    a = _auth()
+    seen = {}
+
+    async def _fake(raw, user_agent=""):
+        seen["ua"] = user_agent
+        return [{"host": "x.com", "ip": "1.2.3.4",
+                 "asn": {"number": 1, "name": "", "website": ""},
+                 "geo_actual": {"cc": "", "city": ""}, "geo_registry": {"cc": ""},
+                 "net": {"org": "", "isp": "", "ptr": "", "hosting": False, "proxy": False}}]
+
+    monkeypatch.setattr(sa, "analyze", _fake)
+    r = client.post("/api/subscription-analyze", headers=a,
+                    json={"input": "https://p/sub", "user_agent": "Streisand/1.6.0"})
+    assert r.status_code == 200
+    assert seen["ua"] == "Streisand/1.6.0"

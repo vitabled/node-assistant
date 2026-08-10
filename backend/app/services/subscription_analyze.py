@@ -116,12 +116,15 @@ async def _fetch_once(url: str, user_agent) -> str:
         raise ValueError("Слишком много редиректов подписки")
 
 
-async def fetch_subscription(url: str) -> str:
+async def fetch_subscription(url: str, user_agent: str = "") -> str:
     """Fetch through the UA fallback chain; return the first body that decodes to
     share links, else the first successfully-fetched body. Raises if every UA
-    failed to fetch."""
+    failed to fetch. `user_agent` (Wave-4): фиксированный UA из селектора UI —
+    цепочка не нужна, берём одно тело (расшифровываемое, если повезло)."""
     if not net_guard.is_safe_url(url):
         raise ValueError("URL подписки не разрешён: нужен http(s) с публичным хостом")
+    if user_agent.strip():
+        return await _fetch_once(url, user_agent.strip())
     first_body: Optional[str] = None
     last_err: Optional[Exception] = None
     for ua in _SUB_USER_AGENTS:
@@ -170,7 +173,7 @@ async def _ip_api(ip: str, client: httpx.AsyncClient) -> Optional[dict]:
     try:
         r = await client.get(
             f"http://ip-api.com/json/{ip}",
-            params={"fields": "status,countryCode,city,as,asname,org,isp"},
+            params={"fields": "status,countryCode,city,as,asname,org,isp,reverse,hosting,proxy"},
         )
         d = r.json()
     except Exception:
@@ -183,6 +186,14 @@ async def _ip_api(ip: str, client: httpx.AsyncClient) -> Optional[dict]:
         "city": str(d.get("city") or ""),
         "asn_number": num,
         "asn_name": str(d.get("asname") or name or d.get("org") or ""),
+        # Расшифровка конечного IP (Wave-4): организация/провайдер/PTR/тип.
+        "net": {
+            "org": str(d.get("org") or ""),
+            "isp": str(d.get("isp") or ""),
+            "ptr": str(d.get("reverse") or ""),
+            "hosting": bool(d.get("hosting")),
+            "proxy": bool(d.get("proxy")),
+        },
     }
 
 
@@ -200,6 +211,13 @@ async def _ipwho(ip: str, client: httpx.AsyncClient) -> Optional[dict]:
         "city": str(d.get("city") or ""),
         "asn_number": int(conn.get("asn") or 0),
         "asn_name": str(conn.get("org") or conn.get("isp") or ""),
+        "net": {
+            "org": str(conn.get("org") or ""),
+            "isp": str(conn.get("isp") or ""),
+            "ptr": "",
+            "hosting": False,
+            "proxy": False,
+        },
     }
 
 
@@ -292,11 +310,14 @@ async def _ripestat_cc(ip: str, client: httpx.AsyncClient) -> str:
 
 async def _peeringdb_website(asn: int, client: httpx.AsyncClient) -> str:
     """ASN website from PeeringDB (net?asn=). Fallback for the RDAP autnum website,
-    which is often empty. Fixed public host."""
+    which is often empty. Fixed public host. Анонимные запросы rate-limit'ятся и
+    иногда отвечают HTML-челленджем вместо JSON — оба случая молча пропускаем."""
     if asn <= 0:
         return ""
     try:
         r = await client.get(f"https://www.peeringdb.com/api/net?asn={asn}", timeout=6)
+        if r.status_code != 200 or "json" not in (r.headers.get("content-type") or ""):
+            return ""
         data = r.json().get("data") or []
         if data:
             return str(data[0].get("website") or "")
@@ -358,32 +379,39 @@ async def _resolve_ip(ip: str, client: httpx.AsyncClient, autnum_cache: dict) ->
     asn_number = int(dest.get("asn_number") or 0)
     asn_name = str(dest.get("asn_name") or "")
     website = ""
+    website_source = ""
     if asn_number:
         if asn_number not in autnum_cache:
             reg_name, site = await _rdap_autnum(asn_number, client)
+            src = "rdap" if site else ""
             if not site:
                 site = await _peeringdb_website(asn_number, client)
-            autnum_cache[asn_number] = (reg_name, site)
-        reg_name, website = autnum_cache[asn_number]
+                src = "peeringdb" if site else ""
+            autnum_cache[asn_number] = (reg_name, site, src)
+        reg_name, website, website_source = autnum_cache[asn_number]
         asn_name = asn_name or reg_name
     return {
         "ip": ip,
-        "asn": {"number": asn_number, "name": asn_name, "website": website},
+        "asn": {"number": asn_number, "name": asn_name, "website": website,
+                "website_source": website_source},
         "geo_actual": {"cc": geo_cc or "", "city": geo_city or ""},
         "geo_registry": {"cc": registry_cc},
+        "net": dest.get("net") or {"org": "", "isp": "", "ptr": "",
+                                   "hosting": False, "proxy": False},
     }
 
 
 # ── orchestration ──────────────────────────────────────────────
-async def analyze(raw: str) -> list[dict[str, Any]]:
+async def analyze(raw: str, user_agent: str = "") -> list[dict[str, Any]]:
     """One row per unique target IP. Hosts are deduped by HOSTNAME first (each
     address resolved once — fixes the same host appearing N× and round-robin DNS
     giving different IPs), then merged by resolved IP; the subscription link names
-    for every address on an IP are aggregated (`names`, comma-listed in the UI)."""
+    for every address on an IP are aggregated (`names`, comma-listed in the UI).
+    `user_agent` — фиксированный UA из селектора UI (пусто → цепочка Авто)."""
     kind = classify_input(raw)
     pairs: list[tuple[str, str]] = []       # (host address, link name)
     if kind == "url":
-        links = decode_subscription(await fetch_subscription(raw.strip()))
+        links = decode_subscription(await fetch_subscription(raw.strip(), user_agent))
         for link in links:
             cand = link_to_candidate(link)
             if cand and cand.get("host"):
@@ -419,7 +447,7 @@ async def analyze(raw: str) -> list[dict[str, Any]]:
         return []
 
     sem = asyncio.Semaphore(_LOOKUP_LIMIT)
-    autnum_cache: dict[int, tuple[str, str]] = {}
+    autnum_cache: dict[int, tuple[str, str, str]] = {}
 
     async with httpx.AsyncClient(timeout=_API_TIMEOUT, headers={"User-Agent": _API_UA}) as client:
         async def one(ip: str, g: dict) -> dict:

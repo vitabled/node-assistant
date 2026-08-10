@@ -7,7 +7,8 @@ import { ScanSearch, Loader2, ExternalLink, Plus, AlertTriangle, X } from "lucid
 import { FlagChip } from "./common/FlagChip";
 import { toast } from "./infra/Toast";
 
-interface Asn { number: number; name: string; website: string }
+interface Asn { number: number; name: string; website: string; website_source: string }
+interface Net { org: string; isp: string; ptr: string; hosting: boolean; proxy: boolean }
 interface Row {
   host: string;
   hosts: string[];
@@ -16,18 +17,32 @@ interface Row {
   asn: Asn;
   geo_actual: { cc: string; city: string };
   geo_registry: { cc: string };
+  net: Net;
 }
+
+// User-Agent пресеты (Wave-4): панель отдаёт РАЗНЫЕ форматы под разные UA.
+// "auto" — серверная цепочка (текущее поведение).
+const UA_PRESETS: { v: string; l: string }[] = [
+  { v: "",                    l: "UA: Авто (цепочка)" },
+  { v: "v2rayNG/1.9.39",      l: "v2rayNG" },
+  { v: "Streisand/1.6.0",     l: "Streisand" },
+  { v: "sing-box/1.11.4",     l: "sing-box" },
+  { v: "mihomo/v1.18.7",      l: "Mihomo / Clash" },
+  { v: "Shadowrocket/2.2.9",  l: "Shadowrocket" },
+  { v: "Happ/1.16.0",         l: "Happ" },
+];
 
 export function SubscriptionAnalyze() {
   const [input, setInput] = useState("");
+  const [ua, setUa] = useState("");
   const [rows, setRows] = useState<Row[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(false);
 
   // Resizable columns: table-layout:fixed + <colgroup>; drag a header's right
   // edge to resize. Last column (delete ✕) is fixed and not resizable.
-  const COLS = ["Название", "Хост", "IP", "ASN", "Факт. гео", "Реестр", "Website"];
-  const [widths, setWidths] = useState<number[]>([170, 150, 120, 190, 150, 90, 180]);
+  const COLS = ["Название", "Хост", "IP", "Сеть", "ASN", "Факт. гео", "Реестр", "Website"];
+  const [widths, setWidths] = useState<number[]>([160, 140, 110, 150, 170, 130, 80, 160]);
   const DEL_W = 40;
   const startResize = (i: number, e: ReactMouseEvent) => {
     e.preventDefault();
@@ -49,7 +64,7 @@ export function SubscriptionAnalyze() {
     try {
       const res = await fetch("/api/subscription-analyze", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input: v }),
+        body: JSON.stringify({ input: v, user_agent: ua }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Ошибка анализа");
@@ -88,6 +103,11 @@ export function SubscriptionAnalyze() {
             onKeyDown={e => { if (e.key === "Enter") analyze(); }}
             placeholder="https://sub.example.com/… · example.com · 1.2.3.4"
             spellCheck={false} autoComplete="off" className="input flex-1" />
+          <select value={ua} onChange={e => setUa(e.target.value)} className="selectbox"
+            style={{ width: 170, flex: "none" }}
+            title="User-Agent для загрузки подписки — панели отдают разные форматы под разные UA">
+            {UA_PRESETS.map(p => <option key={p.l} value={p.v}>{p.l}</option>)}
+          </select>
           <button onClick={analyze} disabled={loading || !input.trim()} className="btn btn-primary">
             {loading ? <><Loader2 size={13} className="spin" /> Анализ…</> : <><ScanSearch size={14} /> Проанализировать</>}
           </button>
@@ -134,7 +154,15 @@ export function SubscriptionAnalyze() {
                       <tr key={r.ip + i}>
                         <td className="text-[var(--t-hi)] trunc" title={names}>{names || "—"}</td>
                         <td className="text-[var(--t-mid)] trunc" title={(r.hosts || [r.host]).join(", ")}>{r.host}</td>
-                        <td className="tabular-nums text-[var(--t-low)] trunc">{r.ip}</td>
+                        <td className="tabular-nums text-[var(--t-low)] trunc"
+                          title={r.net?.ptr ? `PTR: ${r.net.ptr}` : undefined}>{r.ip}</td>
+                        <td className="trunc" title={[r.net?.org, r.net?.isp, r.net?.ptr && `PTR: ${r.net.ptr}`].filter(Boolean).join("\n")}>
+                          <span className="flex items-center gap-1.5">
+                            <span className="trunc text-[var(--t-mid)]">{r.net?.org || r.net?.isp || "—"}</span>
+                            {r.net?.hosting && <span className="tag" title="Дата-центр (hosting)">DC</span>}
+                            {r.net?.proxy && <span className="tag" title="Прокси/VPN выход">proxy</span>}
+                          </span>
+                        </td>
                         <td className="text-[var(--t-mid)] trunc" title={r.asn.name}>
                           {r.asn.number
                             ? <><span className="text-[var(--t-hi)]">AS{r.asn.number}</span>{r.asn.name ? ` ${r.asn.name}` : ""}</>
@@ -153,12 +181,13 @@ export function SubscriptionAnalyze() {
                         </td>
                         <td className="trunc">
                           {site
-                            ? <a href={site} target="_blank" rel="noopener noreferrer" title={site}
+                            ? <a href={site} target="_blank" rel="noopener noreferrer"
+                                title={`${site}\nИсточник: ${r.asn.website_source || "?"}`}
                                 className="text-[var(--accent-hi)] inline-flex items-center gap-1">
                                 <ExternalLink size={11} className="shrink-0" />
                                 <span className="trunc">{site.replace(/^https?:\/\//, "").replace(/\/$/, "")}</span>
                               </a>
-                            : <span className="text-[var(--t-faint)]">—</span>}
+                            : <span className="text-[var(--t-faint)]" title="Сайт ASN не найден ни в RDAP, ни в PeeringDB">—</span>}
                         </td>
                         <td>
                           <button onClick={() => setRows(rs => (rs || []).filter((_, j) => j !== i))}

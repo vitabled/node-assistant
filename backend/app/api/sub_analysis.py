@@ -22,12 +22,15 @@ router = APIRouter(prefix="/api/subscription-analyze")
 
 class AnalyzeReq(BaseModel):
     input: str = ""
+    # Фиксированный User-Agent из селектора UI (пусто → цепочка «Авто»).
+    user_agent: str = ""
 
 
 class AsnResult(BaseModel):
     number: int = 0
     name: str = ""
     website: str = ""
+    website_source: str = ""   # rdap | peeringdb | "" — откуда сайт (диагностика)
 
 
 class GeoActual(BaseModel):
@@ -39,6 +42,14 @@ class GeoRegistry(BaseModel):
     cc: str = ""
 
 
+class NetResult(BaseModel):
+    org: str = ""
+    isp: str = ""
+    ptr: str = ""
+    hosting: bool = False
+    proxy: bool = False
+
+
 class AnalyzeResult(BaseModel):
     host: str = ""
     hosts: list[str] = []          # all addresses that resolved to this IP
@@ -47,6 +58,7 @@ class AnalyzeResult(BaseModel):
     asn: AsnResult = AsnResult()
     geo_actual: GeoActual = GeoActual()
     geo_registry: GeoRegistry = GeoRegistry()
+    net: NetResult = NetResult()
 
 
 class ToHostingsReq(BaseModel):
@@ -59,7 +71,7 @@ async def analyze(body: AnalyzeReq) -> dict[str, Any]:
     if not raw:
         raise HTTPException(400, "Укажите URL подписки, домен или IP")
     try:
-        results = await analyzer.analyze(raw)
+        results = await analyzer.analyze(raw, body.user_agent or "")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except Exception:
