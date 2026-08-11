@@ -9,6 +9,7 @@ import { toast } from "./infra/Toast";
 
 interface Asn { number: number; name: string; website: string; website_source: string }
 interface Net { org: string; isp: string; ptr: string; hosting: boolean; proxy: boolean }
+interface Egress { ip: string; cc: string; city: string; org: string; isp: string; as: string; hosting: boolean; proxy: boolean }
 interface Row {
   host: string;
   hosts: string[];
@@ -38,11 +39,14 @@ export function SubscriptionAnalyze() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(false);
+  // Выходной IP по строкам (Wave-4 PR-8): проверка через xray-туннель на backend'е.
+  const [egress, setEgress] = useState<Record<number, { loading?: boolean; data?: Egress; error?: string }>>({});
+  const [lastQuery, setLastQuery] = useState<{ input: string; ua: string } | null>(null);
 
   // Resizable columns: table-layout:fixed + <colgroup>; drag a header's right
   // edge to resize. Last column (delete ✕) is fixed and not resizable.
-  const COLS = ["Название", "Хост", "IP", "Сеть", "ASN", "Факт. гео", "Реестр", "Website"];
-  const [widths, setWidths] = useState<number[]>([160, 140, 110, 150, 170, 130, 80, 160]);
+  const COLS = ["Название", "Хост", "IP (вход)", "IP (выход)", "Сеть", "ASN", "Факт. гео", "Реестр", "Website"];
+  const [widths, setWidths] = useState<number[]>([150, 130, 105, 120, 130, 150, 115, 70, 140]);
   const DEL_W = 40;
   const startResize = (i: number, e: ReactMouseEvent) => {
     e.preventDefault();
@@ -60,7 +64,7 @@ export function SubscriptionAnalyze() {
   const analyze = async () => {
     const v = input.trim();
     if (!v) return;
-    setLoading(true); setRows(null);
+    setLoading(true); setRows(null); setEgress({});
     try {
       const res = await fetch("/api/subscription-analyze", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -69,8 +73,34 @@ export function SubscriptionAnalyze() {
       const data = await res.json();
       if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Ошибка анализа");
       setRows(data.results || []);
+      setLastQuery({ input: v, ua });
     } catch (e) { toast((e as Error).message, "error"); }
     setLoading(false);
+  };
+
+  const checkEgress = async (i: number, host: string) => {
+    if (!lastQuery) return;
+    setEgress(e => ({ ...e, [i]: { loading: true } }));
+    try {
+      const res = await fetch("/api/subscription-analyze/egress", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: lastQuery.input, user_agent: lastQuery.ua, host }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`);
+      setEgress(e => ({ ...e, [i]: { data: d.egress as Egress } }));
+    } catch (err) {
+      setEgress(e => ({ ...e, [i]: { error: (err as Error).message } }));
+    }
+  };
+
+  const checkAllEgress = async () => {
+    if (!rows) return;
+    for (let i = 0; i < rows.length; i++) {
+      if (!egress[i]?.data && !egress[i]?.loading) {
+        await checkEgress(i, rows[i].host);
+      }
+    }
   };
 
   const addToHostings = async () => {
@@ -123,12 +153,20 @@ export function SubscriptionAnalyze() {
           <>
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs text-[var(--t-low)]">{rows.length} серверов · {asnCount} ASN</p>
-              <button onClick={addToHostings} disabled={adding || asnCount === 0} className="btn btn-primary">
-                {adding ? <><Loader2 size={13} className="spin" /> Добавление…</> : <><Plus size={14} /> Добавить в хостинги</>}
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={checkAllEgress} className="btn btn-soft"
+                  disabled={!lastQuery || rows.every((_, i) => egress[i]?.data)}>
+                  {Object.values(egress).some(e => e.loading)
+                    ? <><Loader2 size={13} className="spin" /> Проверка…</>
+                    : "Проверить все выходы"}
+                </button>
+                <button onClick={addToHostings} disabled={adding || asnCount === 0} className="btn btn-primary">
+                  {adding ? <><Loader2 size={13} className="spin" /> Добавление…</> : <><Plus size={14} /> Добавить в хостинги</>}
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="tbl text-xs" style={{ tableLayout: "fixed", width: widths.reduce((a, b) => a + b, 0) + DEL_W }}>
+              <table className="tbl text-xs colborders" style={{ tableLayout: "fixed", width: widths.reduce((a, b) => a + b, 0) + DEL_W }}>
                 <colgroup>
                   {widths.map((w, i) => <col key={i} style={{ width: w }} />)}
                   <col style={{ width: DEL_W }} />
@@ -156,6 +194,34 @@ export function SubscriptionAnalyze() {
                         <td className="text-[var(--t-mid)] trunc" title={(r.hosts || [r.host]).join(", ")}>{r.host}</td>
                         <td className="tabular-nums text-[var(--t-low)] trunc"
                           title={r.net?.ptr ? `PTR: ${r.net.ptr}` : undefined}>{r.ip}</td>
+                        <td className="trunc">
+                          {(() => {
+                            const eg = egress[i];
+                            if (eg?.loading) return <Loader2 size={12} className="spin" style={{ color: "var(--t-faint)" }} />;
+                            if (eg?.data) {
+                              const g = eg.data;
+                              return (
+                                <span className="flex items-center gap-1.5"
+                                  title={[g.org || g.isp, g.as, g.city && `${g.city}, ${g.cc}`].filter(Boolean).join("\n")}>
+                                  <FlagChip code={g.cc} size={14} />
+                                  <span className="tabular-nums text-[var(--t-hi)] trunc">{g.ip}</span>
+                                  {g.ip !== r.ip && (
+                                    <span className="tag" title="Выход отличается от входа — релей">relay</span>
+                                  )}
+                                </span>
+                              );
+                            }
+                            if (eg?.error) return <span className="text-[var(--warn)] trunc" title={eg.error}>ошибка</span>;
+                            return (
+                              <button type="button" className="btn btn-soft" style={{ padding: "2px 8px", fontSize: 11 }}
+                                disabled={!lastQuery}
+                                title="Проверить выходной IP через туннель этой ноды"
+                                onClick={() => checkEgress(i, r.host)}>
+                                Выход
+                              </button>
+                            );
+                          })()}
+                        </td>
                         <td className="trunc" title={[r.net?.org, r.net?.isp, r.net?.ptr && `PTR: ${r.net.ptr}`].filter(Boolean).join("\n")}>
                           <span className="flex items-center gap-1.5">
                             <span className="trunc text-[var(--t-mid)]">{r.net?.org || r.net?.isp || "—"}</span>
