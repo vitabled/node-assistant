@@ -12,7 +12,7 @@ import { Fragment } from "react";
 import { usePermissions } from "../auth/usePermissions";
 
 export type Tab =
-  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings" | "mihomo" | "configs" | "bridges"
+  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings" | "mihomo" | "configs" | "bridges" | "auto"
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
@@ -52,6 +52,8 @@ const NAV_MAIN: NavItemDef[] = [
   { tab: "traffic",    label: "Трафик",        Icon: Gauge,       domain: "automation" },
   // Мосты между серверами — маршруты в config-профилях панели (Волна 4, PR-6).
   { tab: "bridges",    label: "Мосты",         Icon: Waypoints,   domain: "bridges"    },
+  // Конфигуратор XRAY_JSON-шаблонов подписки (Волна 4, PR-7).
+  { tab: "auto",       label: "Авто",          Icon: FileJson,    domain: "configs"    },
 ];
 
 const STATS_TABS: NavItemDef[] = [
