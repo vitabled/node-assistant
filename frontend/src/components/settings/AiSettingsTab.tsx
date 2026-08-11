@@ -320,7 +320,7 @@ export function AiSettingsTab() {
               <span className="micro" title="Сколько обращений к модели за один ответ">
                 Шагов агента
               </span>
-              <input type="number" min={1} max={40} className="input" value={cfg.max_steps} disabled={saving}
+              <input type="number" min={1} max={200} className="input" value={cfg.max_steps} disabled={saving}
                 onChange={e => patchCfg({ max_steps: Number(e.target.value) })} />
             </label>
             <label className="flex flex-col gap-1 w-32">
