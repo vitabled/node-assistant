@@ -12,7 +12,7 @@ import { Fragment } from "react";
 import { usePermissions } from "../auth/usePermissions";
 
 export type Tab =
-  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings" | "mihomo" | "configs"
+  | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings" | "mihomo" | "configs" | "bridges"
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
@@ -37,19 +37,21 @@ export type Tab =
 type PermDomain =
   | "deploy" | "panel" | "certs" | "hosts" | "configs" | "automation" | "assistant"
   | "monitoring" | "stats" | "hostings" | "billing" | "cloudflare" | "haproxy"
-  | "library" | "vault" | "settings";
+  | "library" | "vault" | "settings" | "bridges";
 
 export interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon; domain: PermDomain }
 
 const NAV_MAIN: NavItemDef[] = [
-  // Дешборд — статус-страница чекера и доступности серверов, отсюда monitoring.
-  { tab: "dashboard",  label: "Дешборд",       Icon: Activity,    domain: "monitoring" },
+  // Дашборд — статус-страница чекера и доступности серверов, отсюда monitoring.
+  { tab: "dashboard",  label: "Дашборд",       Icon: Activity,    domain: "monitoring" },
   { tab: "deploy",     label: "Деплой ноды",   Icon: Rocket,      domain: "deploy"     },
   { tab: "certs",      label: "Управление SSL", Icon: ShieldCheck, domain: "certs"     },
   { tab: "templates",  label: "Шаблоны",       Icon: FileCode2,   domain: "deploy"     },
   { tab: "hosts",      label: "Хосты",         Icon: Network,     domain: "hosts"      },
   // Лимиты трафика — те же `/api/traffic-rules`, что и правила автоматизации.
   { tab: "traffic",    label: "Трафик",        Icon: Gauge,       domain: "automation" },
+  // Мосты между серверами — маршруты в config-профилях панели (Волна 4, PR-6).
+  { tab: "bridges",    label: "Мосты",         Icon: Waypoints,   domain: "bridges"    },
 ];
 
 const STATS_TABS: NavItemDef[] = [
