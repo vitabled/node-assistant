@@ -76,7 +76,12 @@ class SSHSession:
                 username=self.username,
                 **auth,
                 known_hosts=None,
-                server_host_key_algs=["ssh-rsa", "ecdsa-sha2-nistp256", "ssh-ed25519"],
+                # ⚠️ НЕ ограничиваем алгоритмы хост-ключа: жёсткий список без
+                # rsa-sha2-256/512 рвал подключение к современным серверам
+                # (OpenSSH ≥ 8.8 отключил ssh-rsa/SHA-1), с которыми обычный
+                # ssh-клиент работает без вопросов. None = все поддерживаемые
+                # asyncssh алгоритмы (вкл. rsa-sha2, ecdsa, ed25519).
+                server_host_key_algs=None,
                 # Keep-alive so long-running installs don't disconnect
                 keepalive_interval=30,
                 keepalive_count_max=10,
