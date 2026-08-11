@@ -16,6 +16,7 @@ export type Tab =
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
+  | "obhod-regru" | "obhod-beeline"
   | "haproxy-overview" | "haproxy-nodes" | "haproxy-routes" | "haproxy-traffic"
   | "haproxy-firewall" | "haproxy-releases"
   | "hostings-map" | "hostings-list" | "subscription-analyze" | "library" | "vault"
@@ -84,6 +85,12 @@ const RW_TABS: NavItemDef[] = [
   { tab: "configs",      label: "Конфиги",              Icon: FileJson,       domain: "configs" },
 ];
 
+// Группа «Обходы БС» (Волна 4, PR-9): инструменты обхода через белые хостинги/CDN.
+const OBHOD_TABS: NavItemDef[] = [
+  { tab: "obhod-regru",   label: "REGRU хостинг", Icon: Globe, domain: "panel"   },
+  { tab: "obhod-beeline", label: "Beeline CDN",   Icon: Cloud, domain: "configs" },
+];
+
 // Группа «HAPROXY» — прокси к панели NodeFlow (управление HAProxy-нодами).
 // «Обзор» и «Трафик» перенесены в «Статистику»; «Настройки» — в Настройки → «HAProxy».
 const HAPROXY_TABS: NavItemDef[] = [
@@ -134,6 +141,7 @@ const GROUPS: { title: string; items: NavItemDef[] }[] = [
   { title: "Статистика",     items: STATS_TABS      },
   { title: "Автоматизация",  items: AUTOMATION_TABS },
   { title: "Remnawave",      items: RW_TABS         },
+  { title: "Обходы БС",      items: OBHOD_TABS      },
   { title: "HAPROXY",        items: HAPROXY_TABS    },
   { title: "Справка",        items: HOSTINGS_TABS   },
   { title: "Cloudflare",     items: CF_TABS         },

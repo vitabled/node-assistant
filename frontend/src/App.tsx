@@ -25,6 +25,8 @@ import { RuleBuilder }                      from "./components/automation/RuleBu
 import { Notifications }                    from "./components/automation/Notifications";
 import { AiChat }                           from "./components/automation/AiChat";
 import { Migration }                        from "./components/rw/Migration";
+import { RegruTool }                        from "./components/obhod/RegruTool";
+import { BeelineCdnTool }                   from "./components/obhod/BeelineCdnTool";
 import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
 import { PanelVariables }                  from "./components/rw/PanelVariables";
@@ -122,6 +124,8 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "rw-backup":       ["Remnawave", "Резервное копирование"],
   "rw-migration":    ["Remnawave", "Миграция"],
   "rw-profiles":     ["Remnawave", "Профили"],
+  "obhod-regru":     ["Обходы БС", "REGRU хостинг"],
+  "obhod-beeline":   ["Обходы БС", "Beeline CDN"],
   "mihomo":          ["Remnawave", "Mihomo"],
   "configs":         ["Remnawave", "Пользовательские конфиги"],
   "haproxy-overview": ["Статистика", "HAProxy: обзор"],
@@ -334,6 +338,9 @@ export default function App() {
           {tab === "rw-profiles"  && <Profiles />}
           {tab === "mihomo"       && <MihomoEditor />}
           {tab === "configs"      && <ConfigTemplates />}
+
+          {tab === "obhod-regru"   && <RegruTool />}
+          {tab === "obhod-beeline" && <BeelineCdnTool />}
 
           {tab === "haproxy-overview" && <HaproxyOverview />}
           {tab === "haproxy-nodes"    && <HaproxyNodes />}

@@ -284,6 +284,8 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
                        "*": "configs.edit"}),
     ("/api/xray-templates", {"GET": "configs.view", "POST": "configs.create",
                              "*": "configs.edit"}),
+    # Обходы БС: Beeline-инструмент правит хосты панели — configs, как хосты.
+    ("/api/obhod", {"GET": "configs.view", "*": "configs.edit"}),
 
     # ── мосты: правка routing в config-профилях панели (затрагивает всех её
     # пользователей) — create/edit на уровне оператора, как automation.

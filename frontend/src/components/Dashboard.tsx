@@ -7,6 +7,7 @@ import {
 import { FlagChip } from "./common/FlagChip";
 import { ImportFromSubscription } from "./ImportFromSubscription";
 import { resolveCountryCode, splitFlagEmoji } from "../utils/countryAliases";
+import { nodeColorLookup } from "../utils/nodeColors";
 import { Page } from "../theme/ui";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
@@ -815,8 +816,12 @@ function NodeRow({ node, cc, ticks, trailing }: {
   // Pull it out: it's more specific than the group's flag, and left inline it
   // would render as two bare letters on Windows.
   const own = splitFlagEmoji(node.name);
+  // Цветовая маркировка (Wave-4 PR-9): тот же цвет, что у карточки деплоя,
+  // по совпадению домена/IP (имя ноды часто содержит домен).
+  const markHex = nodeColorLookup()(node.ip || node.name, node.ip);
   return (
-    <div className="ni-noderow flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--row-hover)]">
+    <div className="ni-noderow flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--row-hover)]"
+      style={markHex ? { borderLeft: `3px solid ${markHex}`, paddingLeft: 13 } : undefined}>
       {/* name + protocol */}
       <div className="ni-node-name flex items-center gap-2 min-w-0 w-52 shrink-0">
         <FlagChip code={own.code || cc} size={18} />
