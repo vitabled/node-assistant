@@ -13,6 +13,7 @@ import { CertsForm, type CertsFormData }  from "./components/CertsForm";
 import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
 import { Bridges }                        from "./components/bridges/Bridges";
+import { AutoTemplate }                   from "./components/auto/AutoTemplate";
 import { UsersStats }                      from "./components/stats/UsersStats";
 import { SpeedTests }                      from "./components/stats/SpeedTests";
 import { Placeholder }                     from "./components/rw/Placeholder";
@@ -108,6 +109,7 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "hosts":           ["Node Installer", "Хосты"],
   "traffic":         ["Node Installer", "Трафик"],
   "bridges":         ["Node Installer", "Мосты"],
+  "auto":            ["Node Installer", "Авто"],
   "settings":        ["Node Installer", "Настройки"],
   "stats-users":     ["Статистика", "Пользователи"],
   "stats-speedtests": ["Статистика", "Тесты скорости"],
@@ -316,6 +318,7 @@ export default function App() {
           {tab === "settings" && <Settings />}
           {tab === "traffic" && <TrafficRules />}
           {tab === "bridges" && <Bridges />}
+          {tab === "auto" && <AutoTemplate />}
           {tab === "stats-users" && <UsersStats />}
           {tab === "stats-speedtests" && <SpeedTests />}
 

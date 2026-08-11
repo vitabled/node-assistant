@@ -282,6 +282,8 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/subpages/baselines", {"GET": "configs.view", "*": "configs.execute"}),
     ("/api/subpages", {"GET": "configs.view", "POST": "configs.create",
                        "*": "configs.edit"}),
+    ("/api/xray-templates", {"GET": "configs.view", "POST": "configs.create",
+                             "*": "configs.edit"}),
 
     # ── мосты: правка routing в config-профилях панели (затрагивает всех её
     # пользователей) — create/edit на уровне оператора, как automation.
