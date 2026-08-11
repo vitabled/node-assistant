@@ -138,6 +138,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl tbody tr{transition:background .1s}
 .tbl tbody tr:hover{background:var(--row-hover)}
 .tbl .r{text-align:right} .tbl .c{text-align:center}
+/* Видимые границы столбцов (модификатор; базовая таблица — hairline-строки). */
+.tbl.colborders thead th:not(:last-child),
+.tbl.colborders tbody td:not(:last-child){border-right:1px solid var(--line-soft)}
 
 /* ── nav ── */
 .navitem{display:flex;align-items:center;gap:10px;width:100%;padding:var(--nav-py) 10px;
