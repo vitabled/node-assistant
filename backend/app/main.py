@@ -52,6 +52,7 @@ from app.api import (
     users as users_router,
     roles as roles_router,
     audit as audit_router,
+    bridges,
 )
 from app.api.auth import require_identity as require_account
 from app.services import job_runner, shared_task_store, worker_lease
@@ -187,6 +188,7 @@ app.include_router(media.router, dependencies=_auth)
 app.include_router(users_router.router, dependencies=_auth)
 app.include_router(roles_router.router, dependencies=_auth)
 app.include_router(audit_router.router, dependencies=_auth)
+app.include_router(bridges.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.

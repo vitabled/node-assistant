@@ -44,6 +44,7 @@ DOMAINS: dict[str, tuple[str, ...]] = {
     "certs":      (VIEW, CREATE, EDIT, EXECUTE),   # SSL и домены
     "hosts":      (VIEW, CREATE, EDIT),            # шаблоны хостов
     "configs":    (VIEW, CREATE, EDIT, EXECUTE),   # конфиги клиентов, страницы подписок
+    "bridges":    (VIEW, CREATE, EDIT, EXECUTE),   # мосты: маршруты в профилях панели
     "automation": (VIEW, CREATE, EDIT, EXECUTE),   # правила, лимиты трафика
     "assistant":  (VIEW, EDIT, EXECUTE),           # ИИ-агент: смотреть, настроить, спросить
     "monitoring": (VIEW, CREATE, EDIT, EXECUTE),   # чекер, подписки, доступность серверов
@@ -82,6 +83,7 @@ DOMAIN_TITLES: dict[str, str] = {
     "certs": "Сертификаты и домены",
     "hosts": "Шаблоны хостов",
     "configs": "Конфиги и страницы подписок",
+    "bridges": "Мосты между серверами",
     "automation": "Автоматизация",
     "assistant": "ИИ-ассистент",
     "monitoring": "Мониторинг и доступность",
@@ -262,6 +264,8 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     # Выгрузка отдаёт приватный ключ — это раскрытие секрета, а не чтение данных.
     ("/api/certs/download", {"*": ("vault.reveal", _CREDS)}),
     ("/api/certs/deploy", {"*": ("certs.execute", _CREDS)}),
+    # Автоскан доменов: ходит по SSH — тот же класс действия и креды, что деплой.
+    ("/api/certs/scan-domains", {"*": ("certs.execute", _CREDS)}),
     ("/api/domains", {"GET": "certs.view", "POST": "certs.create",
                       "*": "certs.edit"}),
 
@@ -278,6 +282,11 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/subpages/baselines", {"GET": "configs.view", "*": "configs.execute"}),
     ("/api/subpages", {"GET": "configs.view", "POST": "configs.create",
                        "*": "configs.edit"}),
+
+    # ── мосты: правка routing в config-профилях панели (затрагивает всех её
+    # пользователей) — create/edit на уровне оператора, как automation.
+    ("/api/bridges", {"GET": "bridges.view", "POST": "bridges.create",
+                      "DELETE": "bridges.edit", "*": "bridges.edit"}),
 
     # ── автоматизация ────────────────────────────────────────
     # ⚠️ Правило выполняется фоновым `rules_loop` — вне запроса и вне привилегий.

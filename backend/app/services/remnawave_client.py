@@ -43,6 +43,11 @@ class RemnavaveClient:
             "Content-Type": "application/json",
         }
 
+    @property
+    def base_url(self) -> str:
+        """Публичный адрес панели (для ссылок подписки — /api/sub/…)."""
+        return self._base
+
     # ── Core HTTP helper ───────────────────────────────────────
 
     async def _req(self, method: str, path: str, **kwargs: Any) -> Any:
@@ -564,6 +569,15 @@ class RemnavaveClient:
         return _unwrap(
             await self._req("POST", f"/api/users/{user_uuid}/actions/enable")
         )
+
+    async def get_user_by_username(self, username: str) -> dict:
+        """GET /api/users/by-username/{username} → объект пользователя (404 →
+        RemnavaveError(404), вызывающий решает)."""
+        return _unwrap(await self._req("GET", f"/api/users/by-username/{username}"))
+
+    async def create_user(self, body: dict) -> dict:
+        """POST /api/users — создание пользователя (обязательные username+expireAt)."""
+        return _unwrap(await self._req("POST", "/api/users", json=body))
 
     async def disable_user(self, user_uuid: str) -> dict:
         """POST /api/users/{uuid}/actions/disable (no body). Idempotent server-side."""

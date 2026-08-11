@@ -51,7 +51,7 @@ afterEach(() => { cleanup(); allow = () => true; });
 describe("Sidebar", () => {
   it("renders the main navigation items", () => {
     renderSidebar();
-    for (const label of ["Дешборд", "Деплой ноды", "Управление SSL", "Шаблоны", "Хосты", "Трафик", "Настройки"]) {
+    for (const label of ["Дашборд", "Деплой ноды", "Управление SSL", "Шаблоны", "Хосты", "Трафик", "Настройки"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
@@ -82,7 +82,7 @@ describe("Sidebar", () => {
   it("renders the Управление group with its exact tabs, in order", () => {
     renderSidebar();
     expect(groupItems("Управление")).toEqual([
-      "Дешборд", "Деплой ноды", "Управление SSL", "Шаблоны", "Хосты", "Трафик",
+      "Дашборд", "Деплой ноды", "Управление SSL", "Шаблоны", "Хосты", "Трафик", "Мосты",
     ]);
   });
 
@@ -153,7 +153,7 @@ describe("Sidebar permission gate", () => {
   it("renders nothing but the brand for a user without a single view privilege", () => {
     allow = () => false;
     renderSidebar();
-    expect(screen.queryByText("Дешборд")).toBeNull();
+    expect(screen.queryByText("Дашборд")).toBeNull();
     expect(screen.queryByText("Управление")).toBeNull();
     // бренд остаётся — иначе колонка выглядит как сбой отрисовки
     expect(screen.getByText("Node Installer")).toBeInTheDocument();
