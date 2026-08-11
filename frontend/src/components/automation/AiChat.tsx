@@ -283,8 +283,11 @@ export function AiChat() {
     // отъедала половину ширины.
     <div className="flex flex-1 min-h-0 relative">
       {panelOpen && (
-        <aside className="ni-ai-sessions shrink-0 w-56 flex flex-col min-h-0 border-r"
-          style={{ borderColor: "var(--line-soft)", background: "var(--bg2)" }}
+        // Панель-«карточка» как в Claude Desktop: отступ от краёв, рамка
+        // целиком, скруглённые углы; overflow:hidden обрезает контент по
+        // закруглению (раньше — панель впол роста с border-r, рамка рвалась).
+        <aside className="ni-ai-sessions shrink-0 w-56 flex flex-col min-h-0 m-2 rounded-xl border"
+          style={{ borderColor: "var(--line)", background: "var(--bg2)", overflow: "hidden" }}
           data-testid="ai-sessions">
           <div className="p-2 shrink-0">
             <button disabled={busy} onClick={() => commit(newSession(store))}
