@@ -312,3 +312,177 @@ async def delete_overlay_file(page_id: str, relpath: str):
         raise HTTPException(422, str(exc))
     if not ok:
         raise HTTPException(404, "Файл не найден")
+
+
+# ══════════════════════════════════════════════════════════════
+# Редактор РАЗВЁРНУТОЙ страницы (Wave-4 PR-10)
+#
+# Реально развёрнутая подписочная страница живёт на сервере панели: контейнер
+# `remnawave-subscription-page` с bind-mount'ом (директория ./frontend или
+# одиночный index.html) либо страницей из образа (builtin — нечего править,
+# предлагаем задеплоить вариант). Эти эндпоинты читают и ПИШУТ файлы по SSH
+# (креды per-request, не хранятся). Запись — атомарная (tmp+mv), с бэкапом
+# прежней версии в .nai-backup/<timestamp>/ и опциональным рестартом контейнера.
+# ══════════════════════════════════════════════════════════════
+
+class DeployedCreds(BaseModel):
+    ip: str
+    ssh_port: int = 22
+    ssh_user: str = "root"
+    ssh_password: str = Field(..., min_length=1)
+
+
+class DeployedRead(DeployedCreds):
+    path: str
+
+
+class DeployedWrite(DeployedRead):
+    content: str = ""
+    restart: bool = True
+
+
+# Путь внутри mount-директории: относительный, без обхода и абсолютов.
+_REL_OK = re.compile(r"^[A-Za-z0-9._\-/]+$")
+
+
+def _rel_ok(p: str) -> bool:
+    return bool(p) and not p.startswith("/") and ".." not in p.split("/") and bool(_REL_OK.match(p))
+
+
+_INSPECT_SCRIPT = r"""
+set -u
+CONT=remnawave-subscription-page
+docker inspect "$CONT" >/dev/null 2>&1 || { echo "MODE=missing"; exit 0; }
+# mount с Destination /opt/app/frontend (директория) или .../index.html (файл)
+LINE=$(docker inspect -f '{{range .Mounts}}{{.Source}}|{{.Destination}}{{"\n"}}{{end}}' "$CONT" \
+  | grep -E '\|/opt/app/frontend(/index\.html)?$' | head -1 || true)
+if [ -z "$LINE" ]; then
+  echo "MODE=builtin"
+  exit 0
+fi
+SRC="${LINE%%|*}"; DST="${LINE##*|}"
+if [ "$DST" = "/opt/app/frontend/index.html" ]; then
+  echo "MODE=file"
+  echo "MOUNT=$SRC"
+  if [ -f "$SRC" ]; then
+    BYTES=$(stat -c %s "$SRC" 2>/dev/null || echo 0)
+    echo "FILE=index.html|$BYTES"
+  fi
+else
+  echo "MODE=dir"
+  echo "MOUNT=$SRC"
+  if [ -d "$SRC" ]; then
+    find "$SRC" -type f -printf '%P|%s\n' | head -200
+  fi
+fi
+"""
+
+
+def _parse_inspect(out: str) -> dict:
+    lines = [l for l in out.splitlines() if l.strip()]
+    mode = "builtin"
+    mount = ""
+    files = []
+    for l in lines:
+        if l.startswith("MODE="):
+            mode = l[5:].strip()
+        elif l.startswith("MOUNT="):
+            mount = l[6:].strip()
+        elif l.startswith("FILE=") or ("|" in l and not l.startswith(("MODE", "MOUNT"))):
+            rel, _, size = (l[5:] if l.startswith("FILE=") else l).rpartition("|")
+            if _rel_ok(rel):
+                try:
+                    files.append({"path": rel, "size": int(size)})
+                except ValueError:
+                    pass
+    return {"mode": mode, "mount": mount, "files": files}
+
+
+async def _ssh_run(creds: DeployedCreds, script: str, timeout: float = 60) -> str:
+    ssh = SSHSession(creds.ip, creds.ssh_port, creds.ssh_user, creds.ssh_password)
+    try:
+        await ssh.connect()
+        return await ssh.get_script_output(script, timeout=timeout)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"SSH-операция не удалась: {exc}")
+    finally:
+        await ssh.close()
+
+
+@router.post("/deployed/inspect")
+async def deployed_inspect(body: DeployedCreds) -> dict:
+    """Режим развёртывания + список файлов развёрнутой страницы."""
+    out = await _ssh_run(body, _INSPECT_SCRIPT)
+    return _parse_inspect(out)
+
+
+@router.post("/deployed/read")
+async def deployed_read(body: DeployedRead) -> dict:
+    """Содержимое файла из mount-директории (mode=dir или единственный index.html)."""
+    if not _rel_ok(body.path):
+        raise HTTPException(422, "Недопустимый путь")
+    # Читаем только под mount'ом; base64 чтобы не ломать бинарные/юникод.
+    script = rf"""\
+LINE=$(docker inspect -f '{{{{range .Mounts}}}}{{{{.Source}}}}|{{{{.Destination}}}}{{{{"\n"}}}}{{{{end}}}}' remnawave-subscription-page \
+  | grep -E '\|/opt/app/frontend(/index\.html)?$' | head -1 || true)
+[ -n "$LINE" ] || {{ echo "__NAI_ERR__страница встроена в образ — править нечего"; exit 0; }}
+SRC="${{LINE%%|*}}"
+if [ -d "$SRC" ]; then
+  [ -f "$SRC/{body.path}" ] && base64 "$SRC/{body.path}" || echo "__NAI_ERR__файл не найден"
+elif [ -f "$SRC" ] && [ "{body.path}" = "index.html" ]; then
+  base64 "$SRC"
+else
+  echo "__NAI_ERR__файл не найден"
+fi
+"""
+    out = await _ssh_run(body, script)
+    if out.startswith("__NAI_ERR__"):
+        raise HTTPException(404, out[len("__NAI_ERR__"):])
+    import base64 as _b64
+    try:
+        data = _b64.b64decode(out.strip(), validate=True)
+    except Exception:
+        raise HTTPException(502, "Не удалось прочитать файл (повреждён ответ)")
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(413, "Файл больше 2 МиБ — правьте на сервере")
+    return {"path": body.path, "content": data.decode("utf-8", "replace")}
+
+
+@router.post("/deployed/write")
+async def deployed_write(body: DeployedWrite) -> dict:
+    """Атомарная запись файла + бэкап прежней версии + опциональный рестарт."""
+    if not _rel_ok(body.path):
+        raise HTTPException(422, "Недопустимый путь")
+    import base64 as _b64
+    b64 = _b64.b64encode(body.content.encode("utf-8")).decode()
+    script = rf"""\
+set -e
+LINE=$(docker inspect -f '{{{{range .Mounts}}}}{{{{.Source}}}}|{{{{.Destination}}}}{{{{"\n"}}}}{{{{end}}}}' remnawave-subscription-page \
+  | grep -E '\|/opt/app/frontend(/index\.html)?$' | head -1 || true)
+[ -n "$LINE" ] || {{ echo "__NAI_ERR__страница встроена в образ — править нечего"; exit 1; }}
+SRC="${{LINE%%|*}}"
+DST="$SRC/{body.path}"
+[ -d "$SRC" ] || DST="$SRC"
+[ -f "$SRC" ] && [ "{body.path}" != "index.html" ] && {{ echo "__NAI_ERR__режим одиночного файла: правится только index.html"; exit 1; }}
+mkdir -p "$(dirname "$DST")" "$SRC/.nai-backup/$(date +%s)"
+if [ -f "$DST" ]; then
+  cp "$DST" "$SRC/.nai-backup/$(date +%s)/{body.path.replace('/', '_')}.bak"
+fi
+TMP="$DST.nai-tmp"
+base64 -d > "$TMP" <<'NAI_B64'
+{b64}
+NAI_B64
+mv "$TMP" "$DST"
+echo "WROTE=$DST"
+{"docker restart remnawave-subscription-page >/dev/null 2>&1 && echo RESTARTED=1 || echo RESTARTED=0" if body.restart else "echo RESTARTED=skipped"}
+"""
+    out = await _ssh_run(body, script, timeout=90)
+    if "__NAI_ERR__" in out:
+        raise HTTPException(502, out.split("__NAI_ERR__")[-1].strip())
+    return {
+        "ok": "WROTE=" in out,
+        "restarted": "RESTARTED=1" in out,
+        "output": out[-500:],
+    }
