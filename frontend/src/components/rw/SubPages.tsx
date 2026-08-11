@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { FileCode, Upload, Trash2, Loader2, Plus, Eye } from "lucide-react";
+import { DeployedEditor } from "./DeployedEditor";
 
 // Ф5 — catalogue of Orion subscription-page HTML files. Orion ships the
 // subscription page as ONE build-less index.html; here the account uploads/pastes
@@ -46,6 +47,7 @@ function useIsNarrow(): boolean {
 }
 
 export function SubPages() {
+  const [section, setSection]     = useState<"catalog" | "deployed">("catalog");
   const [pages, setPages]           = useState<Page[]>([]);
   const [loading, setLoading]       = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -135,20 +137,35 @@ export function SubPages() {
         <div className="flex items-center justify-between mb-6 ni-pagehead">
           <div>
             <h1 className="h1">Страницы подписок</h1>
-            <p className="sub">Каталог HTML-страниц Orion для страницы подписок Remnawave</p>
+            <p className="sub">Каталог HTML-страниц и редактор реально развёрнутой страницы</p>
           </div>
-          <div className="flex items-center gap-2 ni-pagehead-actions">
-            <button onClick={() => { setPasteOpen(o => !o); setErr(""); }} className="btn btn-soft">
-              <Plus size={13} /> Вставить HTML
-            </button>
-            <button onClick={() => fileRef.current?.click()} className="btn btn-primary" disabled={busy}>
-              {busy ? <Loader2 size={13} className="spin" /> : <Upload size={13} />} Загрузить HTML
-            </button>
-            <input ref={fileRef} type="file" accept=".html,.htm,text/html"
-              style={{ display: "none" }} onChange={onFile} />
+          {section === "catalog" && (
+            <div className="flex items-center gap-2 ni-pagehead-actions">
+              <button onClick={() => { setPasteOpen(o => !o); setErr(""); }} className="btn btn-soft">
+                <Plus size={13} /> Вставить HTML
+              </button>
+              <button onClick={() => fileRef.current?.click()} className="btn btn-primary" disabled={busy}>
+                {busy ? <Loader2 size={13} className="spin" /> : <Upload size={13} />} Загрузить HTML
+              </button>
+              <input ref={fileRef} type="file" accept=".html,.htm,text/html"
+                style={{ display: "none" }} onChange={onFile} />
+            </div>
+          )}
+        </div>
+
+        <div className="mb-5" style={{ width: "fit-content" }}>
+          <div className="seg">
+            <button type="button" className={section === "catalog" ? "on" : ""}
+              onClick={() => setSection("catalog")}>Каталог</button>
+            <button type="button" className={section === "deployed" ? "on" : ""}
+              data-testid="subpages-tab-deployed"
+              onClick={() => setSection("deployed")}>Развёрнутая страница</button>
           </div>
         </div>
 
+        {section === "deployed" && <DeployedEditor />}
+        {section === "catalog" && (
+          <>
         {pasteOpen && (
           <div className="card card-p mb-4 flex flex-col gap-2">
             <input value={pasteName} onChange={e => { setPasteName(e.target.value); setErr(""); }}
@@ -238,6 +255,8 @@ export function SubPages() {
             )}
           </div>
         </div>
+          </>
+        )}
       </div>
     </div>
   );

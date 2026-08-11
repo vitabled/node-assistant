@@ -280,6 +280,8 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/subpage-configs", {"GET": "configs.view", "POST": "configs.create",
                               "*": "configs.edit"}),
     ("/api/subpages/baselines", {"GET": "configs.view", "*": "configs.execute"}),
+    # Редактор развёрнутой страницы: SSH-креды на каждый запрос (Wave-4 PR-10).
+    ("/api/subpages/deployed", {"*": ("configs.execute", _CREDS)}),
     ("/api/subpages", {"GET": "configs.view", "POST": "configs.create",
                        "*": "configs.edit"}),
     ("/api/xray-templates", {"GET": "configs.view", "POST": "configs.create",
