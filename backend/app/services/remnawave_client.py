@@ -378,6 +378,11 @@ class RemnavaveClient:
         payload = _unwrap(data)
         return payload if isinstance(payload, list) else []
 
+    async def update_host(self, uuid: str, body: dict) -> dict:
+        """PATCH /api/hosts — правка хоста (uuid в теле; поля sni/host/… по
+        UpdateHostRequestDto). Шлём только то, что меняем."""
+        return _unwrap(await self._req("PATCH", "/api/hosts", json={"uuid": uuid, **body}))
+
     async def bulk_disable_hosts(self, uuids: list[str]) -> dict:
         """POST /api/hosts/bulk/disable — body { uuids }. Hides hosts from subs."""
         if not uuids:

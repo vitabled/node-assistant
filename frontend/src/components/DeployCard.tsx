@@ -3,8 +3,9 @@ import {
   X, Square, Server, CheckCircle2, XCircle, Loader2,
   Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck,
   Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
-  ShieldAlert, RefreshCw, Trash2, Wrench, Gauge, Play, ArrowLeftRight,
+  ShieldAlert, RefreshCw, Trash2, Wrench, Gauge, Play, ArrowLeftRight, Palette,
 } from "lucide-react";
+import { NODE_COLOR_PRESETS, colorHex, cardTint, setJobColor } from "../utils/nodeColors";
 import { StepProgress, DEPLOY_STEPS } from "./StepProgress";
 import { TerminalOutput } from "./TerminalOutput";
 import { ReplaceDomainModal } from "./rw/ReplaceDomainModal";
@@ -81,9 +82,11 @@ interface Props {
   onEdit:         (job: DeployJobSummary) => void;
   onRetry:        (job: DeployJobSummary) => Promise<void>;
   onStatusChange: (taskId: string, status: "success" | "failed") => void;
+  /** Цветовая маркировка виджета (null — сброс); родитель обновляет jobs. */
+  onColorChange?: (taskId: string, colorKey: string | null) => void;
 }
 
-export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: Props) {
+export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange, onColorChange }: Props) {
   const [logs,       setLogs]       = useState<string[]>([]);
   const [stepStatus, setStepStatus] = useState<StatusFrame>(
     job.finalStatus
@@ -228,10 +231,23 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
     day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
   });
 
+  // Цветовая маркировка (Wave-4 PR-9): кромка + тинт, хранение в deploy_jobs.
+  const markHex = colorHex((job as { color?: string }).color);
+  const [colorOpen, setColorOpen] = useState(false);
+  const pickColor = (key: string | null) => {
+    // Родитель обновляет jobs (стейт + localStorage); без него — сами в стор.
+    if (onColorChange) onColorChange(job.taskId, key);
+    else setJobColor(job.taskId, key);
+    setColorOpen(false);
+  };
+
   return (
     <>
       <div
         onClick={() => setShowDetail(true)}
+        style={markHex
+          ? { borderLeft: `3px solid ${markHex}`, background: cardTint(markHex) }
+          : undefined}
         className="cursor-pointer rounded-xl border border-[var(--line)] bg-[var(--bg2)]
                    hover:border-[var(--line)] hover:bg-[var(--bg3)] transition-all flex flex-col"
       >
@@ -244,7 +260,40 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange }: P
               <p className="text-xs text-[var(--t-low)]">{job.ip}:{job.newSshPort}</p>
             </div>
           </div>
-          <StatusBadge status={stepStatus.status} isRunning={isRunning} />
+          <div className="flex items-center gap-1">
+            <div className="relative">
+              <button type="button" title="Цвет виджета ноды" data-testid="node-color-btn"
+                onClick={e => { e.stopPropagation(); setColorOpen(o => !o); }}
+                className="iconbtn" style={{ width: 26, height: 26 }}>
+                <Palette size={13} style={markHex ? { color: markHex } : undefined} />
+              </button>
+              {colorOpen && (
+                <div className="absolute right-0 top-8 z-30 rounded-lg border p-2 flex gap-1.5"
+                  style={{ background: "var(--bg1)", borderColor: "var(--line)", boxShadow: "var(--shadow-pop)" }}
+                  onClick={e => e.stopPropagation()}>
+                  {NODE_COLOR_PRESETS.map(p => (
+                    <button key={p.key} type="button" title={p.label}
+                      data-testid={`node-color-${p.key}`}
+                      onClick={() => pickColor(p.key)}
+                      style={{
+                        width: 18, height: 18, borderRadius: 5, background: p.hex,
+                        border: p.key === (job as { color?: string }).color
+                          ? "2px solid var(--t-hi)" : "2px solid transparent",
+                        cursor: "pointer",
+                      }} />
+                  ))}
+                  <button type="button" title="Сбросить цвет" data-testid="node-color-reset"
+                    onClick={() => pickColor(null)}
+                    style={{
+                      width: 18, height: 18, borderRadius: 5, cursor: "pointer",
+                      border: "1px dashed var(--t-low)", background: "transparent",
+                      color: "var(--t-low)", fontSize: 10, lineHeight: 1,
+                    }}>✕</button>
+                </div>
+              )}
+            </div>
+            <StatusBadge status={stepStatus.status} isRunning={isRunning} />
+          </div>
         </div>
 
         {/* Progress bar */}
@@ -698,7 +747,7 @@ function StatusBadge({ status, isRunning }: { status: TaskStatus; isRunning: boo
   if (isRunning) return (
     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px]
                      font-medium bg-[var(--accent-dim)] border border-[var(--accent-line)] text-[var(--accent-hi)] shrink-0">
-      <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-hi)] animate-pulse" /> Работает
+      <span className="dot pulse" style={{ background: "var(--accent-hi)" }} /> Работает
     </span>
   );
   if (status === "success") return (

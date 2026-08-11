@@ -6,6 +6,7 @@ import {
 import { DeployCard } from "./DeployCard";
 import { DeployForm, type FormData } from "./DeployForm";
 import { deployJobsKey } from "../auth/store";
+import { Page } from "../theme/ui";
 
 export interface DeployJobSummary {
   taskId:     string;
@@ -15,6 +16,7 @@ export interface DeployJobSummary {
   startedAt:  number;
   savedForm:  FormData;          // full form data for retry / edit
   finalStatus?: "success" | "failed";
+  color?:     string;            // цветовая маркировка виджета (Wave-4 PR-9)
 }
 
 function loadJobs(): DeployJobSummary[] {
@@ -122,9 +124,23 @@ export function DeployDashboard() {
     });
   };
 
+  // Цветовая маркировка виджета ноды (Wave-4 PR-9).
+  const changeJobColor = (taskId: string, colorKey: string | null) => {
+    setJobs(prev => {
+      const updated = prev.map(j => {
+        if (j.taskId !== taskId) return j;
+        const c = { ...j };
+        if (colorKey) c.color = colorKey;
+        else delete c.color;
+        return c;
+      });
+      saveJobs(updated);
+      return updated;
+    });
+  };
+
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-6xl mx-auto px-6 py-6">
+    <Page max={1152}>
 
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -170,11 +186,11 @@ export function DeployDashboard() {
                 onEdit={j  => setEditJob(j)}
                 onRetry={retryJob}
                 onStatusChange={updateJobStatus}
+                onColorChange={changeJobColor}
               />
             ))}
           </div>
         )}
-      </div>
 
       {/* New deploy modal — pass NO `initial` so DeployForm pulls global
           deploy-defaults (email, Cloudflare token, XHTTP path, …) into the form. */}
@@ -213,7 +229,7 @@ export function DeployDashboard() {
           onSubmit={addJob}
         />
       )}
-    </div>
+    </Page>
   );
 }
 
