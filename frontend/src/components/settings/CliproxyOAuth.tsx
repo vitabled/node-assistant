@@ -90,7 +90,10 @@ export function CliproxyOAuth() {
   };
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-[var(--line-soft)] p-3"
+    <div className="flex flex-col gap-3 rounded-lg border p-3"
+      // Фон обязателен: блок лежит на .card (bg2) — без заливки контейнер
+      // прозрачный, и рамка «висит в воздухе» (было на скрине).
+      style={{ borderColor: "var(--line-soft)", background: "var(--bg1)" }}
       data-testid="cliproxy-oauth">
       <div className="flex items-center gap-2">
         <KeyRound size={14} className="text-[var(--accent-hi)]" />
