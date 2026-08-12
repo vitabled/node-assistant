@@ -108,6 +108,14 @@ async def reorder(body: ReorderBody):
     return {"ok": True, "moved": store.reorder([i.model_dump() for i in body.items])}
 
 
+@router.delete("/files-by-folder")
+async def delete_files_by_folder(folder: str = ""):
+    """Удалить ВСЕ файлы группы (напр. скопированный сайт целиком)."""
+    if not folder.strip():
+        raise HTTPException(422, "Нужна папка")
+    return {"deleted": store.delete_files_by_folder(folder)}
+
+
 @router.get("/files/{item_id}")
 async def download(item_id: str):
     got = store.get_file(item_id)

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Loader2, Upload, FileText, Download, Trash2, Plus, PanelLeft,
-  ChevronDown, ChevronRight, NotebookPen,
+  ChevronDown, ChevronRight, NotebookPen, FolderOpen,
 } from "lucide-react";
 import { toast } from "./infra/Toast";
 import { fmtSize } from "./common/MediaDrop";
@@ -19,6 +19,38 @@ import type { NoteRef } from "./library/markdown";
 // Obsidian layout: folder tree ▸ note editor with live preview ▸ backlinks.
 // Wiki-links (`[[Заметка]]`) and media embeds (`![[media-id]]`) are resolved by
 // the backend/renderer pair — see library/markdown.ts.
+
+// Одна строка файла в секции «Файлы» (вынесена: теперь рендерится и плоско,
+// и внутри групп-папок «Копии сайта»).
+function FileRow({ it, viewing, onOpen, onDownload, onDelete, confirmDel }: {
+  it: LibItem; viewing: LibItem | null;
+  onOpen: () => void; onDownload: () => void; onDelete: () => void;
+  confirmDel: string | null;
+}) {
+  return (
+    <div
+      role="button" tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={e => { if (e.key === "Enter") onOpen(); }}
+      title="Открыть"
+      className={viewing?.id === it.id ? "active" : undefined}
+      style={{
+        display: "flex", alignItems: "center", gap: 6, padding: "3px 6px",
+        borderRadius: "var(--r-sm)", minWidth: 0, cursor: "pointer",
+        background: viewing?.id === it.id ? "var(--bg3)" : undefined,
+      }}>
+      <FileText size={12} style={{ color: "var(--t-low)", flex: "none" }} />
+      <span className="trunc" style={{ flex: 1, fontSize: 12.5, color: "var(--t-mid)" }} title={it.name}>{it.name}</span>
+      <span className="micro" style={{ flex: "none" }}>{it.size == null ? "" : fmtSize(it.size)}</span>
+      <button className="iconbtn" title="Скачать" style={{ width: 22, height: 22 }}
+        onClick={e => { e.stopPropagation(); onDownload(); }}><Download size={12} /></button>
+      <button className="iconbtn" title={confirmDel === it.id ? "Нажмите ещё раз" : "Удалить"}
+        style={{ width: 22, height: 22, color: confirmDel === it.id ? "var(--err)" : undefined }}
+        onClick={e => { e.stopPropagation(); onDelete(); }}><Trash2 size={12} /></button>
+    </div>
+  );
+}
+
 export function Library() {
   const [items, setItems] = useState<LibItem[] | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
@@ -203,6 +235,35 @@ export function Library() {
   const treeFolders = useMemo(() => foldersOf(items ?? []), [items]);
   const files = (items ?? []).filter(i => i.kind === "file");
 
+  // Файлы с папкой («Сайты/<host>-<дата>» из «Копии сайта») группируются по ней;
+  // без папки — плоский список, как раньше.
+  const fileGroups = useMemo(() => {
+    const byFolder = new Map<string, LibItem[]>();
+    const flat: LibItem[] = [];
+    for (const it of files) {
+      const f = (it.folder || "").trim();
+      if (!f) { flat.push(it); continue; }
+      const arr = byFolder.get(f);
+      if (arr) arr.push(it); else byFolder.set(f, [it]);
+    }
+    const groups = [...byFolder.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))        // свежие сайты сверху
+      .map(([folder, items2]) => ({ folder, items: items2 }));
+    return flat.length ? [{ folder: "", items: flat }, ...groups] : groups;
+  }, [files]);
+
+  const delFileGroup = async (folder: string) => {
+    if (!window.confirm(`Удалить группу «${folder}» со всеми файлами?`)) return;
+    try {
+      await fetch(`/api/library/files-by-folder?folder=${encodeURIComponent(folder)}`,
+        { method: "DELETE" }).then(r => r.json());
+      await load();
+      toast("Группа удалена", "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Ошибка удаления группы", "error");
+    }
+  };
+
   const aside = (
     <aside style={{
       display: "flex", flexDirection: "column", gap: 10, minHeight: 0,
@@ -237,26 +298,35 @@ export function Library() {
           <>
             {files.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
-                {files.map(it => (
-                  <div key={it.id}
-                    role="button" tabIndex={0}
-                    onClick={() => { setNote(null); setViewing(it); }}
-                    onKeyDown={e => { if (e.key === "Enter") { setNote(null); setViewing(it); } }}
-                    title="Открыть"
-                    className={viewing?.id === it.id ? "active" : undefined}
-                    style={{
+                {/* Файлы с папкой (напр. скопированные сайты из «Копии сайта»)
+                    группируются по ней; плоские — как раньше, по одному списку. */}
+                {fileGroups.map(g => g.folder === "" ? g.items.map(it => (
+                  <FileRow key={it.id} it={it} viewing={viewing}
+                    onOpen={() => { setNote(null); setViewing(it); }}
+                    onDownload={() => { void download(it); }}
+                    onDelete={() => { void delFile(it.id); }}
+                    confirmDel={confirmDel} />
+                )) : (
+                  <div key={g.folder} style={{ marginTop: 2 }}>
+                    <div style={{
                       display: "flex", alignItems: "center", gap: 6, padding: "3px 6px",
-                      borderRadius: "var(--r-sm)", minWidth: 0, cursor: "pointer",
-                      background: viewing?.id === it.id ? "var(--bg3)" : undefined,
+                      color: "var(--t-low)",
                     }}>
-                    <FileText size={12} style={{ color: "var(--t-low)", flex: "none" }} />
-                    <span className="trunc" style={{ flex: 1, fontSize: 12.5, color: "var(--t-mid)" }} title={it.name}>{it.name}</span>
-                    <span className="micro" style={{ flex: "none" }}>{it.size == null ? "" : fmtSize(it.size)}</span>
-                    <button className="iconbtn" title="Скачать" style={{ width: 22, height: 22 }}
-                      onClick={e => { e.stopPropagation(); void download(it); }}><Download size={12} /></button>
-                    <button className="iconbtn" title={confirmDel === it.id ? "Нажмите ещё раз" : "Удалить"}
-                      style={{ width: 22, height: 22, color: confirmDel === it.id ? "var(--err)" : undefined }}
-                      onClick={e => { e.stopPropagation(); void delFile(it.id); }}><Trash2 size={12} /></button>
+                      <FolderOpen size={12} style={{ flex: "none" }} />
+                      <span className="micro trunc" style={{ flex: 1 }} title={g.folder}>{g.folder} · {g.items.length}</span>
+                      <button className="iconbtn danger" title="Удалить группу целиком"
+                        style={{ width: 20, height: 20 }}
+                        onClick={() => { void delFileGroup(g.folder); }}>
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                    {g.items.map(it => (
+                      <FileRow key={it.id} it={it} viewing={viewing}
+                        onOpen={() => { setNote(null); setViewing(it); }}
+                        onDownload={() => { void download(it); }}
+                        onDelete={() => { void delFile(it.id); }}
+                        confirmDel={confirmDel} />
+                    ))}
                   </div>
                 ))}
               </div>

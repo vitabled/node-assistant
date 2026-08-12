@@ -5,7 +5,7 @@ import {
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
   Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen, FileJson,
   LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package, ScanSearch,
-  Lock, Cloud, Globe,
+  Lock, Cloud, Globe, CloudDownload,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Fragment } from "react";
@@ -19,7 +19,7 @@ export type Tab =
   | "obhod-regru" | "obhod-beeline"
   | "haproxy-overview" | "haproxy-nodes" | "haproxy-routes" | "haproxy-traffic"
   | "haproxy-firewall" | "haproxy-releases"
-  | "hostings-map" | "hostings-list" | "subscription-analyze" | "library" | "vault"
+  | "hostings-map" | "hostings-list" | "subscription-analyze" | "library" | "vault" | "sitecopy"
   | "cf-overview" | "cf-subscriptions" | "cf-usage" | "cf-payments" | "cf-domains"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
   | "infra-payments" | "infra-settings" | "infra-tokens";
@@ -105,6 +105,8 @@ const HOSTINGS_TABS: NavItemDef[] = [
   { tab: "hostings-map",         label: "Карта хостингов", Icon: MapIcon,    domain: "hostings" },
   { tab: "hostings-list",        label: "Хостинги",        Icon: Server,     domain: "hostings" },
   { tab: "subscription-analyze", label: "Анализ подписки", Icon: ScanSearch, domain: "hostings" },
+  // Копия сайта → файлы автоматически в Библиотеку (Волна 4, PR-11).
+  { tab: "sitecopy",             label: "Копия сайта",     Icon: CloudDownload, domain: "library" },
   { tab: "library",              label: "Библиотека",      Icon: BookOpen,   domain: "library"  },
   // Хранилище секретов (Волна 9): пароли/API-ключи/SSH-ключи от внешних ресурсов.
   { tab: "vault",                label: "Хранилище",       Icon: Lock,       domain: "vault"    },

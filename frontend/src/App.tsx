@@ -34,6 +34,7 @@ import { Backup }                          from "./components/rw/Backup";
 import { HostingsCatalog }                from "./components/hostings/HostingsCatalog";
 import { HostingsMap }                     from "./components/hostings/HostingsMap";
 import { SubscriptionAnalyze }             from "./components/SubscriptionAnalyze";
+import { SiteCopy }                        from "./components/hostings/SiteCopy";
 import { Vault }                           from "./components/vault/Vault";
 import { CfOverview }                      from "./components/cloudflare/CfOverview";
 import { CfSubscriptions }                 from "./components/cloudflare/CfSubscriptions";
@@ -137,6 +138,7 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "hostings-map":    ["Справка", "Карта хостингов"],
   "hostings-list":   ["Справка", "Хостинги"],
   "subscription-analyze": ["Справка", "Анализ подписки"],
+  "sitecopy":        ["Справка", "Копия сайта"],
   "library":         ["Справка", "Библиотека"],
   "vault":           ["Справка", "Хранилище"],
   "cf-overview":      ["Cloudflare", "Обзор"],
@@ -352,6 +354,7 @@ export default function App() {
           {tab === "hostings-map"  && <HostingsMap />}
           {tab === "hostings-list" && <HostingsCatalog />}
           {tab === "subscription-analyze" && <SubscriptionAnalyze />}
+          {tab === "sitecopy" && <SiteCopy />}
           {tab === "library" && <Library />}
           {tab === "vault" && <Vault />}
 
