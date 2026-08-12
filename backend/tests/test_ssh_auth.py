@@ -129,3 +129,25 @@ def test_deploy_request_demands_password_or_key():
 
     assert DeployRequest(**_deploy_body(ssh_password="pw")).ssh_password == "pw"
     assert DeployRequest(**_deploy_body(ssh_key_ref="ref-1")).ssh_key_ref == "ref-1"
+
+
+def test_connect_uses_full_default_alg_set(monkeypatch):
+    """asyncssh 2.14: None в server_host_key_algs падает с «No host key
+    algorithms selected»; () = полный набор (rsa-sha2/ecdsa/ed25519). Регрессия
+    по бою: сервер на OpenSSH ≥ 8.8 отклонял рукопожатие."""
+    import asyncio
+    from app.services.ssh_manager import SSHSession
+
+    seen = {}
+
+    async def fake_connect(host, **kwargs):
+        seen.update(kwargs)
+        class _C:
+            pass
+        return _C()
+
+    monkeypatch.setattr("app.services.ssh_manager.asyncssh.connect", fake_connect)
+    ssh = SSHSession("1.2.3.4", 22, "root", "pw")
+    asyncio.run(ssh.connect())
+    assert seen["server_host_key_algs"] == ()
+    assert seen["known_hosts"] is None

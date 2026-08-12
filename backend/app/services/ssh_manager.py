@@ -76,12 +76,14 @@ class SSHSession:
                 username=self.username,
                 **auth,
                 known_hosts=None,
-                # ⚠️ НЕ ограничиваем алгоритмы хост-ключа: жёсткий список без
-                # rsa-sha2-256/512 рвал подключение к современным серверам
-                # (OpenSSH ≥ 8.8 отключил ssh-rsa/SHA-1), с которыми обычный
-                # ssh-клиент работает без вопросов. None = все поддерживаемые
-                # asyncssh алгоритмы (вкл. rsa-sha2, ecdsa, ed25519).
-                server_host_key_algs=None,
+                # ⚠️ В asyncssh 2.14 `server_host_key_algs` НЕЛЬЗЯ передавать
+                # None: _select_algs трактует его как пустой выбор и падает с
+                # «No host key algorithms selected». Пустой кортеж () = полный
+                # набор поддерживаемых алгоритмов (rsa-sha2-256/512, ecdsa,
+                # ed25519 и др.) — это и есть рабочее значение по умолчанию.
+                # Жёсткий список без rsa-sha2 раньше рвал подключение к
+                # серверам на OpenSSH ≥ 8.8 (там ssh-rsa/SHA-1 отключён).
+                server_host_key_algs=(),
                 # Keep-alive so long-running installs don't disconnect
                 keepalive_interval=30,
                 keepalive_count_max=10,
