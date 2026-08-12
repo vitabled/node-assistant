@@ -379,9 +379,14 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
                             "*": "library.edit"}),
     ("/api/library/upload", {"*": "library.create"}),
     ("/api/library/reorder", {"*": "library.edit"}),
+    ("/api/library/files-by-folder", {"*": "library.edit"}),
     ("/api/library/files", {"GET": "library.view"}),
     ("/api/library/graph", {"GET": "library.view"}),
     ("/api/library", {"GET": "library.view", "*": "library.edit"}),
+
+    # Копия сайта: зеркалирует с сервера и пишет в Библиотеку — create на уровне
+    # library, плюс внешняя сеть (httrack ходит наружу).
+    ("/api/sitecopy", {"*": "library.create"}),
     ("/api/media/upload", {"*": "library.create"}),
     ("/api/media", {"GET": "library.view", "*": "library.edit"}),
 

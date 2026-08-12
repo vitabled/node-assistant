@@ -292,25 +292,80 @@ def reorder(rows: list[dict], account_id: Optional[str] = None) -> int:
     return changed
 
 
-def add_file(name: str, content: bytes, mime: str, account_id: Optional[str] = None) -> dict:
+def add_file(name: str, content: bytes, mime: str, account_id: Optional[str] = None,
+             folder: str = "") -> dict:
     if len(content) > MAX_FILE_BYTES:
         raise ValueError(f"Файл больше {MAX_FILE_BYTES // (1024 * 1024)} МБ")
     with _LOCK:
         items = _read(account_id)
         if len(items) >= MAX_ITEMS:
             raise ValueError(f"Достигнут лимит ({MAX_ITEMS})")
-        fid = uuid.uuid4().hex[:12]
-        safe = _safe(name)
-        files_dir = _dir(account_id) / "files"
-        files_dir.mkdir(parents=True, exist_ok=True)
-        stored = files_dir / f"{fid}_{safe}"
-        stored.write_bytes(content)
-        entry = {"id": fid, "kind": "file", "name": name or safe, "filename": safe,
-                 "mime": mime or "application/octet-stream", "size": len(content),
-                 "path": stored.name, "created_at": int(time.time())}
+        entry = _make_file_entry(name, content, mime, account_id, folder)
         items.append(entry)
         _write(account_id, items)
     return {k: v for k, v in entry.items() if k != "path"}
+
+
+def _make_file_entry(name: str, content: bytes, mime: str,
+                     account_id: Optional[str], folder: str = "") -> dict:
+    """Файл на диск + запись (без записи индекса — для одиночного и bulk путей)."""
+    fid = uuid.uuid4().hex[:12]
+    safe = _safe(name)
+    files_dir = _dir(account_id) / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
+    stored = files_dir / f"{fid}_{safe}"
+    stored.write_bytes(content)
+    return {"id": fid, "kind": "file", "name": name or safe, "filename": safe,
+            "mime": mime or "application/octet-stream", "size": len(content),
+            "folder": norm_folder(folder),
+            "path": stored.name, "created_at": int(time.time())}
+
+
+def add_files_bulk(files: list[tuple[str, bytes, str]], folder: str,
+                   account_id: Optional[str] = None) -> dict:
+    """Пакетный импорт (напр. файлы скопированного сайта) под ОДНЫМ локом.
+    Вместимость MAX_ITEMS не перепрыгиваем: сколько влезло — столько влезло,
+    остаток честно считаем. Файлы больше MAX_FILE_BYTES пропускаем.
+    Возвращает {imported, skipped_oversize, skipped_cap, folder}."""
+    imported = skipped_oversize = skipped_cap = 0
+    with _LOCK:
+        items = _read(account_id)
+        for name, content, mime in files:
+            if len(content) > MAX_FILE_BYTES:
+                skipped_oversize += 1
+                continue
+            if len(items) >= MAX_ITEMS:
+                skipped_cap += 1
+                continue
+            items.append(_make_file_entry(name, content, mime, account_id, folder))
+            imported += 1
+        if imported or skipped_cap or skipped_oversize:
+            _write(account_id, items)
+    return {"imported": imported, "skipped_oversize": skipped_oversize,
+            "skipped_cap": skipped_cap, "folder": norm_folder(folder)}
+
+
+def delete_files_by_folder(folder: str, account_id: Optional[str] = None) -> int:
+    """Удалить ВСЕ файлы группы (напр. весь скопированный сайт) по папке —
+    записи и сами файлы на диске. Возвращает число удалённых."""
+    target = norm_folder(folder)
+    removed = 0
+    with _LOCK:
+        items = _read(account_id)
+        keep = []
+        for it in items:
+            if it.get("kind") == "file" and it.get("folder") == target:
+                stored = _dir(account_id) / "files" / it.get("path", "")
+                try:
+                    stored.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                removed += 1
+            else:
+                keep.append(it)
+        if removed:
+            _write(account_id, keep)
+    return removed
 
 
 def add_note(name: str, text: str, folder: str = "", account_id: Optional[str] = None) -> dict:

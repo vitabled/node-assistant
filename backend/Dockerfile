@@ -30,6 +30,22 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ── HTTrack (завендоренный исходник) — «Копия сайта» в «Справке» ──
+# zlib — обязательный dep, OpenSSL — для https-зеркалирования (оно нам и нужно).
+COPY vendor/httrack-3.49.20.tar.gz /tmp/httrack.tar.gz
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends zlib1g-dev libssl-dev make \
+    && tar xzf /tmp/httrack.tar.gz -C /tmp \
+    && cd /tmp/httrack-3.49.20 \
+    && ./configure --prefix=/usr/local \
+    && make -j"$(nproc)" \
+    && make install \
+    && cd / \
+    && rm -rf /tmp/httrack-3.49.20 /tmp/httrack.tar.gz \
+    && apt-get purge -y zlib1g-dev libssl-dev \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY app/ ./app/
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]

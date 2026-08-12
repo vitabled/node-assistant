@@ -67,6 +67,13 @@ describe("Sidebar", () => {
     expect(onTabChange).toHaveBeenCalledWith("settings");
   });
 
+  it("renders the Справка group with its exact tabs, in order", () => {
+    renderSidebar();
+    expect(groupItems("Справка")).toEqual([
+      "Карта хостингов", "Хостинги", "Анализ подписки", "Копия сайта", "Библиотека", "Хранилище",
+    ]);
+  });
+
   // Инфра-биллинг — плоская секция, аккордеона нет (CLAUDE.md §4c).
   it("renders the infra group flat, with its exact tabs", () => {
     renderSidebar();
@@ -129,7 +136,7 @@ describe("Sidebar permission gate", () => {
     expect(screen.queryByText("Хранилище")).toBeNull();
     // соседи по группе остаются
     expect(groupItems("Справка")).toEqual([
-      "Карта хостингов", "Хостинги", "Анализ подписки", "Библиотека",
+      "Карта хостингов", "Хостинги", "Анализ подписки", "Копия сайта", "Библиотека",
     ]);
   });
 
