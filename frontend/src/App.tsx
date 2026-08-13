@@ -282,6 +282,14 @@ export default function App() {
   const crumb = CRUMB[tab];
   const rw = RW_VIEW[useRemnawaveStatus()];
 
+  const stopCert = async () => {
+    if (!certTaskId) return;
+    await fetch("/api/certs/stop", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_id: certTaskId }),
+    }).catch(() => {});
+  };
+
   return (
     <div style={{ display: "flex", height: "100%", position: "relative" }}>
       <Toaster />
@@ -378,6 +386,7 @@ export default function App() {
               <div style={{ borderRight: "1px solid var(--line-soft)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
                 <div style={{ padding: 20 }}>
                   <CertsForm onSubmit={deployCert} disabled={certIsRunning}
+                    onStop={certIsRunning ? stopCert : undefined}
                     onDomainsAdded={() => setDomainsRefresh(n => n + 1)} />
                   <div style={{ marginTop: 16 }}>
                     <F2bList />

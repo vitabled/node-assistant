@@ -38,3 +38,24 @@ describe("CertsForm.validate", () => {
     expect(e.ssh_password).toBeTruthy();
   });
 });
+
+// Wave-5 PR-4: кнопка старта подменяется стоп-кнопкой во время деплоя.
+describe("CertsForm stop button", () => {
+  it("показывает «Остановить деплой» и вызывает onStop", async () => {
+    const { render, screen, fireEvent } = await import("@testing-library/react");
+    const { CertsForm } = await import("./CertsForm");
+    const { vi } = await import("vitest");
+    const onStop = vi.fn();
+    render(<CertsForm onSubmit={async () => {}} disabled onStop={onStop} />);
+    const btn = screen.getByText("Остановить деплой");
+    fireEvent.click(btn);
+    expect(onStop).toHaveBeenCalled();
+  });
+
+  it("без onStop во время деплоя — просто disabled «Выполняется...»", async () => {
+    const { render, screen } = await import("@testing-library/react");
+    const { CertsForm } = await import("./CertsForm");
+    render(<CertsForm onSubmit={async () => {}} disabled />);
+    expect(screen.getByText("Выполняется...")).toBeDisabled();
+  });
+});

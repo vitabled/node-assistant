@@ -10,13 +10,14 @@ Sub-steps (streamed via the generic /ws/logs task, own labels — not the 13-ste
 deploy numbering): 1 connect + probe, 2 issue+install, 3 restart services.
 """
 import base64
+import asyncio
 import io
 import re
 import zipfile
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.deploy import DeployCertRequest
 from app.services.task_store import task_store, TaskStatus
@@ -36,6 +37,7 @@ _DOMAIN_RE = re.compile(
 _CERT_FILES = {
     "fullchain": ("/etc/ssl/certs/{d}_fullchain.pem", "{d}_fullchain.pem"),
     "key":       ("/etc/ssl/private/{d}.key",          "{d}.key"),
+    "cert":      ("/etc/ssl/certs/{d}.crt",            "{d}.crt"),
 }
 
 # Labels sent via WebSocket — must match RENEW_STEPS in StepProgress.tsx
@@ -203,10 +205,154 @@ async def _selfsteal_run(req: ScanDomainsRequest, task_id: str) -> None:
 
 
 @router.post("/certs/deploy")
-async def deploy_cert(req: DeployCertRequest, background_tasks: BackgroundTasks):
+async def deploy_cert(req: DeployCertRequest):
     task = task_store.create(total_steps=DEPLOY_TOTAL)
-    background_tasks.add_task(_deploy, req, task.task_id)
+    # create_task (не BackgroundTasks) — иначе останавливать нечего (Wave-5 PR-4).
+    loop_task = asyncio.create_task(_deploy(req, task.task_id))
+    _cert_tasks[task.task_id] = loop_task
+    loop_task.add_done_callback(lambda _: _cert_tasks.pop(task.task_id, None))
     return {"task_id": task.task_id, "task_type": "certs"}
+
+
+# Реестр живых задач деплоя сертификатов — для остановки (Wave-5 PR-4).
+_cert_tasks: dict[str, asyncio.Task] = {}
+
+
+class StopRequest(BaseModel):
+    task_id: str
+
+
+@router.post("/certs/stop")
+async def stop_cert_deploy(req: StopRequest):
+    loop_task = _cert_tasks.get(req.task_id)
+    if loop_task is not None and not loop_task.done():
+        loop_task.cancel()
+        task_store.request_cancel(req.task_id)
+        return {"ok": True}
+    # Задача на воркере (или handle уже утерян): флаг в сторе — воркер сам
+    # отменит свою asyncio-задачу, когда увидит флаг.
+    t = task_store.get(req.task_id)
+    if t and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+        task_store.request_cancel(req.task_id)
+        return {"ok": True}
+    raise HTTPException(404, "Задача не найдена или уже завершена")
+
+
+# ── перенос сертификатов между серверами (Wave-5 PR-4) ─────────
+# Backend читает файлы домена с сервера A (память) и раскладывает на сервере B
+# по тем же путям + letsencrypt-симлинки + reload nginx. Креды обоих серверов —
+# per-request, нигде не сохраняются.
+
+class CredsBody(BaseModel):
+    ip: str
+    ssh_port: int = 22
+    ssh_user: str = "root"
+    ssh_password: str = Field(..., min_length=1)
+
+
+class TransferBody(BaseModel):
+    source: CredsBody
+    target: CredsBody
+    domains: list[str] = Field(..., min_length=1)
+
+    @field_validator("domains")
+    @classmethod
+    def _v_domains(cls, v: list[str]) -> list[str]:
+        out = []
+        for d in v:
+            d = d.strip().lower()
+            if not _DOMAIN_RE.fullmatch(d):
+                raise ValueError(f"Некорректный домен: {d}")
+            out.append(d)
+        return out
+
+
+TRANSFER_STEP_LABELS = ["Чтение с сервера-источника", "Запись на целевой сервер", "Перезапуск nginx"]
+
+# Файлы домена, которые переносим: установленные пути + acme.sh-хранилище
+# (чтобы на новом сервере продолжило работать автопродление).
+def _transfer_paths(domain: str) -> list[str]:
+    return [
+        f"/etc/ssl/certs/{domain}_fullchain.pem",
+        f"/etc/ssl/certs/{domain}.crt",
+        f"/etc/ssl/private/{domain}.key",
+    ]
+
+
+def _read_bundle_script(domain: str) -> str:
+    files = " ".join(_transfer_paths(domain))
+    return f"""\
+T=$(mktemp /tmp/nai-cert-XXXXXXXX.tar.gz)
+tar czf "$T" -C / $(for f in {files}; do [ -f "$f" ] && echo "${{f#/}}"; done) \
+  -C / $( [ -d /root/.acme.sh/{domain}_ecc ] && echo "root/.acme.sh/{domain}_ecc" ) 2>/dev/null
+if [ -s "$T" ]; then echo __OK__; base64 -w0 "$T"; else echo __EMPTY__; fi
+rm -f "$T"
+"""
+
+
+def _write_bundle_script(domain: str, b64: str) -> str:
+    return f"""\
+set -e
+T=$(mktemp /tmp/nai-cert-XXXXXXXX.tar.gz)
+base64 -d > "$T" <<'NAI_B64'
+{b64}
+NAI_B64
+tar xzf "$T" -C /
+rm -f "$T"
+chmod 600 /etc/ssl/private/{domain}.key 2>/dev/null || true
+mkdir -p /etc/letsencrypt/live/{domain}
+[ -f /etc/ssl/certs/{domain}_fullchain.pem ] && ln -sf /etc/ssl/certs/{domain}_fullchain.pem /etc/letsencrypt/live/{domain}/fullchain.pem || true
+[ -f /etc/ssl/private/{domain}.key ] && ln -sf /etc/ssl/private/{domain}.key /etc/letsencrypt/live/{domain}/privkey.pem || true
+echo "WROTE={domain}"
+"""
+
+
+@router.post("/certs/transfer")
+async def transfer_certs(body: TransferBody, background_tasks: BackgroundTasks):
+    task = task_store.create(total_steps=len(TRANSFER_STEP_LABELS))
+    background_tasks.add_task(_transfer_run, body, task.task_id)
+    return {"task_id": task.task_id, "task_type": "certs-transfer"}
+
+
+async def _transfer_run(body: TransferBody, task_id: str) -> None:
+    task = task_store.get(task_id)
+    if not task:
+        return
+    src = SSHSession(body.source.ip, body.source.ssh_port, body.source.ssh_user, body.source.ssh_password)
+    dst = SSHSession(body.target.ip, body.target.ssh_port, body.target.ssh_user, body.target.ssh_password)
+    try:
+        task.set_step(1, TaskStatus.RUNNING)
+        task.add_log(f"Источник: {body.source.ip}, цель: {body.target.ip}, доменов: {len(body.domains)}")
+        await src.connect()
+        await dst.connect()
+        task.add_log("Оба сервера подключены.")
+        bundles: dict[str, str] = {}
+        for d in body.domains:
+            out = await src.get_script_output(_read_bundle_script(d), timeout=60)
+            if "__OK__" not in out:
+                raise RuntimeError(f"на источнике нет файлов сертификата для {d}")
+            bundles[d] = out.split("__OK__", 1)[1].strip()
+            task.add_log(f"Прочитан бандл {d} ({len(bundles[d]) // 1024} КиБ в base64).")
+
+        task.set_step(2, TaskStatus.RUNNING)
+        for d, b64 in bundles.items():
+            out = await dst.get_script_output(_write_bundle_script(d, b64), timeout=60)
+            if f"WROTE={d}" not in out:
+                raise RuntimeError(f"запись на целевой сервер не подтверждена для {d}: {out[-200:]}")
+            task.add_log(f"Записан {d} (пути /etc/ssl + acme.sh + letsencrypt-симлинки).")
+
+        task.set_step(3, TaskStatus.RUNNING)
+        reload_out = await dst.get_output(
+            "systemctl reload nginx 2>/dev/null && echo RELOADED || echo NO_NGINX")
+        task.add_log(f"nginx: {reload_out or 'не ответил'}")
+        task.finish(TaskStatus.SUCCESS)
+        task.add_log("\n\x1b[1;32m✓ Перенос завершён.\x1b[0m")
+    except Exception as exc:
+        task.add_log(f"\n\x1b[1;31m✗ Ошибка: {exc}\x1b[0m")
+        task.finish(TaskStatus.FAILED, str(exc))
+    finally:
+        await src.close()
+        await dst.close()
 
 
 async def _deploy(req: DeployCertRequest, task_id: str) -> None:
@@ -263,6 +409,10 @@ async def _deploy(req: DeployCertRequest, task_id: str) -> None:
         task.finish(TaskStatus.SUCCESS)
         task.add_log("\n\x1b[1;32m✓ Сертификат задеплоен успешно!\x1b[0m")
 
+    except asyncio.CancelledError:
+        task.add_log("\n\x1b[1;33m■ Деплой остановлен пользователем.\x1b[0m")
+        task.finish(TaskStatus.FAILED, "остановлено пользователем")
+        raise
     except Exception as exc:
         task.add_log(f"\n\x1b[1;31m✗ Ошибка: {exc}\x1b[0m")
         task.finish(TaskStatus.FAILED, str(exc))
@@ -359,12 +509,18 @@ async def _read_remote_file(ssh: SSHSession, path: str) -> bytes | None:
 
 @router.post("/certs/download")
 async def download_cert(req: DownloadCertRequest):
-    sel = [f for f in req.files if f in _CERT_FILES]
+    # "bundle" (Wave-5 PR-4) = все присутствующие файлы сертификата одним zip.
+    if "bundle" in req.files:
+        sel = list(_CERT_FILES)
+    else:
+        sel = [f for f in req.files if f in _CERT_FILES]
     if not sel:
         raise HTTPException(422, "Не выбраны файлы для скачивания")
 
+    bundle = "bundle" in req.files
     ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
     collected: list[tuple[str, bytes]] = []
+    missing: list[str] = []
     try:
         await ssh.connect()
         for f in sel:
@@ -372,6 +528,9 @@ async def download_cert(req: DownloadCertRequest):
             data = await _read_remote_file(ssh, path_tpl.format(d=req.domain))
             name = name_tpl.format(d=req.domain)
             if data is None:
+                if bundle:
+                    missing.append(name)
+                    continue
                 raise HTTPException(404, f"Сертификат не найден на ноде: {name}")
             collected.append((name, data))
     except HTTPException:
@@ -381,8 +540,10 @@ async def download_cert(req: DownloadCertRequest):
     finally:
         await ssh.close()
 
+    if not collected:
+        raise HTTPException(404, f"Сертификат {req.domain} не найден на ноде")
     # Single file → return it directly; multiple → zip them.
-    if len(collected) == 1:
+    if len(collected) == 1 and not bundle:
         name, data = collected[0]
         return Response(
             content=data, media_type="application/x-pem-file",
