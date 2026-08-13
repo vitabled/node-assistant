@@ -293,10 +293,10 @@ export function Subnets() {
   );
 }
 
-/** Иконка оператора из /operators/<key>.svg — файлы заменяемы без правок кода. */
+/** Иконка оператора из /operators/<key>.png — файлы заменяемы без правок кода. */
 function OpIcon({ op, dim }: { op: string; dim?: boolean }) {
   return (
-    <img src={`/operators/${op}.svg`} alt={op} width={16} height={16}
-      style={{ borderRadius: 4, opacity: dim ? 0.25 : 1, flex: "none" }} />
+    <img src={`/operators/${op}.png`} alt={op} width={16} height={16}
+      style={{ borderRadius: 4, opacity: dim ? 0.25 : 1, flex: "none", objectFit: "contain" }} />
   );
 }
