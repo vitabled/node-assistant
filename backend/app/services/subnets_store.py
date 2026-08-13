@@ -42,6 +42,7 @@ OPERATORS = [
     {"key": "beeline", "label": "Beeline"},
     {"key": "megafon", "label": "МегаФон"},
     {"key": "tele2",   "label": "Tele2"},
+    {"key": "tmobile", "label": "T-Mobile"},
 ]
 
 _ASN_NUM_RE = re.compile(r"AS(\d+)")

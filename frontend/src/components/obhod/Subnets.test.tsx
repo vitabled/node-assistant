@@ -17,13 +17,14 @@ const STORE = {
       rows: [{
         id: "r1",
         values: { subnet: "203.0.113.0/24", ipver: "IPv4", asn: "AS123", asnname: "Test", date: "2026-08-14" },
-        operators: { mts: true, beeline: true, megafon: true, tele2: true },
+        operators: { mts: true, beeline: true, megafon: true, tele2: true, tmobile: true },
       }],
     }],
   }],
   operators: [
     { key: "mts", label: "MTS" }, { key: "beeline", label: "Beeline" },
     { key: "megafon", label: "МегаФон" }, { key: "tele2", label: "Tele2" },
+    { key: "tmobile", label: "T-Mobile" },
   ],
 };
 
@@ -49,7 +50,7 @@ describe("Subnets", () => {
     expect(await screen.findByText("203.0.113.0/24")).toBeInTheDocument();
     expect(screen.getByText("AS123")).toBeInTheDocument();
     const icons = document.querySelectorAll('img[src^="/operators/"]');
-    expect(icons.length).toBe(4);
+    expect(icons.length).toBe(5);
     // чекбоксов нет вне режима правки
     expect(document.querySelectorAll('input[type="checkbox"]').length).toBe(0);
   });
@@ -62,7 +63,7 @@ describe("Subnets", () => {
     // в режиме правки — чекбоксы появились
     const boxes = await waitFor(() => {
       const b = document.querySelectorAll('input[type="checkbox"]');
-      expect(b.length).toBe(4);
+      expect(b.length).toBe(5);
       return b;
     });
     fireEvent.click(boxes[1]); // beeline off
