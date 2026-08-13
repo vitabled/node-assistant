@@ -10,6 +10,7 @@ import { Settings }                        from "./components/Settings";
 import { Templates }                       from "./components/Templates";
 import { Hosts }                           from "./components/Hosts";
 import { CertsForm, type CertsFormData }  from "./components/CertsForm";
+import { F2bList }                        from "./components/F2bList";
 import { DomainsPanel }                    from "./components/DomainsPanel";
 import { TrafficRules }                   from "./components/TrafficRules";
 import { Bridges }                        from "./components/bridges/Bridges";
@@ -378,6 +379,9 @@ export default function App() {
                 <div style={{ padding: 20 }}>
                   <CertsForm onSubmit={deployCert} disabled={certIsRunning}
                     onDomainsAdded={() => setDomainsRefresh(n => n + 1)} />
+                  <div style={{ marginTop: 16 }}>
+                    <F2bList />
+                  </div>
                 </div>
                 {certTaskId && (
                   <div style={{ padding: "16px 20px 20px", borderTop: "1px solid var(--line-soft)" }}>

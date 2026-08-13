@@ -621,6 +621,14 @@ async def step_system_optimize(
     )
     await ssh.run_script(_firewall_extra_script(req, whitelist), task, check=False)
 
+    # Fail2Ban list (Wave-5 PR-2): синхронизируем бан-список аккаунта на каждый
+    # деплой — добавленное банится, снятое из списка разбанивается.
+    from app.services import f2b_list as _f2b
+    ban_entries = _f2b.load()
+    if ban_entries:
+        task.add_log(f"\x1b[36m[f2b-list] Применяю {len(ban_entries)} записей бана…\x1b[0m")
+        await ssh.run_script(_f2b.sync_script(ban_entries), task, check=False)
+
     # Use get_output() — reads stdout without adding noise to task logs
     raw = await ssh.get_output("grep MemTotal /proc/meminfo | awk '{print $2}'")
     try:
