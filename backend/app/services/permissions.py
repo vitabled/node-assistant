@@ -269,6 +269,8 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     # ACME-статус (чтение по SSH) и SelfSteal-смена шаблона (запись) — те же креды.
     ("/api/certs/acme-status", {"*": ("certs.execute", _CREDS)}),
     ("/api/certs/selfsteal", {"*": ("certs.execute", _CREDS)}),
+    ("/api/certs/stop", {"*": "certs.execute"}),
+    ("/api/certs/transfer", {"*": ("certs.execute", _CREDS)}),
     ("/api/domains", {"GET": "certs.view", "POST": "certs.create",
                       "*": "certs.edit"}),
 

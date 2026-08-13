@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Loader2, ShieldCheck, Eye, EyeOff, ScanSearch } from "lucide-react";
+import { Loader2, ShieldCheck, Eye, EyeOff, ScanSearch, Square } from "lucide-react";
 import { ScanDomainsModal } from "./ScanDomainsModal";
 
 export interface CertsFormData {
@@ -103,9 +103,11 @@ interface Props {
   disabled: boolean;
   /** «Авто» добавил домены — родитель обновляет «Домены». */
   onDomainsAdded?: () => void;
+  /** Идёт деплой — на месте кнопки старта показываем «Остановить» (Wave-5 PR-4). */
+  onStop?: () => void;
 }
 
-export function CertsForm({ onSubmit, disabled, onDomainsAdded }: Props) {
+export function CertsForm({ onSubmit, disabled, onDomainsAdded, onStop }: Props) {
   const [form,    setForm]    = useState<CertsFormData>(DEFAULT);
   const [errors,  setErrors]  = useState<Partial<Record<keyof CertsFormData, string>>>({});
   const [touched, setTouched] = useState(false);
@@ -220,16 +222,20 @@ export function CertsForm({ onSubmit, disabled, onDomainsAdded }: Props) {
       )}
 
       <button
-        type="submit"
-        disabled={disabled}
+        type={disabled && onStop ? "button" : "submit"}
+        onClick={disabled && onStop ? onStop : undefined}
         className="mt-1 flex items-center justify-center gap-2 py-2.5 rounded-lg
                    font-semibold text-sm transition-all bg-[var(--accent)] text-[var(--primary-ink)]
                    hover:bg-[var(--accent-hi)] disabled:cursor-not-allowed
                    focus:outline-none focus:ring-2 focus:ring-[var(--accent-line)]"
-        style={disabled ? { background: "var(--bg3)", color: "var(--t-faint)" } : undefined}
+        style={disabled && !onStop ? { background: "var(--bg3)", color: "var(--t-faint)" }
+             : disabled && onStop ? { background: "var(--err-dim)", color: "var(--err)", border: "1px solid var(--err-line)" } : undefined}
+        disabled={disabled && !onStop}
       >
         {disabled
-          ? <><Loader2 size={15} className="animate-spin" /> Выполняется...</>
+          ? (onStop
+            ? <><Square size={14} /> Остановить деплой</>
+            : <><Loader2 size={15} className="animate-spin" /> Выполняется...</>)
           : <><ShieldCheck size={15} /> Задеплоить сертификат</>
         }
       </button>
