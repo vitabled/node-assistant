@@ -5,11 +5,12 @@ import {
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
   Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen, FileJson,
   LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package, ScanSearch,
-  Lock, Cloud, Globe, CloudDownload,
+  Lock, Cloud, Globe, CloudDownload, Pencil, Save, GripVertical,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Fragment } from "react";
+import { Fragment, useRef, useState } from "react";
 import { usePermissions } from "../auth/usePermissions";
+import { getActiveId } from "../auth/store";
 
 export type Tab =
   | "dashboard" | "deploy" | "certs" | "templates" | "hosts" | "traffic" | "settings" | "mihomo" | "configs" | "bridges" | "auto"
@@ -166,6 +167,56 @@ export function tabPermission(tab: Tab): string | null {
   return domain ? `${domain}.view` : null;
 }
 
+// ── порядок разделов (Wave-5 PR-3) ─────────────────────────────
+// per-account в localStorage: сайдбар — личная раскладка оператора, на сервер
+// не пишем (чужой порядок за другим входом менять нельзя).
+interface GroupOrder { title: string; tabs: string[] }
+
+const DEFAULT_ORDER: GroupOrder[] = GROUPS.map(g => ({
+  title: g.title, tabs: g.items.map(i => i.tab),
+}));
+
+function navOrderKey(accountId: string | null | undefined): string {
+  return accountId ? `ni_nav_order_${accountId}` : "ni_nav_order";
+}
+
+/** Слить сохранённый порядок с текущим составом: неизвестные табы/группы —
+ *  в дефолтные позиции, удалённые из кода — выпадают. */
+export function mergeNavOrder(saved: GroupOrder[] | null): GroupOrder[] {
+  if (!Array.isArray(saved)) return DEFAULT_ORDER;
+  const knownTabs = new Map(NAV_TABS.map(i => [i.tab as string, true]));
+  const seen = new Set<string>();
+  const out: GroupOrder[] = [];
+  for (const g of saved) {
+    if (!g || typeof g.title !== "string" || !Array.isArray(g.tabs)) continue;
+    const def = DEFAULT_ORDER.find(d => d.title === g.title);
+    if (!def) continue;
+    const tabs = g.tabs.filter(t => knownTabs.has(t) && def.tabs.includes(t) && !seen.has(t));
+    tabs.forEach(t => seen.add(t));
+    if (tabs.length) out.push({ title: g.title, tabs });
+  }
+  // недостающие группы/табы — дефолтным порядком
+  for (const def of DEFAULT_ORDER) {
+    const missing = def.tabs.filter(t => !seen.has(t));
+    if (!missing.length) continue;
+    missing.forEach(t => seen.add(t));
+    const existing = out.find(g => g.title === def.title);
+    if (existing) existing.tabs.push(...missing);
+    else out.push({ title: def.title, tabs: missing });
+  }
+  return out;
+}
+
+function loadNavOrder(accountId: string | null | undefined): GroupOrder[] {
+  try {
+    return mergeNavOrder(JSON.parse(localStorage.getItem(navOrderKey(accountId)) || "null"));
+  } catch { return DEFAULT_ORDER; }
+}
+
+function saveNavOrder(accountId: string | null | undefined, order: GroupOrder[]): void {
+  try { localStorage.setItem(navOrderKey(accountId), JSON.stringify(order)); } catch {}
+}
+
 interface Props {
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
@@ -179,10 +230,47 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
   // usePermissions). Пока права неизвестны, `can` разрешает всё, поэтому сайдбар
   // не мигает пустым на каждой загрузке.
   const { can } = usePermissions();
-  const groups = GROUPS
-    .map(g => ({ title: g.title, items: g.items.filter(i => can(`${i.domain}.view`)) }))
-    .filter(g => g.items.length > 0);   // пустая группа не рисуется вовсе
+
+  // ── перестановка разделов (Wave-5 PR-3) ──
+  const accountId = getActiveId();
+  const [order, setOrder] = useState<GroupOrder[]>(() => loadNavOrder(accountId));
+  const [editing, setEditing] = useState(false);
+  const dragRef = useRef<{ type: "item"; tab: string } | { type: "group"; title: string } | null>(null);
+  const defs = new Map(NAV_TABS.map(i => [i.tab as string, i]));
+
+  const groups = order
+    .map(go => ({
+      title: go.title,
+      items: go.tabs
+        .map(t => defs.get(t))
+        .filter((i): i is NavItemDef => !!i && can(`${i.domain}.view`)),
+    }))
+    .filter(g => g.items.length > 0);
   const footer = FOOTER_TABS.filter(i => can(`${i.domain}.view`));
+
+  // Переместить перетаскиваемое перед целевым (таб — в позицию таба, группу —
+  // перед группой). Работает и между группами.
+  const moveBefore = (dragTab: string, targetGroup: string, targetTab: string | null) => {
+    setOrder(prev => {
+      const next: GroupOrder[] = prev.map(g => ({ ...g, tabs: g.tabs.filter(t => t !== dragTab) }));
+      const g = next.find(x => x.title === targetGroup);
+      if (!g) return prev;
+      const idx = targetTab ? g.tabs.indexOf(targetTab) : g.tabs.length;
+      g.tabs.splice(idx < 0 ? g.tabs.length : idx, 0, dragTab);
+      return next.filter(x => x.tabs.length > 0);
+    });
+  };
+  const moveGroupBefore = (dragTitle: string, targetTitle: string) => {
+    setOrder(prev => {
+      const from = prev.findIndex(g => g.title === dragTitle);
+      const to = prev.findIndex(g => g.title === targetTitle);
+      if (from < 0 || to < 0 || from === to) return prev;
+      const next = [...prev];
+      const [g] = next.splice(from, 1);
+      next.splice(next.findIndex(x => x.title === targetTitle), 0, g);
+      return next;
+    });
+  };
 
   const NavBtn = ({ item }: { item: NavItemDef }) => {
     const { Icon, label } = item;
@@ -190,8 +278,21 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
     return (
       <button
         className={`navitem ${active ? "active" : ""}`}
-        onClick={() => onTabChange(item.tab)}
+        onClick={() => !editing && onTabChange(item.tab)}
+        draggable={editing}
+        onDragStart={editing ? () => { dragRef.current = { type: "item", tab: item.tab }; } : undefined}
+        onDragOver={editing ? e => e.preventDefault() : undefined}
+        onDrop={editing ? e => {
+          e.preventDefault();
+          const d = dragRef.current;
+          if (d?.type === "item" && d.tab !== item.tab) {
+            const g = order.find(x => x.tabs.includes(item.tab));
+            if (g) moveBefore(d.tab, g.title, item.tab);
+          }
+        } : undefined}
+        style={editing ? { cursor: "grab" } : undefined}
       >
+        {editing && <GripVertical size={13} style={{ flex: "none", color: "var(--t-faint)" }} />}
         <Icon size={16} style={{ flex: "none" }} />
         <span className="trunc">{label}</span>
       </button>
@@ -221,6 +322,21 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
           <p style={{ fontSize: 13, fontWeight: 700, color: "var(--t-hi)", lineHeight: 1.2 }}>Node Installer</p>
           <p style={{ fontSize: 10, color: "var(--t-low)", letterSpacing: ".04em" }}>remnawave ops</p>
         </div>
+        {/* Режим перестановки разделов (Wave-5 PR-3): карандаш → dnd,
+            сохранение — дискета на его месте. */}
+        <button
+          type="button"
+          className="iconbtn"
+          style={{ marginLeft: "auto", flex: "none" }}
+          title={editing ? "Сохранить порядок разделов" : "Изменить порядок разделов"}
+          data-testid="nav-edit-toggle"
+          onClick={() => {
+            if (editing) saveNavOrder(accountId, order);
+            setEditing(e => !e);
+          }}
+        >
+          {editing ? <Save size={14} /> : <Pencil size={14} />}
+        </button>
       </div>
 
       {/* nav — заголовок группы и её кнопки остаются СИБЛИНГАМИ в одной колонке
@@ -229,7 +345,22 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
         {groups.map((g, i) => (
           <Fragment key={g.title}>
             {i > 0 && <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />}
-            <p className="micro" style={{ padding: "0 10px", margin: "2px 0 4px" }}>{g.title}</p>
+            <p className="micro"
+              style={{
+                padding: "0 10px", margin: "2px 0 4px",
+                cursor: editing ? "grab" : undefined,
+                color: editing ? "var(--accent-hi)" : undefined,
+              }}
+              draggable={editing}
+              onDragStart={editing ? () => { dragRef.current = { type: "group", title: g.title }; } : undefined}
+              onDragOver={editing ? e => e.preventDefault() : undefined}
+              onDrop={editing ? e => {
+                e.preventDefault();
+                const d = dragRef.current;
+                if (d?.type === "group" && d.title !== g.title) moveGroupBefore(d.title, g.title);
+                if (d?.type === "item") moveBefore(d.tab, g.title, null);  // в конец группы
+              } : undefined}
+            >{editing && <GripVertical size={11} style={{ verticalAlign: "-2px", marginRight: 4 }} />}{g.title}</p>
             {g.items.map(item => <NavBtn key={item.tab} item={item} />)}
           </Fragment>
         ))}
