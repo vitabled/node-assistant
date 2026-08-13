@@ -269,11 +269,25 @@ server {
 """
 
 
-def _render_nginx(targets: list[tuple[str, int]]) -> str:
-    blocks = [
-        _NGINX_SITE.replace("__DOMAIN__", domain).replace("__PORT__", str(port))
-        for domain, port in targets
-    ]
+def _render_nginx(targets: list[tuple[str, int]], guard_key: str = "") -> str:
+    blocks = []
+    for domain, port in targets:
+        site = _NGINX_SITE.replace("__DOMAIN__", domain).replace("__PORT__", str(port))
+        if guard_key and port == _PANEL_APP_PORT:
+            # Cookie-защита панели (механика remnawave-reverse): без cookie
+            # <key>=<key> — 404, панель невидима для сканеров. Первый вход:
+            # /auth/login?<key>=<key> → add_header ставит cookie, дальше пускает
+            # по нему. Страж вставляем ТОЛЬКО в ssl-блок — перед proxy_pass
+            # (первый server-блок шаблона — это редирект 80→443, его не трогаем).
+            guard = (
+                f"        set $nai_guard 0;\n"
+                f"        if ($arg_{guard_key} = \"{guard_key}\") {{ set $nai_guard 1; }}\n"
+                f"        if ($cookie_{guard_key} = \"{guard_key}\") {{ set $nai_guard 1; }}\n"
+                f"        if ($nai_guard = 0) {{ return 404; }}\n"
+                f"        add_header Set-Cookie \"{guard_key}={guard_key}; Path=/; Max-Age=2592000; HttpOnly; Secure\";\n"
+            )
+            site = site.replace("        proxy_pass http://127.0.0.1:", guard + "        proxy_pass http://127.0.0.1:", 1)
+        blocks.append(site)
     return "\n".join(blocks)
 
 
@@ -534,7 +548,23 @@ async def _setup_reverse_proxy(
             task,
             timeout=360,
         )
-    nginx_conf = _render_nginx(targets)
+    guard_key = ""
+    if getattr(req, "panel_cookie_guard", False):
+        if req.reverse_proxy == "nginx":
+            import secrets as _secrets
+            guard_key = _secrets.token_hex(8)
+            # Ключ нужен оператору для входа — показываем ОДИН раз, в логе
+            # задачи (остальные секреты деплоя не логируются вовсе).
+            task.add_log(
+                f"\x1b[36m[guard] Cookie-защита панели включена. Ключ: {guard_key}\n"
+                f"[guard] Первый вход: https://{req.panel_domain}/auth/login?{guard_key}={guard_key}\x1b[0m"
+            )
+        else:
+            task.add_log(
+                "\x1b[33m[guard] Cookie-защита поддерживается только с nginx; "
+                "для Caddy пропущена.\x1b[0m"
+            )
+    nginx_conf = _render_nginx(targets, guard_key)
     write = _write_file_script(
         "/etc/nginx/conf.d/remnawave-panel.conf", nginx_conf, "NGINX_EOF"
     )

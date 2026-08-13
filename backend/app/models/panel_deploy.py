@@ -86,6 +86,10 @@ class PanelDeployRequest(BaseModel):
     cert_provider: Literal["cloudflare", "letsencrypt", "zerossl"] = "letsencrypt"
     cf_api_key: str = ""
 
+    # Cookie-защита панели (механика remnawave-reverse, Wave-5): панель отвечает
+    # 404 без секретного ключа в URL/cookie. Только для reverse_proxy=nginx.
+    panel_cookie_guard: bool = False
+
     # Webhooks: the HMAC secret is generated server-side (never taken from input).
     enable_webhooks: bool = False
     webhook_url: str = ""

@@ -266,6 +266,9 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/certs/deploy", {"*": ("certs.execute", _CREDS)}),
     # Автоскан доменов: ходит по SSH — тот же класс действия и креды, что деплой.
     ("/api/certs/scan-domains", {"*": ("certs.execute", _CREDS)}),
+    # ACME-статус (чтение по SSH) и SelfSteal-смена шаблона (запись) — те же креды.
+    ("/api/certs/acme-status", {"*": ("certs.execute", _CREDS)}),
+    ("/api/certs/selfsteal", {"*": ("certs.execute", _CREDS)}),
     ("/api/domains", {"GET": "certs.view", "POST": "certs.create",
                       "*": "certs.edit"}),
 

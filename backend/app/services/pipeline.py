@@ -1558,19 +1558,11 @@ echo "[certbot] Cron автообновления установлен (28-е ч
 # Runs with check=True: any failure (curl/unzip/…) → pipeline FAILED → retry UI.
 # ──────────────────────────────────────────────────────────────
 
-async def step_sni_masking(ssh: SSHSession, task: Task) -> None:
-    _begin_step(task, 12)
-
-    # `set -euo pipefail` makes the whole step abort (non-zero exit) on the
-    # first failing command — exactly the "critical step" behaviour required:
-    # a failed download/unzip propagates up and marks the node FAILED.
-    #
-    # Obfuscation strategy: ADDITIVE uniquization only. We inject random
-    # markers (meta tag + HTML comment in <head>, a hidden marker before
-    # </body>, a trailing comment in every CSS file) using openssl-generated
-    # hex tokens. This changes the page/asset hash on every node WITHOUT
-    # rewriting existing tags/selectors — so the markup never breaks.
-    masking_script = """\
+def masking_script() -> str:
+    """Скрипт уникализации маскировочного сайта (SelfSteal-шаблон в /var/www/html).
+    Вынесен: используется и деплоем (step_sni_masking), и SelfSteal-менеджером
+    в «Управлении SSL» (смена шаблона на уже развёрнутой ноде, Wave-5)."""
+    return """\
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
@@ -1624,7 +1616,13 @@ cd /
 rm -rf /opt/sni-templates.zip /opt/sni-templates-main
 echo "[sni] Временные файлы удалены."
 """
-    await ssh.run_script(masking_script, task, timeout=180)
+
+
+async def step_sni_masking(ssh: SSHSession, task: Task) -> None:
+    """Шаг 12 деплоя: уникализация маскировочного сайта. `set -euo pipefail` в
+    скрипте делает весь шаг атомарным: любая ошибка (curl/unzip) → FAILED."""
+    _begin_step(task, 12)
+    await ssh.run_script(masking_script(), task, timeout=180)
     task.add_log("\x1b[32m[sni] Уникализация маскировочного сайта завершена.\x1b[0m")
 
 

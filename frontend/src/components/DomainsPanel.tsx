@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { Globe, Trash2, Plus, ShieldCheck, Loader2, Download } from "lucide-react";
+import { Globe, Trash2, Plus, ShieldCheck, Loader2, Download, Image, Info } from "lucide-react";
 import { deployJobsKey, certJobsKey } from "../auth/store";
+import { toast } from "./infra/Toast";
+import { useTaskStream } from "../hooks/useTaskStream";
 import type { FormData } from "./DeployForm";
 import type { CertsFormData } from "./CertsForm";
 
@@ -127,6 +129,75 @@ function DownloadCtl({ row }: { row: Row }) {
   );
 }
 
+// ── ACME-статус и SelfSteal (Wave-5 PR-1, механики remnawave-reverse) ─────
+function AcmeInfo({ creds }: { creds: Creds }) {
+  const [busy, setBusy] = useState(false);
+  const [info, setInfo] = useState<{ ca: string; cron: boolean } | null>(null);
+  const probe = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/certs/acme-status", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...creds }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Ошибка");
+      const cron = !!d.renewal_cron;
+      const ca = (d.certs?.[0]?.ca || "").replace(/^https?:\/\//, "").split("/")[2] || "—";
+      setInfo({ ca, cron });
+    } catch (e) { toast((e as Error).message, "error"); }
+    setBusy(false);
+  };
+  return (
+    <button type="button" onClick={probe} disabled={busy}
+      title={info ? `CA: ${info.ca} · авто-продление: ${info.cron ? "включено" : "не найдено"}` : "ACME-статус (CA, авто-продление)"}
+      className="iconbtn accent" style={{ width: 22, height: 22, flex: "none" }}>
+      {busy ? <Loader2 size={12} className="spin" /> : <Info size={12} />}
+      {info && (
+        <span className="text-[10px] tabular-nums" style={{ color: info.cron ? "var(--ok)" : "var(--warn)" }}>
+          {info.cron ? "auto" : "no-cron"}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function SelfStealBtn({ creds, domain }: { creds: Creds; domain: string }) {
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [state, setState] = useState<"idle" | "running" | "ok" | "fail">("idle");
+  useTaskStream({
+    taskId,
+    onLog: useCallback(() => {}, []),
+    onStatus: useCallback((f: { status: string }) => {
+      if (f.status === "success") setState("ok");
+      if (f.status === "failed") setState("fail");
+    }, []),
+  });
+  const run = async () => {
+    setState("running");
+    try {
+      const res = await fetch("/api/certs/selfsteal", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...creds }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Ошибка");
+      setTaskId(d.task_id);
+    } catch (e) {
+      setState("fail");
+      toast((e as Error).message, "error");
+    }
+  };
+  return (
+    <button type="button" onClick={run} disabled={state === "running"}
+      title={state === "ok" ? "Маскировка сменена" : state === "fail" ? "Ошибка смены маскировки" : `Сменить маскировочный сайт (SelfSteal) на ${domain}`}
+      className="iconbtn" style={{ width: 22, height: 22, flex: "none",
+        color: state === "ok" ? "var(--ok)" : state === "fail" ? "var(--err)" : undefined }}>
+      {state === "running" ? <Loader2 size={12} className="spin" /> : <Image size={12} />}
+    </button>
+  );
+}
+
 export function DomainsPanel({ refreshKey = 0 }: { refreshKey?: number }) {
   const [rows, setRows]   = useState<Row[]>([]);
   const [adding, setAdding] = useState("");
@@ -237,6 +308,8 @@ export function DomainsPanel({ refreshKey = 0 }: { refreshKey?: number }) {
               <span className="text-sm truncate flex-1" style={{ color: "var(--t-mid)" }}>{row.domain}</span>
               {row.ip && <span className="text-[10px] tabular-nums" style={{ color: "var(--t-faint)" }}>{row.ip}</span>}
               <span className="text-xs tabular-nums" style={{ color: cl.tone }}>{cl.text}</span>
+              {row.creds && <AcmeInfo creds={row.creds} />}
+              {row.creds && <SelfStealBtn creds={row.creds} domain={row.domain} />}
               <DownloadCtl row={row} />
               {row.manualId && (
                 <button onClick={() => removeManual(row.manualId!)} title="Удалить"
