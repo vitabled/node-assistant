@@ -293,6 +293,9 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
                              "*": "configs.edit"}),
     # Обходы БС: Beeline-инструмент правит хосты панели — configs, как хосты.
     ("/api/obhod", {"GET": "configs.view", "*": "configs.edit"}),
+    # Подсети — справочные данные, как каталог хостингов.
+    ("/api/subnets", {"GET": "hostings.view", "POST": "hostings.create",
+                      "*": "hostings.edit"}),
 
     # ── мосты: правка routing в config-профилях панели (затрагивает всех её
     # пользователей) — create/edit на уровне оператора, как automation.

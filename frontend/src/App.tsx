@@ -28,6 +28,7 @@ import { AiChat }                           from "./components/automation/AiChat
 import { Migration }                        from "./components/rw/Migration";
 import { RegruTool }                        from "./components/obhod/RegruTool";
 import { BeelineCdnTool }                   from "./components/obhod/BeelineCdnTool";
+import { Subnets }                           from "./components/obhod/Subnets";
 import { PanelDashboard }                   from "./components/rw/PanelDashboard";
 import { SubPages }                        from "./components/rw/SubPages";
 import { PanelVariables }                  from "./components/rw/PanelVariables";
@@ -128,6 +129,7 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "rw-profiles":     ["Remnawave", "Профили"],
   "obhod-regru":     ["Обходы БС", "REGRU хостинг"],
   "obhod-beeline":   ["Обходы БС", "Beeline CDN"],
+  "obhod-subnets":   ["Обходы БС", "Подсети"],
   "mihomo":          ["Remnawave", "Mihomo"],
   "configs":         ["Remnawave", "Пользовательские конфиги"],
   "haproxy-overview": ["Статистика", "HAProxy: обзор"],
@@ -352,6 +354,7 @@ export default function App() {
 
           {tab === "obhod-regru"   && <RegruTool />}
           {tab === "obhod-beeline" && <BeelineCdnTool />}
+          {tab === "obhod-subnets" && <Subnets />}
 
           {tab === "haproxy-overview" && <HaproxyOverview />}
           {tab === "haproxy-nodes"    && <HaproxyNodes />}

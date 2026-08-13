@@ -96,7 +96,7 @@ describe("Sidebar", () => {
   // Волна 6, План A: три редактора конфигов переехали сюда из «Управления».
   it("renders the Обходы БС group with its exact tabs, in order", () => {
     renderSidebar();
-    expect(groupItems("Обходы БС")).toEqual(["REGRU хостинг", "Beeline CDN"]);
+    expect(groupItems("Обходы БС")).toEqual(["REGRU хостинг", "Beeline CDN", "Подсети"]);
   });
 
   it("renders the Remnawave group with its exact tabs, in order", () => {
