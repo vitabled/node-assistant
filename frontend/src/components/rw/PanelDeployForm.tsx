@@ -39,6 +39,7 @@ export interface PanelFormData {
   subpage_html:     string;       // raw Orion index.html (from catalog OR pasted/uploaded)
   subpage_api_token: string;      // Волна 6: обязателен для target subpage/both
   subpage_source_id:string;       // selected catalog page id ("" = pasted/none)
+  panel_cookie_guard: boolean;
   install_test_tools: boolean;
 }
 
@@ -64,6 +65,7 @@ export interface PanelDeployPayload {
   sub_server:       SubServerPayload | null;
   subpage_html:     string;
   subpage_api_token: string;
+  panel_cookie_guard: boolean;
   install_test_tools: boolean;
 }
 
@@ -90,6 +92,7 @@ export const PANEL_FORM_DEFAULT: PanelFormData = {
   subpage_html:     "",
   subpage_api_token: "",
   subpage_source_id:"",
+  panel_cookie_guard: false,
   install_test_tools: true,
 };
 
@@ -230,6 +233,7 @@ export function toPayload(f: PanelFormData): PanelDeployPayload {
       ? { ip: f.sub_ip.trim(), ssh_user: f.sub_ssh_user.trim() || "root", ssh_password: f.sub_ssh_password, ssh_port: parseInt(f.sub_ssh_port, 10) || 22 }
       : null,
     subpage_html:    wantSub ? f.subpage_html : "",
+    panel_cookie_guard: f.panel_cookie_guard,
     install_test_tools: f.install_test_tools,
   };
 }
@@ -633,6 +637,22 @@ export function PanelDeployForm({ onSubmit, onCancel, initial }: Props) {
       <SectionLabel>Прочее</SectionLabel>
       <Toggle label="Установить инструменты тестирования" checked={form.install_test_tools}
         onChange={() => set("install_test_tools", !form.install_test_tools)} disabled={f} />
+
+      {/* Cookie-защита панели (механика remnawave-reverse, Wave-5): только nginx */}
+      <Toggle label="Скрыть панель за секретным ключом (cookie-защита)"
+        checked={form.panel_cookie_guard}
+        onChange={() => set("panel_cookie_guard", !form.panel_cookie_guard)}
+        disabled={f || form.reverse_proxy !== "nginx"} />
+      {form.reverse_proxy !== "nginx" && (
+        <p className="text-[11px] -mt-2" style={{ color: "var(--t-faint)" }}>
+          Cookie-защита работает только с reverse-proxy nginx.
+        </p>
+      )}
+      {form.panel_cookie_guard && form.reverse_proxy === "nginx" && (
+        <p className="text-[11px] -mt-2" style={{ color: "var(--warn)" }}>
+          Ключ будет показан один раз в логе деплоя. Вход: https://домен-панели/auth/login?ключ=ключ
+        </p>
+      )}
 
       {apiError && (
         <div className="mt-2 px-3 py-2 rounded-md border text-xs"

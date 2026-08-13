@@ -128,6 +128,80 @@ async def scan_domains(req: ScanDomainsRequest):
     return {"domains": _parse_scan(out)}
 
 
+# ── ACME-статус и SelfSteal (Wave-5 PR-1, механики remnawave-reverse) ──────
+
+_ACME_STATUS_SCRIPT = r"""
+for f in /etc/ssl/certs/*_fullchain.pem; do
+  [ -f "$f" ] || continue
+  d=$(basename "$f" _fullchain.pem)
+  end=$(openssl x509 -enddate -noout -in "$f" 2>/dev/null | cut -d= -f2-)
+  ca=$(grep -i "^Le_API" "/root/.acme.sh/${d}_ecc/${d}.conf" 2>/dev/null | cut -d= -f2- | tr -d "'\" ")
+  echo "CERT=$d|$end|$ca"
+done
+crontab -l 2>/dev/null | grep -q "acme.sh" && echo "CRON=1" || echo "CRON=0"
+"""
+
+
+def _parse_acme_status(out: str) -> dict:
+    certs = []
+    cron = False
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("CERT="):
+            domain, _, rest = line[5:].partition("|")
+            not_after, _, ca = rest.partition("|")
+            certs.append({"domain": domain.strip(), "not_after": not_after.strip(),
+                          "ca": ca.strip()})
+        elif line == "CRON=1":
+            cron = True
+    return {"certs": certs, "renewal_cron": cron}
+
+
+@router.post("/certs/acme-status")
+async def acme_status(req: ScanDomainsRequest):
+    """Сводка ACME на сервере: сертификаты (домен, истечение, CA) + cron продления."""
+    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    try:
+        await ssh.connect()
+        out = await ssh.get_script_output(_ACME_STATUS_SCRIPT, timeout=45)
+    except Exception as exc:
+        raise HTTPException(502, f"Опрос не удался: {exc}")
+    finally:
+        await ssh.close()
+    return _parse_acme_status(out)
+
+
+SELFSTEAL_STEP_LABELS = ["Смена маскировочного сайта"]
+
+
+@router.post("/certs/selfsteal")
+async def selfsteal_refresh(req: ScanDomainsRequest, background_tasks: BackgroundTasks):
+    """Смена маскировочного (SelfSteal) шаблона на уже развёрнутой ноде —
+    тот же masking-скрипт, что и в деплое, без полного редеплоя."""
+    task = task_store.create(total_steps=len(SELFSTEAL_STEP_LABELS))
+    background_tasks.add_task(_selfsteal_run, req, task.task_id)
+    return {"task_id": task.task_id, "task_type": "selfsteal"}
+
+
+async def _selfsteal_run(req: ScanDomainsRequest, task_id: str) -> None:
+    task = task_store.get(task_id)
+    if not task:
+        return
+    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, req.ssh_password)
+    try:
+        task.set_step(1, TaskStatus.RUNNING)
+        task.add_log(f"Подключение к {req.ip}:{req.ssh_port}...")
+        await ssh.connect()
+        task.add_log("Меняю маскировочный сайт (случайный шаблон + уникализация)...")
+        await ssh.run_script(pipeline.masking_script(), task, timeout=240)
+        task.finish(TaskStatus.SUCCESS)
+    except Exception as exc:
+        task.add_log(f"Ошибка: {exc}")
+        task.finish(TaskStatus.FAILED)
+    finally:
+        await ssh.close()
+
+
 @router.post("/certs/deploy")
 async def deploy_cert(req: DeployCertRequest, background_tasks: BackgroundTasks):
     task = task_store.create(total_steps=DEPLOY_TOTAL)
