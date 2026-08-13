@@ -5,7 +5,7 @@ import {
   ServerCog, LayoutTemplate, DatabaseBackup, ArrowLeftRight, UserCog, Zap,
   Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen, FileJson,
   LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package, ScanSearch,
-  Lock, Cloud, Globe, CloudDownload, Pencil, Save, GripVertical,
+  Lock, Cloud, Globe, CloudDownload, Pencil, Save, GripVertical, Table2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Fragment, useRef, useState } from "react";
@@ -17,7 +17,7 @@ export type Tab =
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
-  | "obhod-regru" | "obhod-beeline"
+  | "obhod-regru" | "obhod-beeline" | "obhod-subnets"
   | "haproxy-overview" | "haproxy-nodes" | "haproxy-routes" | "haproxy-traffic"
   | "haproxy-firewall" | "haproxy-releases"
   | "hostings-map" | "hostings-list" | "subscription-analyze" | "library" | "vault" | "sitecopy"
@@ -88,8 +88,10 @@ const RW_TABS: NavItemDef[] = [
 
 // Группа «Обходы БС» (Волна 4, PR-9): инструменты обхода через белые хостинги/CDN.
 const OBHOD_TABS: NavItemDef[] = [
-  { tab: "obhod-regru",   label: "REGRU хостинг", Icon: Globe, domain: "panel"   },
-  { tab: "obhod-beeline", label: "Beeline CDN",   Icon: Cloud, domain: "configs" },
+  { tab: "obhod-regru",   label: "REGRU хостинг", Icon: Globe, domain: "panel"    },
+  { tab: "obhod-beeline", label: "Beeline CDN",   Icon: Cloud, domain: "configs"  },
+  // Справочник подсетей/IP с авто-ASN (Волна 5, PR-5).
+  { tab: "obhod-subnets", label: "Подсети",       Icon: Table2, domain: "hostings" },
 ];
 
 // Группа «HAPROXY» — прокси к панели NodeFlow (управление HAProxy-нодами).
