@@ -13,7 +13,7 @@ vi.mock("../auth/usePermissions", () => ({
   }),
 }));
 
-import { Sidebar, NAV_TABS, tabPermission } from "./Sidebar";
+import { Sidebar, NAV_TABS, tabPermission, mergeNavOrder } from "./Sidebar";
 
 function renderSidebar(active = "deploy" as const) {
   const onTabChange = vi.fn();
@@ -182,5 +182,40 @@ describe("Sidebar permission gate", () => {
     }
     // Все пункты уникальны: дубль тихо ломал бы «первую доступную вкладку».
     expect(new Set(NAV_TABS.map(i => i.tab)).size).toBe(NAV_TABS.length);
+  });
+});
+
+describe("nav order (Wave-5 PR-3)", () => {
+  it("mergeNavOrder: сохранённый порядок применяется, новые табы — дефолтом", () => {
+    const saved = [
+      { title: "Управление", tabs: ["hosts", "dashboard"] },   // hosts перед dashboard
+      { title: "Неизвестная", tabs: ["ghost"] },               // выпадает целиком
+    ];
+    const merged = mergeNavOrder(saved);
+    const main = merged.find(g => g.title === "Управление")!;
+    expect(main.tabs[0]).toBe("hosts");
+    expect(main.tabs[1]).toBe("dashboard");
+    expect(main.tabs).toContain("deploy");      // новый таб дописан в конец группы
+    expect(merged.find(g => g.title === "Неизвестная")).toBeUndefined();
+    // остальные группы на месте
+    expect(merged.find(g => g.title === "Справка")).toBeTruthy();
+  });
+
+  it("mergeNavOrder(null) — дефолтный порядок", () => {
+    const merged = mergeNavOrder(null);
+    const main = merged.find(g => g.title === "Управление")!;
+    expect(main.tabs[0]).toBe("dashboard");
+  });
+
+  it("кнопка-карандаш включает режим, дискета сохраняет в localStorage", async () => {
+    renderSidebar();
+    fireEvent.click(screen.getByTestId("nav-edit-toggle"));
+    expect(screen.getByTitle("Сохранить порядок разделов")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("nav-edit-toggle"));
+    // сохранённый порядок записался
+    const raw = localStorage.getItem("ni_nav_order") ?? localStorage.getItem("ni_nav_order_null");
+    const stored = Object.keys(localStorage).filter(k => k.startsWith("ni_nav_order"));
+    expect(stored.length).toBeGreaterThan(0);
+    expect(raw ?? localStorage.getItem(stored[0])).toContain("dashboard");
   });
 });
