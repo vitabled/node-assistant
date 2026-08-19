@@ -333,6 +333,22 @@ class RemnavaveClient:
         data = await self._req("POST", "/api/nodes", json=body)
         return _unwrap(data)
 
+    async def update_node(self, node_uuid: str, body: dict) -> dict:
+        """PATCH /api/nodes — правка существующей ноды.
+
+        UpdateNodeRequestDto: uuid идёт В ТЕЛЕ (не в path), а не uuid-адреса
+        контракта DELETE/GET. `body` принимает уже camelCase-поля
+        (name/address/port/countryCode/configProfile/…); None не шлём никогда —
+        вызывающий передаёт только реально меняемые поля.
+        """
+        return _unwrap(
+            await self._req("PATCH", "/api/nodes", json={"uuid": node_uuid, **body})
+        )
+
+    async def delete_node(self, node_uuid: str) -> dict:
+        """DELETE /api/nodes/{uuid} — удаление ноды из Remnawave."""
+        return _unwrap(await self._req("DELETE", f"/api/nodes/{node_uuid}"))
+
     # ── Hosts ──────────────────────────────────────────────────
 
     async def create_host(

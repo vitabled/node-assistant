@@ -16,6 +16,7 @@ from app.api import (
     xray_checker,
     infra_billing,
     node_ops,
+    node_admin,
     subscriptions,
     domains,
     hosts,
@@ -153,6 +154,7 @@ app.include_router(deploy.router, dependencies=_auth)
 app.include_router(certs.router, dependencies=_auth)
 app.include_router(stats.router, dependencies=_auth)
 app.include_router(node_ops.router, dependencies=_auth)
+app.include_router(node_admin.router, dependencies=_auth)
 app.include_router(settings_router.router, dependencies=_auth)
 app.include_router(traffic_rules.router, dependencies=_auth)
 app.include_router(xray_checker.router, dependencies=_auth)
