@@ -156,6 +156,12 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "infra-payments":  ["Инфра-биллинг", "Платежи"],
   "infra-settings":  ["Инфра-биллинг", "Настройки биллинга"],
   "infra-tokens":    ["Инфра-биллинг", "API токены"],
+  "support-chats":   ["BEDOLAGA", "Чаты клиентов"],
+  "support-kanban":  ["BEDOLAGA", "Канбан-доска"],
+  "support-dashboard": ["BEDOLAGA", "Дашборд"],
+  "support-ai":      ["BEDOLAGA", "AI Провайдеры"],
+  "reshala-tickets": ["BEDOLAGA", "Тикеты (Решала)"],
+  "reshala-miniapp": ["BEDOLAGA", "Mini App"],
 };
 
 export default function App() {
@@ -383,6 +389,15 @@ export default function App() {
           {tab === "infra-payments"  && <InfraPayments />}
           {tab === "infra-settings"  && <InfraSettings />}
           {tab === "infra-tokens"    && <InfraApiTokens />}
+
+          {(tab.startsWith("support-") || tab.startsWith("reshala-")) && (
+            <div className="flex h-full items-center justify-center text-[var(--t-faint)]">
+              <div className="text-center">
+                <p className="text-sm font-medium mb-1">Раздел в разработке</p>
+                <p className="text-xs">Интерфейс появится в следующих обновлениях</p>
+              </div>
+            </div>
+          )}
 
           {tab === "certs" && (
             <div className="flex-1 grid grid-cols-1 lg:grid-cols-[360px_1fr] min-h-0" style={{ display: "grid" }}>
