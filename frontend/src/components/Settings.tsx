@@ -18,6 +18,7 @@ import { McpTab } from "./settings/McpTab";
 import { AiSettingsTab } from "./settings/AiSettingsTab";
 import { CliProxyAuth } from "./settings/CliProxyAuth";
 import { InfraTab } from "./settings/InfraTab";
+import { BedolagaTab } from "./settings/BedolagaTab";
 import { ApiTokensTab } from "./settings/ApiTokensTab";
 import { DataTransfer } from "./settings/DataTransfer";
 import { UpdatesTab } from "./settings/UpdatesTab";
@@ -796,7 +797,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "ai" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "cloudflare" | "theme" | "users" | "roles";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "ai" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "cloudflare" | "theme" | "users" | "roles" | "bedolaga";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -815,6 +816,7 @@ export function Settings() {
     { id: "transfer",    label: "Экспорт/импорт" },
     { id: "updates",     label: "Обновления" },
     { id: "infra",       label: "Инфраструктура" },
+    { id: "bedolaga",    label: "Bedolaga" },
     { id: "cloudflare",  label: "Cloudflare" },
     { id: "haproxy",     label: "HAProxy" },
     ...(can("admin.users") ? [{ id: "users" as SubTab, label: "Пользователи" }] : []),
@@ -869,6 +871,7 @@ export function Settings() {
         {active === "transfer"     && <DataTransfer />}
         {active === "updates"      && <UpdatesTab />}
         {active === "infra"        && <InfraTab />}
+        {active === "bedolaga"     && <BedolagaTab />}
         {active === "haproxy"      && <div className="max-w-3xl"><HaproxyConnect /></div>}
         {active === "cloudflare"   && <div className="max-w-3xl"><CfConnect /></div>}
         {active === "theme"        && <ThemeTab />}
