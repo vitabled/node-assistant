@@ -43,7 +43,7 @@ def load_config() -> dict:
         if isinstance(d, dict):
             return {"auto_update": bool(d.get("auto_update")),
                     "branch": str(d.get("branch") or ""),
-                    "image": str(d.get("image") or DEFAULT_IMAGE)}
+                    "image": _safe_image(str(d.get("image") or ""))}
     except Exception:
         pass
     return {"auto_update": False, "branch": "", "image": DEFAULT_IMAGE}
@@ -53,7 +53,7 @@ def save_config(auto_update: bool, branch: str, image: str = "") -> dict:
     cfg = {
         "auto_update": bool(auto_update),
         "branch": _safe_branch(branch),
-        "image": (image or DEFAULT_IMAGE).strip(),
+        "image": _safe_image(image),
     }
     _CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return cfg
@@ -77,6 +77,21 @@ def _write_status(step: str, running: bool, ok) -> None:
 def _safe_branch(branch: str) -> str:
     b = (branch or "").strip()
     return b if _BRANCH_RE.match(b) else ""
+
+
+# Docker image reference: name[:tag] or name@sha256:digest, optionally with a
+# registry host/path prefix (registry.example.com:5000/org/repo:tag). Rejects
+# anything with a scheme (http://, git URLs) — a config that stores a repo URL
+# here (seen in production: "https://github.com/.../....git") makes `docker run`
+# fail with "invalid reference format" and silently breaks self-update.
+_IMAGE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$")
+
+
+def _safe_image(image: str) -> str:
+    img = (image or "").strip()
+    if not img or "://" in img or not _IMAGE_RE.match(img):
+        return DEFAULT_IMAGE
+    return img
 
 
 def is_behind(local: str, remote: str) -> bool:
