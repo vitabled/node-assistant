@@ -35,6 +35,7 @@ class DeployRequest(SshCreds):
     country_code: str = Field(default="XX", max_length=2)
     behind_cdn: bool = Field(default=False)
     install_warp: bool = Field(default=False)
+    install_psiphon: bool = Field(default=False)
     install_reshala: bool = Field(default=False)
     # Node install variant (remnanode mode): "egames" = the full node-assistant
     # stack (default, current behaviour); "vanilla" = official remnawave/node

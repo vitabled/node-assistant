@@ -30,6 +30,7 @@ export interface FormData {
   country_code:        string;
   behind_cdn:          boolean;
   install_warp:        boolean;
+  install_psiphon:     boolean;
   install_reshala:     boolean;
   // Node install variant (Plan B 2b): egames (full stack) | vanilla (official
   // remnawave/node, no local domain/SSL/masking).
@@ -102,6 +103,7 @@ export const FORM_DEFAULT: FormData = {
   country_code:        "",
   behind_cdn:          false,
   install_warp:        false,
+  install_psiphon:     false,
   install_reshala:     false,
   node_variant:        "egames",
   install_hysteria2:   true,
@@ -573,6 +575,9 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       <Toggle label="Установить WARP Native"
         checked={form.install_warp}
         onChange={() => set("install_warp", !form.install_warp)} disabled={f} />
+      <Toggle label="Установить Psiphon Proxy"
+        checked={form.install_psiphon}
+        onChange={() => set("install_psiphon", !form.install_psiphon)} disabled={f} />
       <Toggle label="Установить Решалу (Саппорт бот)"
         checked={form.install_reshala}
         onChange={() => set("install_reshala", !form.install_reshala)} disabled={f} />

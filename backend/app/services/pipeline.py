@@ -2611,6 +2611,17 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                 _begin_step(task, 13)
                 task.add_log("\x1b[90m[skip] WARP не выбран.\x1b[0m")
 
+            if "psiphon" in skip:
+                _skip_component(task, 14, "psiphon")
+            elif getattr(req, "install_psiphon", False):
+                try:
+                    await step_psiphon(ssh, task)
+                except Exception as _psiphon_exc:
+                    task.add_log(
+                        f"\n\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Psiphon завершился с ошибкой: {_psiphon_exc}\n"
+                        f"Деплой продолжается.\x1b[0m"
+                    )
+
             # ── Step 14: Hysteria2 (Certbot standalone SSL — label only renamed) ──
             # Gated on install_hysteria2 (Plan B 2a); skip_components still wins.
             if "hysteria2" in skip or not req.install_hysteria2:
