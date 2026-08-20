@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/node")
 
 Component = Literal[
     "node_accelerator", "trafficguard", "test_tools", "remnanode",
-    "masking", "warp", "hysteria2", "ssl", "haproxy",
+    "masking", "warp", "hysteria2", "ssl", "haproxy", "psiphon",
 ]
 Action = Literal["reinstall", "reconfigure", "uninstall"]
 
@@ -48,6 +48,7 @@ _COMPONENT_LABEL = {
     "hysteria2": "Hysteria2",
     "ssl": "SSL-сертификат",
     "haproxy": "HAProxy",
+    "psiphon": "Psiphon Proxy",
 }
 
 
@@ -132,6 +133,7 @@ _DETECT_SCRIPTS: dict[Component, Callable[[str], str]] = {
     ),
     "ssl": lambda d: _detect_cmd(f'test -s /root/.acme.sh/{d}_ecc/{d}.cer'),
     "haproxy": lambda d: _detect_cmd("systemctl is-active haproxy >/dev/null 2>&1"),
+    "psiphon": lambda d: _detect_cmd("test -d /opt/vps-psiphon"),
 }
 
 
@@ -319,6 +321,8 @@ async def _reinstall(ssh: SSHSession, task, req: NodeOpRequest) -> None:
         )
     elif c == "haproxy":
         await pipeline.step_haproxy_deploy(ssh, task, req)
+    elif c == "psiphon":
+        await pipeline.step_psiphon(ssh, task)
 
 
 async def _fetch_node_secret_key(task) -> str:
@@ -511,6 +515,19 @@ echo "[node-accelerator] Удалён (правила ядра остаются 
 """
 
 
+def _u_psiphon(_req: NodeOpRequest) -> str:
+    # Psiphon VPS proxy installation from Chara-Freedom. Stops and removes
+    # the docker-compose stack and the installation directory.
+    return """\
+echo "[psiphon] Останавливаю и удаляю Psiphon Proxy..."
+if [ -d /opt/vps-psiphon ]; then
+    cd /opt/vps-psiphon && (docker compose down -v 2>/dev/null || docker-compose down -v 2>/dev/null || true)
+fi
+rm -rf /opt/vps-psiphon 2>/dev/null || true
+echo "[psiphon] Удалён."
+"""
+
+
 _UNINSTALL_SCRIPTS = {
     "warp": _u_warp,
     "trafficguard": _u_trafficguard,
@@ -521,4 +538,5 @@ _UNINSTALL_SCRIPTS = {
     "ssl": _u_ssl,
     "haproxy": _u_haproxy,
     "node_accelerator": _u_node_accelerator,
+    "psiphon": _u_psiphon,
 }
