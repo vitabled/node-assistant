@@ -1949,6 +1949,93 @@ echo "[psiphon] Установка завершена."
     await ssh.run_script(psiphon_script, task, timeout=300)
 
 
+async def step_yt_monitoring(ssh: SSHSession, task: Task, req: "DeployRequest") -> None:
+    """Install yt-ads-monitoring script with telegram alerts."""
+    task.add_log(f"\n\x1b[36m{'─' * 56}\x1b[0m")
+    task.add_log(f"\x1b[1;36m[Установка] YouTube Ads Monitoring\x1b[0m")
+    task.add_log(f"\x1b[36m{'─' * 56}\x1b[0m")
+
+    # requires bot_token and chat_id from req (we will grab them from settings if possible)
+    # The requirement is: bash <(wget -qO- https://raw.githubusercontent.com/vitabled/mirror-yt-geo-monitoring/main/yt-ads-monitoring.sh) <BOT_TOKEN> <CHAT_ID> [ИМЯ_НОДЫ]
+    # In NA, we can pass Telegram settings if they exist.
+    from app.services import settings
+    cfg = await settings.load()
+    t_token = cfg.get("telegram_bot_token", "")
+    t_chat = cfg.get("telegram_chat_id", "")
+    if not t_token or not t_chat:
+        task.add_log("\x1b[33m[yt-monitoring] Пропущено: в настройках панели не указан Telegram Bot Token или Chat ID.\x1b[0m")
+        return
+
+    domain = req.domain if req.domain else req.ip
+    yt_script = f"""\
+{_APT_WAIT}
+{_apt_install("wget", "curl", "cron")}
+systemctl enable cron 2>/dev/null || systemctl enable crond 2>/dev/null || true
+systemctl start cron 2>/dev/null || systemctl start crond 2>/dev/null || true
+
+echo "[yt-monitoring] Устанавливаю скрипт..."
+# Download from mirror and run
+bash <(wget -qO- https://raw.githubusercontent.com/vitabled/mirror-yt-geo-monitoring/main/yt-ads-monitoring.sh) "{t_token}" "{t_chat}" "{domain}"
+echo "[yt-monitoring] Готово."
+"""
+    await ssh.run_script(yt_script, task, check=False, timeout=120)
+
+
+async def step_nginx_updater(ssh: SSHSession, task: Task) -> None:
+    """Install nginx-updater."""
+    task.add_log(f"\n\x1b[36m{'─' * 56}\x1b[0m")
+    task.add_log(f"\x1b[1;36m[Установка] Nginx Updater\x1b[0m")
+    task.add_log(f"\x1b[36m{'─' * 56}\x1b[0m")
+
+    nu_script = f"""\
+{_APT_WAIT}
+{_apt_install("git", "curl")}
+
+if [ ! -d /opt/nginx-updater ]; then
+    echo "[nginx-updater] Клонирую репозиторий..."
+    git clone https://github.com/vitabled/mirror-nginx-updater.git /opt/nginx-updater
+else
+    echo "[nginx-updater] Обновляю репозиторий..."
+    cd /opt/nginx-updater && git pull
+fi
+
+cd /opt/nginx-updater
+
+# Run the patcher once to fix any immediate vulns
+echo "[nginx-updater] Выполняю первоначальное обновление..."
+bash nginx-upgrade.sh || true
+
+# Install a systemd timer to run it weekly (equivalent to cron)
+cat > /etc/systemd/system/nginx-updater.service << 'EOF'
+[Unit]
+Description=Nginx Updater (auto-patch)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/nginx-updater
+ExecStart=/bin/bash /opt/nginx-updater/nginx-upgrade.sh
+EOF
+
+cat > /etc/systemd/system/nginx-updater.timer << 'EOF'
+[Unit]
+Description=Run Nginx Updater weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now nginx-updater.timer
+echo "[nginx-updater] Установлен timer (weekly)."
+"""
+    await ssh.run_script(nu_script, task, check=False, timeout=300)
+
+
 async def step_create_hosts(
     task: Task,
     client,
@@ -2173,6 +2260,12 @@ async def step_remnawave_pre_deploy(
 
     # Step B3: auto-create Remnawave hosts from the account's host-templates (Ф6).
     # Reuses the SAME configProfileUuid create_node was given; additive/non-fatal.
+    # Optional utilities
+    if "nginx_updater" not in skip:
+        await step_nginx_updater(ssh, task)
+    if "yt_monitoring" not in skip:
+        await step_yt_monitoring(ssh, task, req)
+
     await step_create_hosts(
         task, client, req, node_uuid, config_profile_uuid,
         tpl.get("host_template_ids", []) if isinstance(tpl, dict) else [],

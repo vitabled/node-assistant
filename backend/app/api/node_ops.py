@@ -34,6 +34,7 @@ router = APIRouter(prefix="/api/node")
 Component = Literal[
     "node_accelerator", "trafficguard", "test_tools", "remnanode",
     "masking", "warp", "hysteria2", "ssl", "haproxy", "psiphon",
+    "yt_monitoring", "nginx_updater",
 ]
 Action = Literal["reinstall", "reconfigure", "uninstall"]
 
@@ -49,6 +50,8 @@ _COMPONENT_LABEL = {
     "ssl": "SSL-сертификат",
     "haproxy": "HAProxy",
     "psiphon": "Psiphon Proxy",
+    "yt_monitoring": "YouTube Ads Monitoring",
+    "nginx_updater": "Nginx Updater",
 }
 
 
@@ -528,6 +531,26 @@ echo "[psiphon] Удалён."
 """
 
 
+def _u_yt_monitoring(_req: NodeOpRequest) -> str:
+    return """\
+echo "[yt-monitoring] Удаляю скрипт мониторинга YouTube..."
+rm -f /usr/local/bin/yt-ads-monitoring.sh 2>/dev/null || true
+rm -f /etc/cron.d/yt-ads-monitoring 2>/dev/null || true
+rm -f /tmp/yt_geo_status 2>/dev/null || true
+echo "[yt-monitoring] Удалён."
+"""
+
+
+def _u_nginx_updater(_req: NodeOpRequest) -> str:
+    return """\
+echo "[nginx-updater] Удаляю Nginx Updater..."
+rm -rf /opt/nginx-updater 2>/dev/null || true
+rm -f /etc/systemd/system/nginx-updater.service 2>/dev/null || true
+rm -f /etc/systemd/system/nginx-updater.timer 2>/dev/null || true
+systemctl daemon-reload 2>/dev/null || true
+echo "[nginx-updater] Удалён."
+"""
+
 _UNINSTALL_SCRIPTS = {
     "warp": _u_warp,
     "trafficguard": _u_trafficguard,
@@ -539,4 +562,6 @@ _UNINSTALL_SCRIPTS = {
     "haproxy": _u_haproxy,
     "node_accelerator": _u_node_accelerator,
     "psiphon": _u_psiphon,
+    "yt_monitoring": _u_yt_monitoring,
+    "nginx_updater": _u_nginx_updater,
 }

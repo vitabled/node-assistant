@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
   X, Square, Server, CheckCircle2, XCircle, Loader2,
-  Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck,
+  Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck, Youtube,
   Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
   ShieldAlert, RefreshCw, Trash2, Wrench, Gauge, Play, ArrowLeftRight, Palette,
 } from "lucide-react";
@@ -70,6 +70,8 @@ interface SecurityStats {
   fail2banActive: number;
   fail2banTotal: number;
   trafficGuardActive: number;
+  nginxUpdater?: string;
+  ytRegion?: string;
 }
 
 interface TrafficBucket { rx: number; tx: number; total: number }
@@ -809,6 +811,30 @@ function SecurityBlock({ stats }: { stats: SecurityStats | null }) {
               {stats.trafficGuardActive} заблокировано
             </span>
           </div>
+          {stats.ytRegion && (
+            <div className="flex items-center justify-between">
+              <span className="text-[var(--t-low)] flex items-center gap-1"><Youtube size={10} /> YouTube Region</span>
+              <span className={`px-1.5 py-0.5 rounded border tabular-nums ${
+                stats.ytRegion === "ads" ? "text-[var(--warn)] bg-[var(--warn-dim)] border-[var(--warn-line)]"
+                : stats.ytRegion === "unknown" ? "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]"
+                : "text-[var(--ok)] bg-[var(--ok-dim)] border-[var(--ok-line)]"
+              }`}>
+                {stats.ytRegion === "ads" ? "Реклама" : stats.ytRegion === "unknown" ? "Неизвестно" : stats.ytRegion}
+              </span>
+            </div>
+          )}
+          {stats.nginxUpdater && (
+            <div className="flex items-center justify-between">
+              <span className="text-[var(--t-low)] flex items-center gap-1">Nginx Patch</span>
+              <span className={`px-1.5 py-0.5 rounded border tabular-nums ${
+                stats.nginxUpdater === "vuln" ? "text-[var(--err)] bg-[var(--err-dim)] border-[var(--err-line)]"
+                : stats.nginxUpdater === "ok" ? "text-[var(--ok)] bg-[var(--ok-dim)] border-[var(--ok-line)]"
+                : "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]"
+              }`}>
+                {stats.nginxUpdater === "vuln" ? "Уязвим" : stats.nginxUpdater === "ok" ? "OK" : "Отсутствует"}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>

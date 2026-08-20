@@ -68,6 +68,8 @@ class SecurityStats(BaseModel):
     fail2banActive: int = 0  # Currently banned (right now)
     fail2banTotal: int = 0  # Total banned (all-time)
     trafficGuardActive: int = 0  # active na-ctguard iptables rules
+    nginxUpdater: Optional[str] = None  # e.g. "ok", "vuln"
+    ytRegion: Optional[str] = None      # e.g. "NL", "ads"
 
 
 class TrafficBucket(BaseModel):
@@ -109,11 +111,13 @@ async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
         ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, **await ssh_auth.resolve(req))
         await ssh.connect(timeout=10)
         # One SSH session, read-only probes in parallel.
-        f2b, tg, traffic, cert = await asyncio.gather(
+        f2b, tg, traffic, cert, nginx, yt = await asyncio.gather(
             _fail2ban_sshd(ssh),
             _ctguard_rules(ssh),
             _vnstat_traffic(ssh),
             _cert_expiry(ssh, req.domain),
+            _nginx_updater_status(ssh),
+            _yt_geo_status(ssh),
             return_exceptions=True,
         )
         active, total = f2b if isinstance(f2b, tuple) else (0, 0)
@@ -124,6 +128,8 @@ async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
                 fail2banActive=active,
                 fail2banTotal=total,
                 trafficGuardActive=tg if isinstance(tg, int) else 0,
+                nginxUpdater=nginx if isinstance(nginx, str) else None,
+                ytRegion=yt if isinstance(yt, str) else None,
             ),
             trafficStats=traffic if isinstance(traffic, TrafficStats) else None,
             certInfo=cert if isinstance(cert, CertInfo) else None,
@@ -219,6 +225,33 @@ async def _cert_expiry(ssh: SSHSession, domain: str) -> Optional[CertInfo]:
     except ValueError:
         return None
     return CertInfo(daysLeft=days, notAfter=not_after.strip())
+
+
+async def _nginx_updater_status(ssh: SSHSession) -> Optional[str]:
+    # Checks if nginx-updater is present and its last log status
+    script = """
+    if [ ! -f /etc/nginx-updater/state.json ] && [ ! -d /opt/nginx-updater ]; then
+        echo "missing"
+        exit 0
+    fi
+    if [ -f /etc/nginx-updater/state.json ]; then
+        grep -q "vuln" /etc/nginx-updater/state.json 2>/dev/null && echo "vuln" || echo "ok"
+    else
+        echo "ok"
+    fi
+    """
+    out = (await ssh.get_output(script)).strip()
+    return out if out in ("missing", "ok", "vuln") else None
+
+
+async def _yt_geo_status(ssh: SSHSession) -> Optional[str]:
+    # Checks YT region or ad placement
+    script = """
+    if [ -f /tmp/yt_geo_status ]; then cat /tmp/yt_geo_status; exit 0; fi
+    out=$(curl -s -4 -H "Accept-Language: en-US" --max-time 3 "https://www.youtube.com/watch?v=dQw4w9WgXcQ" | grep -oE '"GL":"[^"]+"' | head -1 | cut -d'"' -f4)
+    if [ -n "$out" ]; then echo "$out"; else echo "unknown"; fi
+    """
+    return (await ssh.get_output(script)).strip()[:10]
 
 
 # ══════════════════════════════════════════════════════════════
