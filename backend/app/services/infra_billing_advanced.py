@@ -95,7 +95,7 @@ class CostForecast:
         return {"trend": trend, "coefficient": round(coefficient, 3)}
 
     def anomalies(self, sensitivity: float = 2.0) -> list[dict]:
-        """Обнаружение аномалий в платежах (outliers by std dev)."""
+        """Обнаружение аномалий в платежах (outliers by MAD - Median Absolute Deviation)."""
         charges = [
             p for p in self.payments
             if p.get("type") in ("charge", "adjustment")
@@ -104,22 +104,26 @@ class CostForecast:
             return []
 
         amounts = [p.get("amount", 0) for p in charges]
-        mean = statistics.mean(amounts)
-        stdev = statistics.stdev(amounts) if len(amounts) > 1 else 0
+        
+        # Используем Median Absolute Deviation (MAD) для устойчивого выявления аномалий
+        median = statistics.median(amounts)
+        mad = statistics.median([abs(x - median) for x in amounts])
 
-        if stdev == 0:
+        if mad == 0:
             return []
 
+        # Modified z-score: используем медиану и MAD вместо mean и stdev
+        # Это более устойчиво к выбросам
         anomalies = []
         for p in charges:
             amount = p.get("amount", 0)
-            z_score = abs((amount - mean) / stdev)
-            if z_score > sensitivity:
+            modified_z_score = abs((amount - median) / (mad * 1.4826))
+            if modified_z_score > sensitivity:
                 anomalies.append({
                     "ts": p.get("ts", 0),
                     "amount": amount,
-                    "z_score": round(z_score, 2),
-                    "deviation": round((amount - mean) / mean * 100, 1) if mean else 0,
+                    "z_score": round(modified_z_score, 2),
+                    "deviation": round((amount - median) / median * 100, 1) if median else 0,
                 })
         return anomalies
 

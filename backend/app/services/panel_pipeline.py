@@ -795,6 +795,31 @@ async def _install_test_tools(
         )
 
 
+
+
+async def _install_rw_wasm_replacer(
+    ssh: SSHSession, task: Task, req: PanelDeployRequest
+) -> None:
+    """Install rw-wasm-replacer (mirror-rw-wasm-replacer) — CLI tool for WASM config editor patch."""
+    task.add_log("\\x1b[36m[rw-wasm-replacer] Установка CLI WASM редактора...\\x1b[0m")
+    try:
+        # Download the CLI binary from releases
+        await ssh.run_script(
+            "curl -fLO https://raw.githubusercontent.com/vitabled/mirror-rw-wasm-replacer/main/rw-wasm && "
+            "chmod +x rw-wasm && "
+            "mv rw-wasm /usr/local/bin/wasm-replacer && "
+            "echo '[rw-wasm-replacer] CLI скрипт загружен'",
+            task,
+            check=False,
+            timeout=120
+        )
+        task.add_log("\\x1b[32m[rw-wasm-replacer] Утилита установлена. Запустите 'sudo wasm-replacer' в консоли сервера.\\x1b[0m")
+    except Exception as exc:
+        task.add_log(
+            f"\\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Установка rw-wasm-replacer не удалась: {exc} — "
+            f"деплой продолжается (редактор опционален).\\x1b[0m"
+        )
+
 # ──────────────────────────────────────────────────────────────
 # Main runner
 # ──────────────────────────────────────────────────────────────
