@@ -30,6 +30,7 @@ export interface FormData {
   country_code:        string;
   behind_cdn:          boolean;
   install_warp:        boolean;
+  install_reshala:     boolean;
   // Node install variant (Plan B 2b): egames (full stack) | vanilla (official
   // remnawave/node, no local domain/SSL/masking).
   node_variant:        string;   // "egames" | "vanilla"
@@ -101,6 +102,7 @@ export const FORM_DEFAULT: FormData = {
   country_code:        "",
   behind_cdn:          false,
   install_warp:        false,
+  install_reshala:     false,
   node_variant:        "egames",
   install_hysteria2:   true,
   docker_mirror:       false,
@@ -571,6 +573,9 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       <Toggle label="Установить WARP Native"
         checked={form.install_warp}
         onChange={() => set("install_warp", !form.install_warp)} disabled={f} />
+      <Toggle label="Установить Решалу (Саппорт бот)"
+        checked={form.install_reshala}
+        onChange={() => set("install_reshala", !form.install_reshala)} disabled={f} />
       <Toggle label="Установить Hysteria2"
         checked={form.install_hysteria2}
         onChange={() => set("install_hysteria2", !form.install_hysteria2)} disabled={f} />

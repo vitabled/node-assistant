@@ -34,7 +34,7 @@ router = APIRouter(prefix="/api/node")
 Component = Literal[
     "node_accelerator", "trafficguard", "test_tools", "remnanode",
     "masking", "warp", "hysteria2", "ssl", "haproxy", "psiphon",
-    "yt_monitoring", "nginx_updater",
+    "yt_monitoring", "nginx_updater", "reshala",
 ]
 Action = Literal["reinstall", "reconfigure", "uninstall"]
 
@@ -52,6 +52,7 @@ _COMPONENT_LABEL = {
     "psiphon": "Psiphon Proxy",
     "yt_monitoring": "YouTube Ads Monitoring",
     "nginx_updater": "Nginx Updater",
+    "reshala": "Решала (саппорт бот)",
 }
 
 
@@ -137,6 +138,9 @@ _DETECT_SCRIPTS: dict[Component, Callable[[str], str]] = {
     "ssl": lambda d: _detect_cmd(f'test -s /root/.acme.sh/{d}_ecc/{d}.cer'),
     "haproxy": lambda d: _detect_cmd("systemctl is-active haproxy >/dev/null 2>&1"),
     "psiphon": lambda d: _detect_cmd("test -d /opt/vps-psiphon"),
+    "yt_monitoring": lambda d: _detect_cmd("test -f /usr/local/bin/yt-ads-monitoring.sh"),
+    "nginx_updater": lambda d: _detect_cmd("test -d /opt/nginx-updater"),
+    "reshala": lambda d: _detect_cmd("test -d /opt/reshala"),
 }
 
 
@@ -551,6 +555,16 @@ systemctl daemon-reload 2>/dev/null || true
 echo "[nginx-updater] Удалён."
 """
 
+def _u_reshala(_req: NodeOpRequest) -> str:
+    return """\
+echo "[reshala] Удаляю саппорт-бота Решала..."
+if [ -d /opt/reshala ]; then
+    cd /opt/reshala && (docker compose down -v 2>/dev/null || docker-compose down -v 2>/dev/null || true)
+fi
+rm -rf /opt/reshala 2>/dev/null || true
+echo "[reshala] Удалён."
+"""
+
 _UNINSTALL_SCRIPTS = {
     "warp": _u_warp,
     "trafficguard": _u_trafficguard,
@@ -564,4 +578,5 @@ _UNINSTALL_SCRIPTS = {
     "psiphon": _u_psiphon,
     "yt_monitoring": _u_yt_monitoring,
     "nginx_updater": _u_nginx_updater,
+    "reshala": _u_reshala,
 }

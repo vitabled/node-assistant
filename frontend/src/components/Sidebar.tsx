@@ -6,6 +6,7 @@ import {
   Workflow, Bell, Bot, Map as MapIcon, Waypoints, BookOpen, FileJson,
   LayoutDashboard, Boxes, Route as RouteIcon, ShieldHalf, Package, ScanSearch,
   Lock, Cloud, Globe, CloudDownload, Pencil, Save, GripVertical, Table2,
+  MessageCircle, Kanban, Ticket, Smartphone
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Fragment, useRef, useState } from "react";
@@ -23,23 +24,25 @@ export type Tab =
   | "hostings-map" | "hostings-list" | "subscription-analyze" | "library" | "vault" | "sitecopy"
   | "cf-overview" | "cf-subscriptions" | "cf-usage" | "cf-payments" | "cf-domains"
   | "infra-dashboard" | "infra-providers" | "infra-projects" | "infra-services"
-  | "infra-payments" | "infra-settings" | "infra-tokens";
+  | "infra-payments" | "infra-settings" | "infra-tokens"
+  | "support-chats" | "support-kanban" | "support-dashboard" | "support-ai"
+  | "reshala-tickets" | "reshala-miniapp";
 
 /**
  * Домен привилегий пункта (`services/permissions.py::DOMAINS`).
  *
  * ⚠️ Соответствие «пункт → привилегия» живёт ОДНОЙ таблицей — прямо в описании
  * пунктов ниже, а не условиями в разметке: при первом же переносе пункта между
- * группами условие и состав группы разъехались бы, и раздел либо потерял бы
- * гейт, либо пропал у того, кому положен.
+ * группами вы забыли бы перенести и скрывающее его условие, открыв вкладку тем,
+ * у кого прав на неё нет.
  *
- * Сайдбар смотрит только на `<домен>.view`: скрывать раздел из-за отсутствия
+ * Если вкладка — read-only view в данные (как логи Cloudflare), скрывать её по
  * «создать»/«изменить» неверно — на чтение он полезен.
  */
 type PermDomain =
   | "deploy" | "panel" | "certs" | "hosts" | "configs" | "automation" | "assistant"
   | "monitoring" | "stats" | "hostings" | "billing" | "cloudflare" | "haproxy"
-  | "library" | "vault" | "settings" | "bridges";
+  | "library" | "vault" | "settings" | "bridges" | "support";
 
 export interface NavItemDef { tab: Tab; label: string; Icon: LucideIcon; domain: PermDomain }
 
@@ -141,7 +144,18 @@ const FOOTER_TABS: NavItemDef[] = [
   { tab: "settings",      label: "Настройки",   Icon: Settings2, domain: "settings"   },
 ];
 
-const GROUPS: { title: string; items: NavItemDef[] }[] = [
+interface NavSubgroup {
+  title: string;
+  items: NavItemDef[];
+}
+
+interface NavGroupDef {
+  title: string;
+  items: NavItemDef[];
+  subgroups?: NavSubgroup[];
+}
+
+const GROUPS: NavGroupDef[] = [
   { title: "Управление",     items: NAV_MAIN        },
   { title: "Статистика",     items: STATS_TABS      },
   { title: "Автоматизация",  items: AUTOMATION_TABS },
@@ -150,13 +164,38 @@ const GROUPS: { title: string; items: NavItemDef[] }[] = [
   { title: "HAPROXY",        items: HAPROXY_TABS    },
   { title: "Справка",        items: HOSTINGS_TABS   },
   { title: "Cloudflare",     items: CF_TABS         },
-  // Инфра-биллинг — плоская секция, без аккордеона (CLAUDE.md §4c).
   { title: "Инфра-биллинг",  items: INFRA_TABS      },
+  {
+    title: "BEDOLAGA",
+    items: [],
+    subgroups: [
+      {
+        title: "Поддержка",
+        items: [
+          { tab: "support-chats", label: "Чаты клиентов", Icon: MessageCircle, domain: "support" },
+          { tab: "support-kanban", label: "Канбан-доска", Icon: Kanban, domain: "support" },
+          { tab: "support-dashboard", label: "Дашборд", Icon: PieChart, domain: "support" },
+          { tab: "support-ai", label: "AI Провайдеры", Icon: Bot, domain: "support" },
+        ]
+      },
+      {
+        title: "Решала",
+        items: [
+          { tab: "reshala-tickets", label: "Тикеты (Решала)", Icon: Ticket, domain: "support" },
+          { tab: "reshala-miniapp", label: "Mini App", Icon: Smartphone, domain: "support" },
+        ]
+      }
+    ]
+  },
 ];
 
 /** Все пункты в порядке отрисовки — App берёт отсюда «первую доступную вкладку». */
 export const NAV_TABS: readonly NavItemDef[] = [
-  ...GROUPS.flatMap(g => g.items), ...FOOTER_TABS,
+  ...GROUPS.flatMap(g => [
+    ...g.items,
+    ...(g.subgroups ? g.subgroups.flatMap(sg => sg.items) : [])
+  ]),
+  ...FOOTER_TABS,
 ];
 
 const TAB_DOMAIN = new Map<Tab, PermDomain>(NAV_TABS.map(i => [i.tab, i.domain]));
@@ -363,7 +402,31 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
                 if (d?.type === "item") moveBefore(d.tab, g.title, null);  // в конец группы
               } : undefined}
             >{editing && <GripVertical size={11} style={{ verticalAlign: "-2px", marginRight: 4 }} />}{g.title}</p>
-            {g.items.map(item => <NavBtn key={item.tab} item={item} />)}
+            {g.items.map(item => {
+              const defGroup = GROUPS.find(gd => gd.title === g.title);
+              let subgroupTitle: string | null = null;
+              if (defGroup?.subgroups) {
+                for (const sg of defGroup.subgroups) {
+                  if (sg.items.length > 0 && sg.items[0].tab === item.tab) {
+                    subgroupTitle = sg.title;
+                    break;
+                  }
+                }
+              }
+              return (
+                <Fragment key={item.tab}>
+                  {subgroupTitle && (
+                    <div style={{
+                      fontSize: 9, fontWeight: 700, textTransform: "uppercase", 
+                      color: "var(--t-faint)", margin: "6px 0 2px 24px", letterSpacing: ".04em"
+                    }}>
+                      {subgroupTitle}
+                    </div>
+                  )}
+                  <NavBtn item={item} />
+                </Fragment>
+              );
+            })}
           </Fragment>
         ))}
       </div>
