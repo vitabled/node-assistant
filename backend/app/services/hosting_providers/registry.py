@@ -30,7 +30,9 @@ _MODULES = ("ruvds", "beget", "veesp", "regru", "yandex", "openstack", "oracle",
             # Волна биллинг-адаптеров: ЕС, большие облака, хостеры со счетами.
             "ionos", "ovhcloud", "infomaniak", "latitude",
             "aws", "alibaba", "cloudru",
-            "ishosting", "hostkey", "billmanager", "servers_com")
+            "ishosting", "hostkey", "billmanager", "servers_com",
+            # Wave-10 новые адаптеры
+            "vultr", "linode")
 
 
 def _exports(mod) -> list:
