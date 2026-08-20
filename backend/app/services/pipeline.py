@@ -1877,8 +1877,8 @@ systemctl enable docker 2>/dev/null || true
 
 # Clone or update vps-psiphon repository
 if [ ! -d /opt/vps-psiphon ]; then
-    echo "[psiphon] Клонирую репозиторий vps-psiphon..."
-    git clone https://github.com/Chara-Freedom/vps-psiphon.git /opt/vps-psiphon
+    echo "[psiphon] Клонирую репозиторий vps-psiphon (зеркало)..."
+    git clone https://github.com/vitabled/mirror-vps-psiphon.git /opt/vps-psiphon
 else
     echo "[psiphon] Репозиторий уже существует, обновляю..."
     cd /opt/vps-psiphon && git pull
