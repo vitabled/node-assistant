@@ -100,6 +100,12 @@ _PANEL_PROBES: dict[str, str] = {
         "command -v iperf3 >/dev/null 2>&1 && "
         "( command -v speedtest >/dev/null 2>&1 || command -v speedtest-cli >/dev/null 2>&1 )"
     ),
+    # rw-wasm-replacer: check for mirror-rw-wasm-replacer repo/docker or binary
+    "rw-wasm-replacer": (
+        "docker ps --format '{{.Names}}' 2>/dev/null | grep -q wasm-replacer || "
+        "test -f /opt/wasm-replacer/bin/replacer || "
+        "command -v wasm-replacer >/dev/null 2>&1"
+    ),
 }
 
 
@@ -158,7 +164,7 @@ async def panel_detect(req: PanelDetectRequest) -> dict:
 # POST /api/panel/step — per-component reinstall / uninstall (streamed Task)
 # ──────────────────────────────────────────────────────────────
 
-Component = Literal["panel", "subpage", "docker", "test_tools", "reverse_proxy"]
+Component = Literal["panel", "subpage", "docker", "test_tools", "reverse_proxy", "rw-wasm-replacer"]
 Action = Literal["reinstall", "uninstall"]
 
 _COMPONENT_LABEL: dict[str, str] = {
@@ -167,6 +173,7 @@ _COMPONENT_LABEL: dict[str, str] = {
     "docker": "Docker",
     "test_tools": "Тест-инструменты",
     "reverse_proxy": "Reverse-proxy",
+    "rw-wasm-replacer": "rw-wasm-replacer (WASM редактор)",
 }
 
 
@@ -211,6 +218,14 @@ _UNINSTALL_SCRIPTS: dict[str, str] = {
         "DEBIAN_FRONTEND=noninteractive apt-get remove -y iperf3 speedtest speedtest-cli 2>/dev/null || true\n"
         "rm -f /usr/local/bin/xray 2>/dev/null || true\n"
         'echo "[test-tools] Удалены."\n'
+    ),
+    # rw-wasm-replacer: remove docker container (if running) and/or local installation
+    "rw-wasm-replacer": (
+        'echo "[rw-wasm-replacer] Удаляю WASM редактор..."\n'
+        "docker rm -f wasm-replacer 2>/dev/null || true\n"
+        "rm -rf /opt/wasm-replacer 2>/dev/null || true\n"
+        "rm -f /usr/local/bin/wasm-replacer 2>/dev/null || true\n"
+        'echo "[rw-wasm-replacer] Удалён."\n'
     ),
 }
 
@@ -283,6 +298,8 @@ async def _panel_reinstall(ssh: SSHSession, task, req: PanelOpRequest, account_i
         await panel_pipeline._setup_reverse_proxy(
             ssh, task, req, panel_pipeline._proxy_targets(req, "panel")
         )
+    elif c == "rw-wasm-replacer":
+        await panel_pipeline._install_rw_wasm_replacer(ssh, task, req)
 
 
 async def _panel_uninstall(ssh: SSHSession, task, req: PanelOpRequest) -> None:
