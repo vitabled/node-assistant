@@ -32,6 +32,8 @@ export interface FormData {
   install_warp:        boolean;
   install_psiphon:     boolean;
   install_reshala:     boolean;
+  yt_bot_token:        string;
+  yt_chat_id:          string;
   // Node install variant (Plan B 2b): egames (full stack) | vanilla (official
   // remnawave/node, no local domain/SSL/masking).
   node_variant:        string;   // "egames" | "vanilla"
@@ -105,6 +107,8 @@ export const FORM_DEFAULT: FormData = {
   install_warp:        false,
   install_psiphon:     false,
   install_reshala:     false,
+  yt_bot_token:        "",
+  yt_chat_id:          "",
   node_variant:        "egames",
   install_hysteria2:   true,
   docker_mirror:       false,

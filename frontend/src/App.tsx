@@ -50,6 +50,10 @@ import { HaproxyTraffic }                  from "./components/haproxy/HaproxyTra
 import { HaproxyFirewall }                 from "./components/haproxy/HaproxyFirewall";
 import { HaproxyReleases }                 from "./components/haproxy/HaproxyReleases";
 import { InfraDashboard }                 from "./components/infra/InfraDashboard";
+import { BedolagaDashboard }              from "./components/bedolaga/BedolagaDashboard";
+import { BedolagaChats }                  from "./components/bedolaga/BedolagaChats";
+import { BedolagaKanban }                 from "./components/bedolaga/BedolagaKanban";
+import { BedolagaAiSettings }             from "./components/bedolaga/BedolagaAiSettings";
 import { InfraProviders }                 from "./components/infra/InfraProviders";
 import { InfraProjects }                  from "./components/infra/InfraProjects";
 import { InfraServices }                  from "./components/infra/InfraServices";
@@ -110,6 +114,7 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "dashboard":       ["Node Installer", "Дашборд"],
   "deploy":          ["Node Installer", "Деплой ноды"],
   "certs":           ["Node Installer", "Управление SSL"],
+  "f2b-list":        ["Node Installer", "Fail2Ban"],
   "templates":       ["Node Installer", "Шаблоны"],
   "hosts":           ["Node Installer", "Хосты"],
   "traffic":         ["Node Installer", "Трафик"],
@@ -390,7 +395,12 @@ export default function App() {
           {tab === "infra-settings"  && <InfraSettings />}
           {tab === "infra-tokens"    && <InfraApiTokens />}
 
-          {(tab.startsWith("support-") || tab.startsWith("reshala-")) && (
+          {tab === "support-chats"     && <BedolagaChats />}
+          {tab === "support-kanban"    && <BedolagaKanban />}
+          {tab === "support-dashboard" && <BedolagaDashboard />}
+          {tab === "support-ai"        && <BedolagaAiSettings />}
+
+          {tab.startsWith("reshala-") && (
             <div className="flex h-full items-center justify-center text-[var(--t-faint)]">
               <div className="text-center">
                 <p className="text-sm font-medium mb-1">Раздел в разработке</p>

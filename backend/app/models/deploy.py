@@ -37,6 +37,8 @@ class DeployRequest(SshCreds):
     install_warp: bool = Field(default=False)
     install_psiphon: bool = Field(default=False)
     install_reshala: bool = Field(default=False)
+    yt_bot_token: Optional[str] = Field(default=None)
+    yt_chat_id: Optional[str] = Field(default=None)
     # Node install variant (remnanode mode): "egames" = the full node-assistant
     # stack (default, current behaviour); "vanilla" = official remnawave/node
     # install WITHOUT a local domain / SSL / masking site (Plan B 2b).

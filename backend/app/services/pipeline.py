@@ -1950,20 +1950,22 @@ echo "[psiphon] Установка завершена."
 
 
 async def step_yt_monitoring(ssh: SSHSession, task: Task, req: "DeployRequest") -> None:
-    """Install yt-ads-monitoring script with telegram alerts."""
+    """Install yt-ads-monitoring script with telegram alerts.
+
+    Needs a Telegram bot token + chat id to notify when a node's YouTube ads
+    status changes. These are per-deploy fields (req.yt_bot_token/yt_chat_id) —
+    there is no single "panel-wide Telegram settings" store in this project
+    (auto_backup and rule_actions each keep their own), so this step simply
+    no-ops when they're not supplied instead of guessing at a nonexistent one.
+    """
     task.add_log(f"\n\x1b[36m{'─' * 56}\x1b[0m")
     task.add_log(f"\x1b[1;36m[Установка] YouTube Ads Monitoring\x1b[0m")
     task.add_log(f"\x1b[36m{'─' * 56}\x1b[0m")
 
-    # requires bot_token and chat_id from req (we will grab them from settings if possible)
-    # The requirement is: bash <(wget -qO- https://raw.githubusercontent.com/vitabled/mirror-yt-geo-monitoring/main/yt-ads-monitoring.sh) <BOT_TOKEN> <CHAT_ID> [ИМЯ_НОДЫ]
-    # In NA, we can pass Telegram settings if they exist.
-    from app.services import settings
-    cfg = await settings.load()
-    t_token = cfg.get("telegram_bot_token", "")
-    t_chat = cfg.get("telegram_chat_id", "")
+    t_token = getattr(req, "yt_bot_token", "") or ""
+    t_chat = getattr(req, "yt_chat_id", "") or ""
     if not t_token or not t_chat:
-        task.add_log("\x1b[33m[yt-monitoring] Пропущено: в настройках панели не указан Telegram Bot Token или Chat ID.\x1b[0m")
+        task.add_log("\x1b[33m[yt-monitoring] Пропущено: не указан Telegram Bot Token или Chat ID для уведомлений.\x1b[0m")
         return
 
     domain = req.domain if req.domain else req.ip

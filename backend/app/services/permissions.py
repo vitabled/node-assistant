@@ -348,6 +348,15 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/subscription-analyze/to-hostings", {"*": "hostings.create"}),
     ("/api/subscription-analyze", {"*": "hostings.view"}),
 
+    # ── BEDOLAGA (саппорт-бот) ────────────────────────────────
+    ("/api/bedolaga/config/test", {"*": "support.view"}),
+    ("/api/bedolaga/config", {"GET": "support.view", "*": "support.edit"}),
+    ("/api/bedolaga/ai-config", {"GET": "support.view", "*": "support.edit"}),
+    ("/api/bedolaga/tickets/{tid}/reply", {"*": "support.execute"}),
+    ("/api/bedolaga/tickets/{tid}/priority", {"*": "support.edit"}),
+    ("/api/bedolaga/tickets", {"*": "support.view"}),
+    ("/api/bedolaga/dashboard", {"*": "support.view"}),
+
     # ── инфра-биллинг ────────────────────────────────────────
     ("/api/infra-billing/providers/{uuid}/order-options", {"GET": "billing.view"}),
     ("/api/infra-billing/providers/{uuid}/order-quote", {"*": "billing.view"}),
