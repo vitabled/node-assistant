@@ -214,7 +214,11 @@ export function tabPermission(tab: Tab): string | null {
 interface GroupOrder { title: string; tabs: string[] }
 
 const DEFAULT_ORDER: GroupOrder[] = GROUPS.map(g => ({
-  title: g.title, tabs: g.items.map(i => i.tab),
+  title: g.title,
+  tabs: [
+    ...g.items.map(i => i.tab),
+    ...(g.subgroups ? g.subgroups.flatMap(sg => sg.items.map(i => i.tab)) : [])
+  ],
 }));
 
 function navOrderKey(accountId: string | null | undefined): string {
