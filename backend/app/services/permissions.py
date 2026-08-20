@@ -56,6 +56,7 @@ DOMAINS: dict[str, tuple[str, ...]] = {
     "library":    (VIEW, CREATE, EDIT),            # заметки, файлы, медиа
     "vault":      (VIEW, CREATE, EDIT),            # Хранилище (значения — см. vault.reveal)
     "settings":   (VIEW, EDIT),
+    "support":    (VIEW, CREATE, EDIT, EXECUTE),   # тикеты, саппорт, решала
     "account":    (VIEW, EDIT),                    # своё: пароль, тема, свои API-токены
 }
 
