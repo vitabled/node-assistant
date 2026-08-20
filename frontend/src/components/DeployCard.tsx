@@ -72,6 +72,7 @@ interface SecurityStats {
   trafficGuardActive: number;
   nginxUpdater?: string;
   ytRegion?: string;
+  xrayVersion?: string;
 }
 
 interface TrafficBucket { rx: number; tx: number; total: number }
@@ -175,6 +176,39 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange, onC
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...opPayload(job.savedForm), component, action }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        setOpLogs([`\x1b[31m[HTTP ${res.status}] ${typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail)}\x1b[0m`]);
+        setOpStatus("failed");
+        return;
+      }
+      const { task_id } = await res.json();
+      setOpTaskId(task_id);
+    } catch (e) {
+      setOpLogs([`\x1b[31m${(e as Error).message}\x1b[0m`]);
+      setOpStatus("failed");
+    } finally {
+      setOpSubmitting(false);
+    }
+  }, [job.savedForm]);
+
+  // Standalone Xray-core version update — same task-stream modal as runOp,
+  // but its own endpoint (/api/node/xray-version) since it's not a managed
+  // deploy component (no detect/uninstall, just an in-place binary swap).
+  const runXrayUpdate = useCallback(async (version: string) => {
+    setOpLogs([]); setOpStatus("running"); setOpTitle(`Xray-core → ${version}`); setOpTaskId(null);
+    setOpSubmitting(true);
+    try {
+      const f = job.savedForm;
+      const sshPort = parseInt(f.change_ssh_port ? f.new_ssh_port : f.current_ssh_port, 10) || 22;
+      const res = await fetch("/api/node/xray-version", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ip: f.ip, ssh_port: sshPort, ssh_user: f.ssh_user, ssh_password: f.ssh_password,
+          version,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -335,7 +369,7 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange, onC
             defaults to true, so pre-existing cards keep showing it). */}
         {stepStatus.status === "success" && (
           <>
-            <SecurityBlock stats={security} />
+            <SecurityBlock stats={security} onUpdateXray={runXrayUpdate} xrayUpdateBusy={opBusy} />
             {job.savedForm.install_vnstat !== false && <TrafficBlock stats={traffic} />}
             {job.savedForm.mode !== "haproxy" && <CertBlock cert={cert} />}
             {job.savedForm.mode !== "haproxy" && (
@@ -773,7 +807,12 @@ function StatusBadge({ status, isRunning }: { status: TaskStatus; isRunning: boo
 }
 
 // ── Security block (Fail2Ban / TrafficGuard) — SUCCESS nodes ──
-function SecurityBlock({ stats }: { stats: SecurityStats | null }) {
+function SecurityBlock({ stats, onUpdateXray, xrayUpdateBusy }: {
+  stats: SecurityStats | null;
+  onUpdateXray?: (version: string) => void;
+  xrayUpdateBusy?: boolean;
+}) {
+  const [xrayInput, setXrayInput] = useState("latest");
   // Active bans get a soft amber highlight to signal repelled attacks.
   const f2bActiveCls = stats && stats.fail2banActive > 0
     ? "text-[var(--warn)] bg-[var(--warn-dim)] border-[var(--warn-line)]"
@@ -833,6 +872,30 @@ function SecurityBlock({ stats }: { stats: SecurityStats | null }) {
               }`}>
                 {stats.nginxUpdater === "vuln" ? "Уязвим" : stats.nginxUpdater === "ok" ? "OK" : "Отсутствует"}
               </span>
+            </div>
+          )}
+          {onUpdateXray && (
+            <div className="flex items-center justify-between gap-2 pt-1 mt-0.5 border-t border-[var(--line-soft)]">
+              <span className="text-[var(--t-low)] flex items-center gap-1 flex-none">
+                Xray-core
+                {stats.xrayVersion && (
+                  <span className="px-1.5 py-0.5 rounded border tabular-nums text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]">
+                    {stats.xrayVersion}
+                  </span>
+                )}
+              </span>
+              <div className="flex items-center gap-1 flex-1 justify-end min-w-0">
+                <input value={xrayInput} onChange={e => setXrayInput(e.target.value)}
+                  placeholder="latest / v25.9.11" disabled={xrayUpdateBusy}
+                  className="input text-[10px] px-1.5 py-1 w-[104px] min-w-0" />
+                <button type="button" disabled={xrayUpdateBusy || !xrayInput.trim()}
+                  onClick={() => onUpdateXray(xrayInput.trim())}
+                  className="px-2 py-1 rounded-md text-[10px] font-medium border transition-colors
+                             bg-[var(--bg2)] hover:bg-[var(--bg3)] text-[var(--t-mid)] border-[var(--line)]
+                             disabled:opacity-50 flex-none">
+                  Обновить
+                </button>
+              </div>
             </div>
           )}
         </div>

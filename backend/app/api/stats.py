@@ -70,6 +70,7 @@ class SecurityStats(BaseModel):
     trafficGuardActive: int = 0  # active na-ctguard iptables rules
     nginxUpdater: Optional[str] = None  # e.g. "ok", "vuln"
     ytRegion: Optional[str] = None      # e.g. "NL", "ads"
+    xrayVersion: Optional[str] = None   # e.g. "v25.9.11" (running inside remnanode)
 
 
 class TrafficBucket(BaseModel):
@@ -111,13 +112,14 @@ async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
         ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, **await ssh_auth.resolve(req))
         await ssh.connect(timeout=10)
         # One SSH session, read-only probes in parallel.
-        f2b, tg, traffic, cert, nginx, yt = await asyncio.gather(
+        f2b, tg, traffic, cert, nginx, yt, xray_ver = await asyncio.gather(
             _fail2ban_sshd(ssh),
             _ctguard_rules(ssh),
             _vnstat_traffic(ssh),
             _cert_expiry(ssh, req.domain),
             _nginx_updater_status(ssh),
             _yt_geo_status(ssh),
+            _xray_version_status(ssh),
             return_exceptions=True,
         )
         active, total = f2b if isinstance(f2b, tuple) else (0, 0)
@@ -130,6 +132,7 @@ async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
                 trafficGuardActive=tg if isinstance(tg, int) else 0,
                 nginxUpdater=nginx if isinstance(nginx, str) else None,
                 ytRegion=yt if isinstance(yt, str) else None,
+                xrayVersion=xray_ver if isinstance(xray_ver, str) else None,
             ),
             trafficStats=traffic if isinstance(traffic, TrafficStats) else None,
             certInfo=cert if isinstance(cert, CertInfo) else None,
@@ -252,6 +255,21 @@ async def _yt_geo_status(ssh: SSHSession) -> Optional[str]:
     if [ -n "$out" ]; then echo "$out"; else echo "unknown"; fi
     """
     return (await ssh.get_output(script)).strip()[:10]
+
+
+async def _xray_version_status(ssh: SSHSession) -> Optional[str]:
+    """Running xray-core version inside the remnanode container.
+
+    remnanode (remnawave/node image) bundles a specific xray-core binary at
+    /usr/local/bin/xray, baked in at build time (no version env-var) — so the
+    only way to read/change it is `docker exec` into the running container.
+    """
+    script = (
+        "docker exec remnanode xray version 2>/dev/null "
+        "| head -1 | grep -oE 'Xray [0-9]+\\.[0-9]+\\.[0-9]+' | cut -d' ' -f2"
+    )
+    out = (await ssh.get_output(script)).strip()
+    return out[:20] if out else None
 
 
 # ══════════════════════════════════════════════════════════════

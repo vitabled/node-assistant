@@ -237,6 +237,7 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/deploy", {"*": ("deploy.execute", _CREDS)}),
     ("/api/node/detect", {"*": ("deploy.view", _CREDS)}),
     ("/api/node/step", {"*": ("deploy.execute", _CREDS)}),
+    ("/api/node/xray-version", {"*": ("deploy.execute", _CREDS)}),
     ("/api/task", {"GET": "deploy.view"}),
     ("/api/templates", {"GET": "deploy.view", "POST": "deploy.create",
                         "*": "deploy.edit"}),

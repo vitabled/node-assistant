@@ -17,6 +17,7 @@ from app.api import (
     infra_billing,
     infra_billing_advanced,
     bedolaga,
+    xray_version,
     node_ops,
     node_admin,
     subscriptions,
@@ -163,6 +164,7 @@ app.include_router(xray_checker.router, dependencies=_auth)
 app.include_router(infra_billing.router, dependencies=_auth)
 app.include_router(infra_billing_advanced.router, dependencies=_auth)
 app.include_router(bedolaga.router, dependencies=_auth)
+app.include_router(xray_version.router, dependencies=_auth)
 app.include_router(subscriptions.router, dependencies=_auth)
 app.include_router(domains.router, dependencies=_auth)
 app.include_router(hosts.router, dependencies=_auth)
