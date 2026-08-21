@@ -106,6 +106,31 @@ export function DeployDashboard() {
     });
   };
 
+  const restartWaitingJob = async (job: DeployJobSummary) => {
+    const res = await fetch("/api/deploy/restart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_id: job.taskId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+    }
+    const { task_id } = await res.json();
+    const replacement: DeployJobSummary = {
+      ...job, taskId: task_id, startedAt: Date.now(), finalStatus: undefined,
+    };
+    setJobs(prev => {
+      // The backend returns the same replacement for duplicate requests. Filter
+      // both ids so a double-click can never create duplicate cards either.
+      const updated = [replacement, ...prev.filter(
+        j => j.taskId !== job.taskId && j.taskId !== task_id,
+      )];
+      saveJobs(updated);
+      return updated;
+    });
+  };
+
   const removeJob = (taskId: string) => {
     setJobs(prev => {
       const updated = prev.filter(j => j.taskId !== taskId);
@@ -185,6 +210,7 @@ export function DeployDashboard() {
                 onRemove={removeJob}
                 onEdit={j  => setEditJob(j)}
                 onRetry={retryJob}
+                onRestart={restartWaitingJob}
                 onStatusChange={updateJobStatus}
                 onColorChange={changeJobColor}
               />

@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { manageableComponents, opPayload } from "./DeployCard";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { DeployCard, manageableComponents, opPayload } from "./DeployCard";
 import { FORM_DEFAULT, type FormData } from "./DeployForm";
 
 const remna: FormData = { ...FORM_DEFAULT, mode: "remnanode", optimize: true, install_warp: true, install_trafficguard: true };
@@ -56,5 +57,22 @@ describe("opPayload", () => {
     expect(p.remnanode_token).toBeNull();
     expect(p.plugin_uuid).toBeNull();
     expect(typeof p.haproxy_source_port).toBe("number");
+  });
+});
+
+describe("waiting deploy recovery", () => {
+  it("offers an idempotent restart while the deploy is still pending", () => {
+    const onRestart = vi.fn().mockResolvedValue(undefined);
+    render(<DeployCard
+      job={{
+        taskId: "waiting-1", domain: "node.example", ip: "1.2.3.4",
+        newSshPort: 2222, startedAt: Date.now(), savedForm: remna,
+      }}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={onRestart} onStatusChange={vi.fn()}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Перезапустить ожидающий деплой" }));
+    expect(onRestart).toHaveBeenCalledTimes(1);
   });
 });

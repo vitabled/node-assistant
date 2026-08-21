@@ -84,12 +84,13 @@ interface Props {
   onRemove:       (taskId: string) => void;
   onEdit:         (job: DeployJobSummary) => void;
   onRetry:        (job: DeployJobSummary) => Promise<void>;
+  onRestart:      (job: DeployJobSummary) => Promise<void>;
   onStatusChange: (taskId: string, status: "success" | "failed") => void;
   /** Цветовая маркировка виджета (null — сброс); родитель обновляет jobs. */
   onColorChange?: (taskId: string, colorKey: string | null) => void;
 }
 
-export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange, onColorChange }: Props) {
+export function DeployCard({ job, onRemove, onEdit, onRetry, onRestart, onStatusChange, onColorChange }: Props) {
   const [logs,       setLogs]       = useState<string[]>([]);
   const [stepStatus, setStepStatus] = useState<StatusFrame>(
     job.finalStatus
@@ -245,6 +246,18 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange, onC
     setRetrying(true);
     try {
       await onRetry(job);
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const handleRestartWaiting = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRetrying(true);
+    try {
+      await onRestart(job);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Не удалось перезапустить деплой", "error");
     } finally {
       setRetrying(false);
     }
@@ -413,6 +426,19 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onStatusChange, onC
                          border btn-danger
                          transition-colors">
               <Square size={10} fill="currentColor" /> Стоп
+            </button>
+          )}
+
+          {/* Pending means the worker has not claimed the deploy yet. The backend
+              atomically replaces only that state, so this cannot duplicate a
+              running job or disturb a completed one. */}
+          {stepStatus.status === "pending" && !job.finalStatus && (
+            <button onClick={handleRestartWaiting} disabled={retrying}
+              aria-label="Перезапустить ожидающий деплой"
+              title="Перезапустить ожидающий деплой без дублирования задачи"
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium
+                         border btn-warn transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              {retrying ? <Loader2 size={10} className="animate-spin" /> : <RotateCcw size={10} />}
             </button>
           )}
 

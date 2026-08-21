@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from app.models.deploy import DeployRequest
 from app.services.task_store import task_store, STEP_LABELS, TaskStatus
 from app.services.pipeline import run_pipeline
-from app.services import job_runner
+from app.services import accounts, job_runner, shared_task_store, worker_lease
 from app.config import settings
 
 router = APIRouter(prefix="/api")
@@ -61,6 +61,37 @@ async def stop_deploy(req: StopRequest):
     if task_store.request_cancel(req.task_id):
         return {"ok": True}
     raise HTTPException(status_code=404, detail="Task not found or already completed")
+
+
+@router.post("/deploy/restart")
+async def restart_deploy(req: StopRequest):
+    """Recover an unclaimed shared-queue deploy without creating duplicates.
+
+    The shared store atomically closes the waiting row and claims one replacement
+    for this gateway. Running/claimed/terminal jobs are rejected, and a repeated
+    request returns the first replacement id.
+    """
+    if getattr(task_store, "mode", "memory") != "shared":
+        raise HTTPException(409, "Перезапуск доступен только для ожидающей очереди")
+    try:
+        task, payload, created = task_store.restart_waiting(
+            req.task_id, accounts.current_account.get() or "", worker_lease.holder_id())
+    except shared_task_store.TaskNotFound:
+        raise HTTPException(404, "Task not found")
+    except shared_task_store.RestartConflict:
+        raise HTTPException(409, "Перезапустить можно только ожидающий деплой")
+
+    if created:
+        try:
+            deploy_req = DeployRequest(**(payload or {}))
+        except Exception:
+            task.finish(TaskStatus.FAILED, "Не удалось восстановить параметры деплоя")
+            raise HTTPException(409, "Не удалось восстановить параметры деплоя")
+        loop_task = asyncio.create_task(_run_pipeline_safe(deploy_req, task.task_id))
+        _running_tasks[task.task_id] = loop_task
+        loop_task.add_done_callback(lambda _: _running_tasks.pop(task.task_id, None))
+
+    return {"task_id": task.task_id, "task_type": "deploy", "restarted": created}
 
 
 @router.get("/task/{task_id}")

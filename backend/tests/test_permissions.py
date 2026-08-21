@@ -153,6 +153,10 @@ def test_ssh_credentials_are_a_separate_privilege():
     assert "deploy.credentials" not in permissions.required("/api/checker/instances", "GET")
 
 
+def test_waiting_deploy_restart_requires_operator_execution_permission():
+    assert permissions.required("/api/deploy/restart", "POST") == ("deploy.execute",)
+
+
 def test_exempt_routes_need_no_privilege():
     for path in ("/api/health", "/api/auth/login", "/api/auth/me"):
         assert permissions.required(path, "GET") == ()

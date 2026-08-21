@@ -261,6 +261,84 @@ def test_a_job_cancelled_while_queued_is_never_started(shared):
     assert task.error == "Остановлено пользователем"
 
 
+def test_cancelling_an_unclaimed_job_finishes_it_immediately(shared):
+    """A stopped waiting job must not depend on a worker polling the queue."""
+    task = shared.create(total_steps=14)
+    shared.enqueue(task.task_id, "deploy", {"ip": "10.0.0.1"})
+
+    assert shared.request_cancel(task.task_id) is True
+    assert task.status == TaskStatus.FAILED
+    assert task.error == "Остановлено пользователем"
+
+
+def test_restart_waiting_deploy_is_atomic_and_idempotent(shared):
+    """Restart replaces an unclaimed waiting deploy exactly once."""
+    task = shared.create(total_steps=14)
+    payload = {"ip": "10.0.0.1", "ssh_password": "secret"}
+    shared.enqueue(task.task_id, "deploy", payload)
+
+    replacement, got_payload, created = shared.restart_waiting(
+        task.task_id, task.account_id, worker_lease.holder_id())
+
+    assert created is True
+    assert got_payload == payload
+    assert replacement.task_id != task.task_id
+    assert task.status == TaskStatus.FAILED
+    assert task.error == "Перезапущено оператором"
+
+    again, duplicate_payload, created_again = shared.restart_waiting(
+        task.task_id, task.account_id, worker_lease.holder_id())
+    assert created_again is False
+    assert duplicate_payload is None
+    assert again.task_id == replacement.task_id
+
+
+@pytest.mark.parametrize("status", [TaskStatus.RUNNING, TaskStatus.SUCCESS, TaskStatus.FAILED])
+def test_restart_waiting_never_touches_non_waiting_states(shared, status):
+    task = shared.create(total_steps=14)
+    shared.enqueue(task.task_id, "deploy", {"ip": "10.0.0.1"})
+    if status == TaskStatus.RUNNING:
+        shared.claim_next(["deploy"], "healthy-worker")
+        task.set_step(1, status)
+    else:
+        task.finish(status)
+
+    with pytest.raises(sts.RestartConflict):
+        shared.restart_waiting(task.task_id, task.account_id, worker_lease.holder_id())
+    assert task.status == status
+
+
+def test_restart_waiting_rejects_another_workspace(shared):
+    task = shared.create(total_steps=14)
+    shared.enqueue(task.task_id, "deploy", {"ip": "10.0.0.1"})
+
+    with pytest.raises(sts.TaskNotFound):
+        shared.restart_waiting(task.task_id, "other-workspace", worker_lease.holder_id())
+    assert task.status == TaskStatus.PENDING
+
+
+def test_restart_endpoint_runs_replacement_locally(shared, monkeypatch):
+    """Manual recovery bypasses the worker lease that caused the waiting state."""
+    task = shared.create(total_steps=14)
+    payload = {
+        "mode": "haproxy", "ip": "10.0.0.1", "ssh_password": "pw",
+        "open_ports": "443", "haproxy_dest_ip": "10.0.0.2",
+    }
+    shared.enqueue(task.task_id, "deploy", payload)
+    seen = []
+
+    async def fake_run(req, task_id):
+        seen.append((req.ip, task_id))
+
+    monkeypatch.setattr(deploy, "task_store", shared)
+    monkeypatch.setattr(deploy, "_run_pipeline_safe", fake_run)
+
+    result = asyncio.run(deploy.restart_deploy(deploy.StopRequest(task_id=task.task_id)))
+    assert result["task_id"] != task.task_id
+    assert result["restarted"] is True
+    assert seen == [("10.0.0.1", result["task_id"])]
+
+
 def test_an_undecryptable_job_is_failed_not_orphaned(shared, monkeypatch):
     """Claiming happens before the payload can be read, so a decrypt failure
     (mismatched ENCRYPTION_KEY) must still end the task."""

@@ -240,6 +240,7 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/node-ops/add-node", {"*": "deploy.create"}),
     ("/api/node-ops/deploy", {"*": ("deploy.execute", _CREDS)}),
     ("/api/node-ops", {"PATCH": "deploy.edit", "DELETE": "deploy.edit"}),
+    ("/api/deploy/restart", {"*": "deploy.execute"}),
     ("/api/deploy/stop", {"*": "deploy.execute"}),
     ("/api/deploy", {"*": ("deploy.execute", _CREDS)}),
     ("/api/node/detect", {"*": ("deploy.view", _CREDS)}),

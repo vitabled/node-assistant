@@ -72,7 +72,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     payload_enc      BLOB,
     claimed_by       TEXT,
-    claimed_at       INTEGER
+    claimed_at       INTEGER,
+    restarted_as     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_queue   ON tasks(kind, claimed_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
@@ -110,6 +111,11 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_SCHEMA)
+    # Existing installations predate restart recovery. SQLite has no
+    # `ADD COLUMN IF NOT EXISTS`, so migrate the additive field explicitly.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+    if "restarted_as" not in columns:
+        conn.execute("ALTER TABLE tasks ADD COLUMN restarted_as TEXT")
     conn.commit()
     _conn = conn
     return conn
@@ -159,6 +165,14 @@ def _decrypt(blob: bytes) -> Optional[dict]:
     except (InvalidToken, ValueError, TypeError):
         log.warning("shared_task_store.payload_decrypt_failed")
         return None
+
+
+class TaskNotFound(Exception):
+    """The task does not exist in the caller's workspace."""
+
+
+class RestartConflict(Exception):
+    """The task is no longer an unclaimed waiting deploy."""
 
 
 class SharedTask:
@@ -397,6 +411,68 @@ class SharedTaskStore:
                   (TaskStatus.FAILED.value, "Остановлено пользователем",
                    int(time.time()), r["task_id"]))
 
+    def restart_waiting(self, task_id: str, account_id: str,
+                        holder: str) -> tuple[SharedTask, Optional[dict], bool]:
+        """Atomically replace one unclaimed waiting deploy for local execution.
+
+        The old row records the replacement id. Repeating the request returns the
+        same replacement instead of creating a duplicate. Claimed, running and
+        terminal jobs are never changed.
+        """
+        now = int(time.time())
+        replacement_id = str(_uuid.uuid4())
+        with _lock:
+            conn = _connect()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT account_id, kind, total_steps, status, payload_enc, "
+                    "claimed_at, restarted_as FROM tasks WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()
+                # Hide cross-workspace task existence from the caller.
+                if row is None or row["account_id"] != account_id:
+                    raise TaskNotFound(task_id)
+                if row["restarted_as"]:
+                    existing = conn.execute(
+                        "SELECT total_steps FROM tasks WHERE task_id=?",
+                        (row["restarted_as"],),
+                    ).fetchone()
+                    if existing is None:
+                        raise RestartConflict("replacement missing")
+                    conn.commit()
+                    return (SharedTask(row["restarted_as"], int(existing["total_steps"])),
+                            None, False)
+                if (row["status"] != TaskStatus.PENDING.value
+                        or row["kind"] != "deploy"
+                        or row["claimed_at"] is not None
+                        or not row["payload_enc"]):
+                    raise RestartConflict("task is not waiting")
+                payload = _decrypt(row["payload_enc"])
+                if payload is None:
+                    raise RestartConflict("payload is unavailable")
+
+                # Claim the replacement for this gateway before commit. No queue
+                # worker or duplicate HTTP request can run it concurrently.
+                conn.execute(
+                    "INSERT INTO tasks (task_id, account_id, total_steps, status, "
+                    "created_at, updated_at, claimed_by, claimed_at) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (replacement_id, account_id, int(row["total_steps"]),
+                     TaskStatus.PENDING.value, now, now, holder, now),
+                )
+                conn.execute(
+                    "UPDATE tasks SET status=?, error=?, updated_at=?, payload_enc=NULL, "
+                    "restarted_as=? WHERE task_id=?",
+                    (TaskStatus.FAILED.value, "Перезапущено оператором", now,
+                     replacement_id, task_id),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return SharedTask(replacement_id, int(row["total_steps"])), payload, True
+
     def reap_orphans(self, alive_holders: set) -> int:
         """Fail rows claimed by a process that no longer exists (see
         job_runner.reap_orphans for how 'no longer exists' is decided)."""
@@ -423,8 +499,20 @@ class SharedTaskStore:
     def request_cancel(self, task_id: str) -> bool:
         """Ask a worker in another process to stop. True when the task exists
         and is still running (so the caller can answer 404 otherwise)."""
-        cur = _exec("UPDATE tasks SET cancel_requested=1 WHERE task_id=? AND status IN (?,?)",
-                    (task_id, TaskStatus.PENDING.value, TaskStatus.RUNNING.value))
+        now = int(time.time())
+        # An unclaimed task has no runner to observe cancel_requested. End it in
+        # this write; otherwise a fresh-but-dead lease leaves the UI waiting.
+        cur = _exec(
+            "UPDATE tasks SET cancel_requested=1, "
+            "status=CASE WHEN claimed_at IS NULL AND status=? THEN ? ELSE status END, "
+            "error=CASE WHEN claimed_at IS NULL AND status=? THEN ? ELSE error END, "
+            "payload_enc=CASE WHEN claimed_at IS NULL AND status=? THEN NULL ELSE payload_enc END, "
+            "updated_at=? WHERE task_id=? AND status IN (?,?)",
+            (TaskStatus.PENDING.value, TaskStatus.FAILED.value,
+             TaskStatus.PENDING.value, "Остановлено пользователем",
+             TaskStatus.PENDING.value, now, task_id,
+             TaskStatus.PENDING.value, TaskStatus.RUNNING.value),
+        )
         return cur.rowcount == 1
 
     def cancel_requested(self, task_id: str) -> bool:
