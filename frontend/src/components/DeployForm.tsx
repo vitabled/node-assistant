@@ -778,7 +778,7 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       )}
 
       {/* ── Настройки HAProxy (только HAProxy) — выше «Сети» ── */}
-      {!isRemna && (
+      {!isRemna && wantsComponent("haproxy") && (
       <>
       <SectionLabel>Настройки HAProxy</SectionLabel>
       <div className="grid grid-cols-2 gap-3">

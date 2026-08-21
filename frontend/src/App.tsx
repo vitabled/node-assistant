@@ -411,6 +411,12 @@ export default function App() {
             </div>
           )}
 
+          {tab === "f2b-list" && (
+            <div style={{ flex: 1, padding: 20, overflowY: "auto", minHeight: 0 }}>
+              <F2bList />
+            </div>
+          )}
+
           {tab === "certs" && (
             <div className="flex-1 grid grid-cols-1 lg:grid-cols-[360px_1fr] min-h-0" style={{ display: "grid" }}>
               <div style={{ borderRight: "1px solid var(--line-soft)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
@@ -418,9 +424,6 @@ export default function App() {
                   <CertsForm onSubmit={deployCert} disabled={certIsRunning}
                     onStop={certIsRunning ? stopCert : undefined}
                     onDomainsAdded={() => setDomainsRefresh(n => n + 1)} />
-                  <div style={{ marginTop: 16 }}>
-                    <F2bList />
-                  </div>
                 </div>
                 {certTaskId && (
                   <div style={{ padding: "16px 20px 20px", borderTop: "1px solid var(--line-soft)" }}>

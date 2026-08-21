@@ -232,6 +232,24 @@ describe("DeployForm mode-specific rendering", () => {
     expect(screen.queryByText("Cloudflare API токен")).not.toBeInTheDocument();
   });
 
+  it("hides HAProxy settings when HAProxy is not selected for an existing server", () => {
+    renderPreset({ mode: "haproxy", install_components: [] });
+
+    expect(screen.queryByText("Настройки HAProxy")).not.toBeInTheDocument();
+  });
+
+  it("shows HAProxy settings when HAProxy is selected for an existing server", () => {
+    renderPreset({ mode: "haproxy", install_components: ["haproxy"] });
+
+    expect(screen.getByText("Настройки HAProxy")).toBeInTheDocument();
+  });
+
+  it("keeps HAProxy settings in the ordinary full HAProxy mode", () => {
+    renderPreset({ mode: "haproxy" });
+
+    expect(screen.getByText("Настройки HAProxy")).toBeInTheDocument();
+  });
+
   it("shows Remnanode fields without the SSL section when SSL is not selected", () => {
     const preset = {
       mode: "remnanode" as const,
