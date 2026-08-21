@@ -62,6 +62,7 @@ from app.api import (
     sitecopy,
     f2b_list,
     subnets,
+    regru_vip,
 )
 from app.api.auth import require_identity as require_account
 from app.services import job_runner, shared_task_store, worker_lease
@@ -207,6 +208,7 @@ app.include_router(obhod.router, dependencies=_auth)
 app.include_router(sitecopy.router, dependencies=_auth)
 app.include_router(f2b_list.router, dependencies=_auth)
 app.include_router(subnets.router, dependencies=_auth)
+app.include_router(regru_vip.router, dependencies=_auth)
 
 # WebSocket log stream is capability-based (unguessable task_id) — headers can't
 # be set on the WS handshake from the browser, so it stays outside the gate.

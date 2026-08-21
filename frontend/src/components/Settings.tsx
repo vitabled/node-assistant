@@ -26,6 +26,7 @@ import { HaproxyConnect } from "./haproxy/HaproxyConnect";
 import { CfConnect } from "./cloudflare/CfConnect";
 import { UsersTab } from "./settings/UsersTab";
 import { RolesTab } from "./settings/RolesTab";
+import { RegruVipTab } from "./settings/RegruVipTab";
 import { usePermissions } from "../auth/usePermissions";
 
 // ── Types ─────────────────────────────────────────────────────
@@ -797,7 +798,7 @@ function TestServersTab() {
 
 // ── Main Settings page ────────────────────────────────────────
 
-type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "ai" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "cloudflare" | "theme" | "users" | "roles" | "bedolaga";
+type SubTab = "remnawave" | "defaults" | "optimization" | "monitoring" | "testservers" | "ai" | "tokens" | "transfer" | "updates" | "infra" | "haproxy" | "cloudflare" | "regru-vip" | "theme" | "users" | "roles" | "bedolaga";
 
 export function Settings() {
   const [sub, setSub] = useState<SubTab>("remnawave");
@@ -819,6 +820,7 @@ export function Settings() {
     { id: "bedolaga",    label: "Bedolaga" },
     { id: "cloudflare",  label: "Cloudflare" },
     { id: "haproxy",     label: "HAProxy" },
+    { id: "regru-vip",   label: "Reg.ru VIP" },
     ...(can("admin.users") ? [{ id: "users" as SubTab, label: "Пользователи" }] : []),
     ...(can("admin.roles") ? [{ id: "roles" as SubTab, label: "Роли" }] : []),
     { id: "theme",       label: "Тема" },
@@ -874,6 +876,7 @@ export function Settings() {
         {active === "bedolaga"     && <BedolagaTab />}
         {active === "haproxy"      && <div className="max-w-3xl"><HaproxyConnect /></div>}
         {active === "cloudflare"   && <div className="max-w-3xl"><CfConnect /></div>}
+        {active === "regru-vip"    && <RegruVipTab />}
         {active === "theme"        && <ThemeTab />}
       </div>
     </div>
