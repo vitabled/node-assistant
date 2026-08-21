@@ -473,3 +473,7 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
     transition-duration:.001ms !important; scroll-behavior:auto !important;
   }
 }
+
+@media (max-width:720px){
+  .ni-instance-sidebar{ display:none !important }
+}

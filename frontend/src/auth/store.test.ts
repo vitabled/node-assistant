@@ -91,6 +91,16 @@ describe("device account store", () => {
     expect(s.deployJobsKey("id-x")).toBe("deploy_jobs_id-x"); // explicit override
   });
 
+  it("partitions node and panel jobs by non-default instance while Default keeps legacy keys", async () => {
+    const s = await freshStore();
+    s.addAccount(A);
+    expect(s.deployJobsKey()).toBe("deploy_jobs_id-a");
+    s.setActiveInstanceId("workspace-2");
+    expect(s.deployJobsKey()).toBe("deploy_jobs_id-a_workspace-2");
+    expect(s.panelJobsKey()).toBe("panel_jobs_id-a_workspace-2");
+    expect(s.certJobsKey()).toBe("cert_jobs_id-a_workspace-2");
+  });
+
   it("persists across a simulated reload (fresh import reads localStorage)", async () => {
     const s1 = await freshStore();
     s1.addAccount(A);

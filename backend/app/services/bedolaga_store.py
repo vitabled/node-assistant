@@ -29,7 +29,7 @@ _lock = threading.Lock()
 
 def _db_path(account_id: Optional[str] = None) -> Path:
     acc = account_id or (accounts.current_account.get() or "")
-    base = Path(settings.data_dir) / "accounts" / acc if acc else Path(settings.data_dir)
+    base = accounts.data_dir(acc) if acc else Path(settings.data_dir)
     base.mkdir(parents=True, exist_ok=True)
     return base / "bedolaga.db"
 

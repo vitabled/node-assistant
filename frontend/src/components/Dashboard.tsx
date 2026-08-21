@@ -9,6 +9,7 @@ import { ImportFromSubscription } from "./ImportFromSubscription";
 import { resolveCountryCode, splitFlagEmoji } from "../utils/countryAliases";
 import { nodeColorLookup } from "../utils/nodeColors";
 import { Page } from "../theme/ui";
+import { deployJobsKey } from "../auth/store";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
 type TickStatus = "up" | "slow" | "down";
@@ -429,8 +430,7 @@ function ServerUptime() {
   // Auto-sync deployed nodes from the browser's deploy_jobs on mount.
   useEffect(() => {
     try {
-      const accId = (localStorage.getItem("ni_active_account") || "").replace(/^"|"$/g, "");
-      const raw = localStorage.getItem(`deploy_jobs_${accId}`);
+      const raw = localStorage.getItem(deployJobsKey());
       const jobs = raw ? JSON.parse(raw) : [];
       const deployed = (Array.isArray(jobs) ? jobs : [])
         .filter((j: any) => j?.savedForm?.mode === "remnanode" && j?.savedForm?.ip)

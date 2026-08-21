@@ -3,6 +3,7 @@ import {
   CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight,
 } from "lucide-react";
 import { Sidebar, NAV_TABS, tabPermission, type Tab } from "./components/Sidebar";
+import { InstanceSidebar }                 from "./components/InstanceSidebar";
 import { BottomTabBar, PRIMARY_TABS }       from "./components/BottomTabBar";
 import { Dashboard }                       from "./components/Dashboard";
 import { DeployDashboard }                 from "./components/DeployDashboard";
@@ -306,6 +307,7 @@ export default function App() {
   return (
     <div style={{ display: "flex", height: "100%", position: "relative" }}>
       <Toaster />
+      <InstanceSidebar />
       <Sidebar activeTab={tab} onTabChange={goTab} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
 
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>

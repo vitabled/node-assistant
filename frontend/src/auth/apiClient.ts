@@ -3,7 +3,7 @@
 // session. Installed once from main.tsx so all existing fetch call sites —
 // including the infra-billing api.ts — get auth without per-call changes.
 
-import { getActiveToken, getActiveId, forget } from "./store";
+import { getActiveToken, getActiveId, getActiveInstanceId, forget } from "./store";
 
 function urlOf(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
@@ -32,6 +32,7 @@ export function installApiClient() {
           init.headers ?? (input instanceof Request ? input.headers : undefined),
         );
         if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+        if (!headers.has("X-Instance-Id")) headers.set("X-Instance-Id", getActiveInstanceId());
         init = { ...init, headers };
       }
     }

@@ -52,6 +52,11 @@ _JWT_ALG = "HS256"
 current_account: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "current_account", default=None
 )
+# Active workspace inside the account. ``default`` deliberately maps to the
+# historical account root so existing installations keep every byte in place.
+current_instance: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "current_instance", default=None
+)
 
 # Serialises registry read-modify-write so concurrent registrations can't both
 # pass the uniqueness check and create duplicate logins.
@@ -118,14 +123,32 @@ def _find_by_login(accounts: list[dict], login: str) -> Optional[dict]:
     return next((a for a in accounts if a["login"].strip().lower() == key), None)
 
 
-def data_dir(account_id: str) -> Path:
-    """The isolated data directory for an account (created on demand)."""
+def account_dir(account_id: str) -> Path:
+    """The account root, ignoring the request's active instance."""
     # Defence-in-depth: account_id comes from a JWT `sub`, and require_account
     # already rejects ids not in the registry — but never let a stray separator
     # or traversal build a path outside DATA_DIR/accounts.
     if not account_id or "/" in account_id or "\\" in account_id or ".." in account_id:
         raise ValueError("invalid account id")
     d = _ACCOUNTS_DIR / account_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def data_dir(account_id: str, instance_id: Optional[str] = None) -> Path:
+    """Data partition for an account and optional workspace instance.
+
+    The Default instance uses the legacy account root. Other instances live at
+    ``accounts/<account>/instances/<instance>``. An omitted instance follows the
+    request ContextVar; background jobs without one continue to use Default.
+    """
+    root = account_dir(account_id)
+    selected = instance_id or current_instance.get() or "default"
+    if selected == "default":
+        return root
+    if "/" in selected or "\\" in selected or ".." in selected:
+        raise ValueError("invalid instance id")
+    d = root / "instances" / selected
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -194,7 +217,7 @@ def _marker_path() -> Path:
 def _migrate_legacy(account_id: str) -> None:
     """Copy pre-auth root-level data into the first account's namespace. Copies
     (not moves) so the originals remain under DATA_DIR as a backup."""
-    dest = data_dir(account_id)
+    dest = account_dir(account_id)
     for name in _LEGACY_FILES:
         src = DATA_DIR / name
         target = dest / name

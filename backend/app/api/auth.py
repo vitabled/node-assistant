@@ -24,7 +24,7 @@ import os
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.services import accounts, api_tokens, audit, permissions, users
+from app.services import accounts, api_tokens, audit, instances, permissions, users
 
 router = APIRouter(prefix="/api/auth")
 
@@ -91,7 +91,8 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 async def require_identity(request: Request,
-                           authorization: str = Header(default="")) -> str:
+                           authorization: str = Header(default=""),
+                           x_instance_id: str = Header(default="")) -> str:
     """Разобрать креды, опубликовать личность и рабочую область, проверить привилегию.
 
     Принимает сессионный JWT или долгоживущий API-токен (`nai_…`). Возвращает id
@@ -126,7 +127,12 @@ async def require_identity(request: Request,
         api_tokens.token_readonly.set(True)
 
     users.current_user.set(user)
-    accounts.current_account.set(users.workspace_of(user))
+    workspace_id = users.workspace_of(user)
+    accounts.current_account.set(workspace_id)
+    try:
+        instances.select(x_instance_id, workspace_id)
+    except KeyError:
+        raise HTTPException(404, "Инстанс не найден")
 
     # ⚠️ Берём ШАБЛОН маршрута, а не сырой путь: Starlette к этому моменту уже
     # отмаршрутизировал запрос, поэтому шаблон канонический по построению — ни

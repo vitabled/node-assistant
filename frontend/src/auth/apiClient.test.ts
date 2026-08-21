@@ -29,6 +29,21 @@ describe("auth fetch interceptor", () => {
     expect(headerOf(original).get("Authorization")).toBe("Bearer TKN");
   });
 
+  it("attaches the active workspace instance to every authenticated API request", async () => {
+    const { store, original } = await setup();
+    store.addAccount(ACC);
+    localStorage.setItem("ni_active_instance_id-a", "instance-2");
+    await window.fetch("/api/settings");
+    expect(headerOf(original).get("X-Instance-Id")).toBe("instance-2");
+  });
+
+  it("uses Default instance when no explicit selection was persisted", async () => {
+    const { store, original } = await setup();
+    store.addAccount(ACC);
+    await window.fetch("/api/settings");
+    expect(headerOf(original).get("X-Instance-Id")).toBe("default");
+  });
+
   it("signed out: no Authorization header added", async () => {
     const { original } = await setup();
     await window.fetch("/api/settings");

@@ -70,6 +70,19 @@ export function getActiveToken(): string {
   return getActive()?.token || "";
 }
 
+export function activeInstanceKey(id: string | null = state.activeId): string {
+  return `ni_active_instance_${id ?? "none"}`;
+}
+
+export function getActiveInstanceId(id: string | null = state.activeId): string {
+  try { return localStorage.getItem(activeInstanceKey(id)) || "default"; }
+  catch { return "default"; }
+}
+
+export function setActiveInstanceId(instanceId: string, id: string | null = state.activeId) {
+  try { localStorage.setItem(activeInstanceKey(id), instanceId || "default"); } catch {}
+}
+
 // ── mutations ──────────────────────────────────────────────────
 /** Add (or refresh) an account and make it active. */
 export function addAccount(acc: DeviceAccount) {
@@ -98,17 +111,22 @@ export function logoutActive() {
 }
 
 // ── per-account storage-key helpers ────────────────────────────
+function instanceStorageKey(prefix: string, id: string | null): string {
+  const account = id ?? "none";
+  const instance = id === state.activeId ? getActiveInstanceId(id) : "default";
+  return `${prefix}_${account}${instance === "default" ? "" : `_${instance}`}`;
+}
 export function deployJobsKey(id: string | null = state.activeId): string {
-  return `deploy_jobs_${id ?? "none"}`;
+  return instanceStorageKey("deploy_jobs", id);
 }
 export function panelJobsKey(id: string | null = state.activeId): string {
-  return `panel_jobs_${id ?? "none"}`;
+  return instanceStorageKey("panel_jobs", id);
 }
 // Domains a cert was deployed to via «Управление SSL» (not full node deploys).
 // Client-only, like deploy_jobs: it holds SSH creds so the domain row can probe
 // cert expiry and download the cert — creds never persist server-side.
 export function certJobsKey(id: string | null = state.activeId): string {
-  return `cert_jobs_${id ?? "none"}`;
+  return instanceStorageKey("cert_jobs", id);
 }
 export function tabKey(id: string | null = state.activeId): string {
   return `ni_tab_${id ?? "none"}`;

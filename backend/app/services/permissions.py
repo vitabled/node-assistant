@@ -58,6 +58,7 @@ DOMAINS: dict[str, tuple[str, ...]] = {
     "settings":   (VIEW, EDIT),
     "support":    (VIEW, CREATE, EDIT, EXECUTE),   # тикеты, саппорт, решала
     "account":    (VIEW, EDIT),                    # своё: пароль, тема, свои API-токены
+    "instances":  (VIEW, CREATE, EDIT),            # рабочие пространства внутри аккаунта
 }
 
 # ── особые привилегии ─────────────────────────────────────────
@@ -97,6 +98,7 @@ DOMAIN_TITLES: dict[str, str] = {
     "vault": "Хранилище",
     "settings": "Настройки",
     "account": "Личное (свой пароль, тема, токены)",
+    "instances": "Рабочие пространства",
 }
 
 ACTION_TITLES = {VIEW: "Просмотр", CREATE: "Создание", EDIT: "Изменение",
@@ -197,6 +199,8 @@ BUILTIN_ROLES: tuple[dict, ...] = (
 _CREDS = "deploy.credentials"
 
 RULES: tuple[tuple[str, dict[str, object]], ...] = (
+    ("/api/instances", {"GET": "instances.view", "POST": "instances.create",
+                        "*": "instances.edit"}),
     # ── личное ───────────────────────────────────────────────
     ("/api/auth/password", {"*": "account.edit"}),
     ("/api/api-tokens", {"GET": "account.view", "*": "account.edit"}),
@@ -233,6 +237,9 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/cliproxy/oauth", {"GET": "assistant.view", "*": "assistant.edit"}),
 
     # ── деплой нод ───────────────────────────────────────────
+    ("/api/node-ops/add-node", {"*": "deploy.create"}),
+    ("/api/node-ops/deploy", {"*": ("deploy.execute", _CREDS)}),
+    ("/api/node-ops", {"PATCH": "deploy.edit", "DELETE": "deploy.edit"}),
     ("/api/deploy/stop", {"*": "deploy.execute"}),
     ("/api/deploy", {"*": ("deploy.execute", _CREDS)}),
     ("/api/node/detect", {"*": ("deploy.view", _CREDS)}),
