@@ -43,6 +43,12 @@ TOKEN_PREFIX = "nai_"
 token_readonly: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "token_readonly", default=False
 )
+# The integration router is deliberately service-to-service only.  Publishing the
+# resolved token id lets it reject a browser JWT after the normal identity/RBAC
+# gate has run, without parsing Authorization a second time.
+current_token_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "current_api_token_id", default=None
+)
 
 # last_used_at is written at most once per this many seconds per token, so we
 # don't do a filesystem write on every authenticated request.

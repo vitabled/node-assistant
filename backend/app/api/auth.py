@@ -104,6 +104,7 @@ async def require_identity(request: Request,
         token = authorization[7:].strip()
 
     api_tokens.token_readonly.set(False)
+    api_tokens.current_token_id.set(None)
     readonly_token = False
     user = None
     if token.startswith(api_tokens.TOKEN_PREFIX):
@@ -111,6 +112,7 @@ async def require_identity(request: Request,
         if resolved:
             user = users.get(resolved.user_id)
             readonly_token = resolved.readonly
+            api_tokens.current_token_id.set(resolved.token_id)
     elif token:
         user = users.resolve_token(token)
 

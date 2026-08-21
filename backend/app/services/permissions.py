@@ -199,6 +199,11 @@ BUILTIN_ROLES: tuple[dict, ...] = (
 _CREDS = "deploy.credentials"
 
 RULES: tuple[tuple[str, dict[str, object]], ...] = (
+    # Storefront integration: status is read-only; every command can start or
+    # alter root-level provisioning and therefore requires execute + SSH creds.
+    ("/api/integrations/v1/deployments", {
+        "GET": "deploy.view", "*": ("deploy.execute", _CREDS),
+    }),
     ("/api/instances", {"GET": "instances.view", "POST": "instances.create",
                         "*": "instances.edit"}),
     # ── личное ───────────────────────────────────────────────
