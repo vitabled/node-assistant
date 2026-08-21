@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { validateForm, FORM_DEFAULT, type FormData } from "./DeployForm";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { DeployForm, validateForm, FORM_DEFAULT, type FormData } from "./DeployForm";
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 // A fully-valid Remnanode form (manual token, cloudflare provider).
 const validRemna: FormData = {
@@ -93,5 +100,41 @@ describe("validateForm", () => {
     const auto = { ...validRemna, create_in_remnawave: true, remnanode_token: "", template_id: "" };
     expect(validateForm(auto).remnanode_token).toBeUndefined();
     expect(validateForm(auto).template_id).toBeTruthy();
+  });
+});
+
+describe("DeployForm skip-components preset", () => {
+  it("disables skipped install stages but keeps a non-skipped stage enabled", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    render(
+      <DeployForm
+        onSubmit={async () => {}}
+        preset={{
+          skip_components: ["warp", "hysteria2", "trafficguard", "node_accelerator"],
+          install_warp: true,
+          install_hysteria2: true,
+          install_trafficguard: true,
+          optimize: true,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Оптимизация ОС" }));
+    expect(screen.getByRole("switch", { name: "Установить WARP Native" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Установить Hysteria2" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Установить TrafficGuard" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Применить оптимизацию ОС" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Установить Psiphon Proxy" })).toBeEnabled();
+  });
+
+  it("keeps installation stages enabled for a full new-server deploy", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    render(<DeployForm onSubmit={async () => {}} />);
+
+    expect(screen.getByRole("switch", { name: "Установить WARP Native" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Установить Hysteria2" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Установить Psiphon Proxy" })).toBeEnabled();
   });
 });

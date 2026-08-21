@@ -281,6 +281,7 @@ function Toggle({ label, checked, onChange, disabled }: {
     <label className={`flex items-center gap-3 cursor-pointer select-none group mt-1
                        ${disabled ? "opacity-40 pointer-events-none" : ""}`}>
       <button type="button" role="switch" aria-checked={checked} onClick={onChange}
+        disabled={disabled}
         className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none
                     focus:ring-2 focus:ring-[var(--accent-line)]
                     ${checked ? "bg-[var(--accent)]" : "bg-[var(--bg3)]"}`}>
@@ -501,6 +502,7 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
 
   const f = submitting;
   const isRemna = form.mode === "remnanode";
+  const isSkipped = (component: string) => form.skip_components.includes(component);
 
   return (
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3">
@@ -578,16 +580,16 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       />
       <Toggle label="Установить WARP Native"
         checked={form.install_warp}
-        onChange={() => set("install_warp", !form.install_warp)} disabled={f} />
+        onChange={() => set("install_warp", !form.install_warp)} disabled={f || isSkipped("warp")} />
       <Toggle label="Установить Psiphon Proxy"
         checked={form.install_psiphon}
-        onChange={() => set("install_psiphon", !form.install_psiphon)} disabled={f} />
+        onChange={() => set("install_psiphon", !form.install_psiphon)} disabled={f || isSkipped("psiphon")} />
       <Toggle label="Установить Решалу (Саппорт бот)"
         checked={form.install_reshala}
-        onChange={() => set("install_reshala", !form.install_reshala)} disabled={f} />
+        onChange={() => set("install_reshala", !form.install_reshala)} disabled={f || isSkipped("reshala")} />
       <Toggle label="Установить Hysteria2"
         checked={form.install_hysteria2}
-        onChange={() => set("install_hysteria2", !form.install_hysteria2)} disabled={f} />
+        onChange={() => set("install_hysteria2", !form.install_hysteria2)} disabled={f || isSkipped("hysteria2")} />
       {form.node_variant === "egames" && (
         <Toggle label="Cookie-gate (скрыть хост от сканеров)"
           checked={form.cookie_gate}
@@ -823,24 +825,24 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
           label="Применить оптимизацию ОС"
           checked={form.optimize}
           onChange={() => set("optimize", !form.optimize)}
-          disabled={f}
+          disabled={f || isSkipped("node_accelerator")}
         />
         <div className={`flex flex-col gap-2 ${!form.optimize ? "opacity-40 pointer-events-none" : ""}`}>
           <Toggle label="BBR (TCP congestion control)"
             checked={form.opt_bbr} onChange={() => set("opt_bbr", !form.opt_bbr)}
-            disabled={f || !form.optimize} />
+            disabled={f || !form.optimize || isSkipped("node_accelerator")} />
           <Toggle label="TCP/UDP буферы (network tuning)"
             checked={form.opt_network_tuning} onChange={() => set("opt_network_tuning", !form.opt_network_tuning)}
-            disabled={f || !form.optimize} />
+            disabled={f || !form.optimize || isSkipped("node_accelerator")} />
           <Toggle label="Системные лимиты (nofile 1 000 000)"
             checked={form.opt_system_limits} onChange={() => set("opt_system_limits", !form.opt_system_limits)}
-            disabled={f || !form.optimize} />
+            disabled={f || !form.optimize || isSkipped("node_accelerator")} />
           <Toggle label="DNS-серверы (переписать /etc/resolv.conf)"
             checked={form.opt_dns} onChange={() => set("opt_dns", !form.opt_dns)}
-            disabled={f || !form.optimize} />
+            disabled={f || !form.optimize || isSkipped("node_accelerator")} />
           {form.opt_dns && form.optimize && (
             <Field label="DNS-серверы" name="opt_dns_servers" value={form.opt_dns_servers}
-              onChange={set} placeholder="1.1.1.1,8.8.8.8" disabled={f}
+              onChange={set} placeholder="1.1.1.1,8.8.8.8" disabled={f || isSkipped("node_accelerator")}
               hint="Через запятую, например: 1.1.1.1,8.8.8.8" />
           )}
         </div>
@@ -857,10 +859,10 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
           onChange={() => set("install_vnstat", !form.install_vnstat)} disabled={f} />
         <Toggle label="Установить TrafficGuard"
           checked={form.install_trafficguard}
-          onChange={() => set("install_trafficguard", !form.install_trafficguard)} disabled={f} />
+          onChange={() => set("install_trafficguard", !form.install_trafficguard)} disabled={f || isSkipped("trafficguard")} />
         <Toggle label="Установить инструменты тестирования"
           checked={form.install_test_tools}
-          onChange={() => set("install_test_tools", !form.install_test_tools)} disabled={f} />
+          onChange={() => set("install_test_tools", !form.install_test_tools)} disabled={f || isSkipped("test_tools")} />
         <Toggle label="Docker registry-mirror (РФ, ускоряет pull)"
           checked={form.docker_mirror}
           onChange={() => set("docker_mirror", !form.docker_mirror)} disabled={f} />
