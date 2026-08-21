@@ -44,6 +44,35 @@ def test_valid_remnanode():
     assert r.whitelist_ips == ""
 
 
+@pytest.mark.parametrize(
+    ("selected", "overrides", "valid"),
+    [
+        ([], {}, True),
+        (["remnanode"], {}, False),
+        (["remnanode"], {"domain": "node1.example.com", "remnanode_token": "tok", "country_code": "US"}, True),
+        (["ssl"], {}, False),
+        (["ssl"], {"domain": "node1.example.com", "email": "a@b.co", "cloudflare_api_key": "cf"}, True),
+        (["remnanode", "ssl"], {}, False),
+    ],
+)
+def test_existing_install_selection_only_validates_selected_components(selected, overrides, valid):
+    body = _remna(
+        install_components=selected,
+        domain="",
+        email="",
+        cloudflare_api_key="",
+        remnanode_token=None,
+        country_code="",
+        install_hysteria2=False,
+    )
+    body.update(overrides)
+    if valid:
+        DeployRequest(**body)
+    else:
+        with pytest.raises(ValidationError):
+            DeployRequest(**body)
+
+
 def test_valid_haproxy():
     r = DeployRequest(**_haproxy())
     assert r.haproxy_dest_ip == "10.0.0.5"

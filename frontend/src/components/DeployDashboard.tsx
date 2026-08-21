@@ -34,7 +34,7 @@ export function DeployDashboard() {
   const [showForm, setShowForm] = useState(false);
   const [editJob,  setEditJob]  = useState<DeployJobSummary | null>(null);
   // Add-existing-server flow: `showExisting` = the detect/checklist modal;
-  // `existingPreset` = detected creds + skip_components handed to the deploy form.
+  // `existingPreset` = detected creds + positive install_components selection.
   const [showExisting,   setShowExisting]   = useState(false);
   const [existingPreset, setExistingPreset] = useState<Partial<FormData> | null>(null);
 
@@ -213,7 +213,7 @@ export function DeployDashboard() {
       )}
 
       {/* Add-existing-server: detect components, then hand a preset (creds +
-          skip_components) to the deploy form (NO `initial` → settings defaults
+          install_components) to the deploy form (NO `initial` → settings defaults
           still prefill email/Cloudflare/etc). */}
       {showExisting && (
         <ExistingServerModal
@@ -244,7 +244,7 @@ function DeployFormModal({
 }: {
   title:    string;
   initial?: Partial<FormData>;  // omitted for new deploys → settings defaults apply
-  preset?:  Partial<FormData>;  // detected creds + skip_components (existing-server flow)
+  preset?:  Partial<FormData>;  // detected creds + install_components (existing-server flow)
   onClose:  () => void;
   onSubmit: (data: FormData) => Promise<void>;
 }) {
@@ -275,7 +275,7 @@ function DeployFormModal({
   );
 }
 
-// ── Add-existing-server modal (detect + skip checklist) ───────
+// ── Add-existing-server modal (detect + positive install checklist) ───────
 
 const DETECT_LABELS: Record<string, string> = {
   node_accelerator: "Node Accelerator",
@@ -316,7 +316,7 @@ function ExistingServerModal({ onClose, onProceed }: {
   const [detecting,   setDetecting]   = useState(false);
   const [error,       setError]       = useState<string | null>(null);
   const [results,     setResults]     = useState<Record<string, DetectStatus> | null>(null);
-  const [skip,        setSkip]        = useState<Record<string, boolean>>({});
+  const [install,     setInstall]     = useState<Record<string, boolean>>({});
   // Detected current settings (ssh_port/remnanode_port/xhttp_path/domain/open_ports/
   // has_token) — mapped into the deploy form as a preset (Wave-4 Plan B Ф2).
   const [settings,    setSettings]    = useState<Record<string, string | number | boolean> | null>(null);
@@ -339,10 +339,11 @@ function ExistingServerModal({ onClose, onProceed }: {
       const data = await res.json();
       const r = (data.results ?? {}) as Record<string, DetectStatus>;
       setResults(r);
-      // Pre-check the present ones as "skip" — absent/unknown left for the operator.
+      // Positive direction: absent components are the likely install targets;
+      // present/unknown stay off until the operator explicitly selects them.
       const pre: Record<string, boolean> = {};
-      Object.entries(r).forEach(([k, v]) => { pre[k] = v === "present"; });
-      setSkip(pre);
+      Object.entries(r).forEach(([k, v]) => { pre[k] = v === "absent"; });
+      setInstall(pre);
       // Detected settings → prefill (secrets never returned; only has_token).
       const s = (data.settings ?? {}) as Record<string, string | number | boolean>;
       setSettings(s);
@@ -355,26 +356,31 @@ function ExistingServerModal({ onClose, onProceed }: {
   };
 
   const proceed = () => {
-    const skip_components = Object.entries(skip).filter(([, v]) => v).map(([k]) => k);
+    const install_components = Object.entries(install).filter(([, v]) => v).map(([k]) => k);
     const s = settings ?? {};
     const preset: Partial<FormData> = {
       ip, ssh_user: sshUser, ssh_password: sshPassword,
       current_ssh_port: sshPort, new_ssh_port: sshPort,
       change_ssh_port: false,   // server is already configured — don't re-do the SSH-port dance
       domain: domain || (s.domain ? String(s.domain) : ""),
-      skip_components,
+      skip_components: [],
+      install_components,
+      // Optional install flags mirror the positive selection. The pipeline treats
+      // install_components as authoritative; keeping these flags aligned also
+      // makes saved-form retries and cards accurately describe the request.
+      optimize: install_components.includes("node_accelerator"),
+      install_trafficguard: install_components.includes("trafficguard"),
+      install_test_tools: install_components.includes("test_tools"),
+      install_warp: install_components.includes("warp"),
+      install_psiphon: install_components.includes("psiphon"),
+      install_reshala: install_components.includes("reshala"),
+      install_hysteria2: install_components.includes("hysteria2"),
+      install_vnstat: false,
     };
     // Prefill detected values (form's preset wins over settings-defaults).
     if (s.remnanode_port) preset.remnanode_port = String(s.remnanode_port);
     if (s.xhttp_path)     preset.xhttp_path     = String(s.xhttp_path);
     if (s.open_ports)     preset.open_ports     = String(s.open_ports);
-    // Mirror detected components in the install toggles (they're also pre-checked
-    // as "skip", so this only keeps the form honest — nothing re-installs).
-    const r = results ?? {};
-    if (r.warp)             preset.install_warp         = r.warp === "present";
-    if (r.node_accelerator) preset.optimize             = r.node_accelerator === "present";
-    if (r.trafficguard)     preset.install_trafficguard = r.trafficguard === "present";
-    if (r.hysteria2)        preset.install_hysteria2    = r.hysteria2 === "present";
     onProceed(preset);
   };
 
@@ -441,14 +447,14 @@ function ExistingServerModal({ onClose, onProceed }: {
             <div className="rounded-lg border p-3 flex flex-col gap-2"
                  style={{ borderColor: "var(--line-soft)", background: "var(--bg2)" }}>
               <p className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--t-faint)" }}>
-                Отметьте, что пропустить (не переустанавливать)
+                Что доустановить
               </p>
               {Object.entries(results).map(([comp, status]) => (
                 <label key={comp} className="flex items-center gap-2.5 cursor-pointer py-0.5">
                   <input
                     type="checkbox"
-                    checked={!!skip[comp]}
-                    onChange={() => setSkip(s => ({ ...s, [comp]: !s[comp] }))}
+                    checked={!!install[comp]}
+                    onChange={() => setInstall(s => ({ ...s, [comp]: !s[comp] }))}
                     className="accent-[var(--accent)]"
                   />
                   <span className="text-sm flex-1" style={{ color: "var(--t-mid)" }}>
@@ -458,7 +464,7 @@ function ExistingServerModal({ onClose, onProceed }: {
                 </label>
               ))}
               <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>
-                «неизвестно» — определить не удалось, решение за вами. Непропущенные компоненты будут установлены заново.
+                «неизвестно» — определить не удалось. Установлены будут только отмеченные компоненты.
               </p>
             </div>
           )}

@@ -138,3 +138,72 @@ describe("DeployForm skip-components preset", () => {
     expect(screen.getByRole("switch", { name: "Установить Psiphon Proxy" })).toBeEnabled();
   });
 });
+
+describe("existing-server install component contract", () => {
+  const existing = (install_components: string[]): FormData => ({
+    ...FORM_DEFAULT,
+    ip: "1.2.3.4",
+    ssh_password: "pw",
+    change_ssh_port: false,
+    install_components,
+  });
+
+  it("accepts installing nothing without Remnanode or SSL fields", () => {
+    expect(validateForm(existing([]))).toEqual({});
+  });
+
+  it("only requires Remnanode fields when only Remnanode is selected", () => {
+    const errors = validateForm(existing(["remnanode"]));
+    expect(errors.remnanode_token).toBeTruthy();
+    expect(errors.country_code).toBeTruthy();
+    expect(errors.domain).toBeTruthy();
+    expect(errors.email).toBeUndefined();
+    expect(errors.cloudflare_api_key).toBeUndefined();
+  });
+
+  it("only requires SSL fields when only SSL is selected", () => {
+    const errors = validateForm(existing(["ssl"]));
+    expect(errors.domain).toBeTruthy();
+    expect(errors.email).toBeTruthy();
+    expect(errors.cloudflare_api_key).toBeTruthy();
+    expect(errors.remnanode_token).toBeUndefined();
+    expect(errors.country_code).toBeUndefined();
+  });
+
+  it("requires both sections when both components are selected", () => {
+    const errors = validateForm(existing(["remnanode", "ssl"]));
+    expect(errors.remnanode_token).toBeTruthy();
+    expect(errors.country_code).toBeTruthy();
+    expect(errors.domain).toBeTruthy();
+    expect(errors.email).toBeTruthy();
+    expect(errors.cloudflare_api_key).toBeTruthy();
+  });
+
+  it("keeps the full new-server requirements when selection is absent", () => {
+    const errors = validateForm({ ...FORM_DEFAULT, ip: "1.2.3.4", ssh_password: "pw" });
+    expect(errors.remnanode_token).toBeTruthy();
+    expect(errors.country_code).toBeTruthy();
+    expect(errors.domain).toBeTruthy();
+    expect(errors.email).toBeTruthy();
+    expect(errors.cloudflare_api_key).toBeTruthy();
+  });
+
+  it("hides unselected Remnanode and SSL sections", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    const { rerender } = render(
+      <DeployForm onSubmit={async () => {}} preset={{ install_components: [] }} />,
+    );
+    expect(screen.queryByText("Токен Remnanode")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Домен и SSL" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Оптимизация ОС" })).not.toBeInTheDocument();
+
+    rerender(<DeployForm key="remnanode" onSubmit={async () => {}} preset={{ install_components: ["remnanode"] }} />);
+    expect(screen.getByRole("button", { name: "Remnawave" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Установить WARP Native" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Установить Hysteria2" })).not.toBeInTheDocument();
+
+    rerender(<DeployForm key="ssl" onSubmit={async () => {}} preset={{ install_components: ["ssl"] }} />);
+    expect(screen.queryByText("Токен Remnanode")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Домен и SSL" })).toBeInTheDocument();
+  });
+});

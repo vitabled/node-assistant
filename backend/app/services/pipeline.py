@@ -80,13 +80,13 @@ def _begin_step(task: Task, index: int, label: Optional[str] = None) -> None:
     task.add_log(f"\x1b[36m{'─' * 56}\x1b[0m")
 
 
-def _skip_component(task: Task, index: int, comp: str, label: Optional[str] = None) -> None:
-    """Mark a manageable step as begun but skipped because the component is
-    already installed (the "add existing server" flow's skip_components). Mirrors
-    the existing install_vnstat=false skip pattern: still advances the progress
-    bar so the step shows as done, without running the install work."""
+def _skip_component(
+    task: Task, index: int, comp: str, label: Optional[str] = None,
+    reason: str = "уже установлено (skip_components)",
+) -> None:
+    """Mark a manageable step as begun but skipped while still advancing progress."""
     _begin_step(task, index, label)
-    task.add_log(f"\x1b[90m[{comp}] Пропущено — уже установлено (skip_components).\x1b[0m")
+    task.add_log(f"\x1b[90m[{comp}] Пропущено — {reason}.\x1b[0m")
 
 
 def _effective_open_ports(req: "DeployRequest") -> str:
@@ -2301,17 +2301,6 @@ async def step_remnawave_pre_deploy(
 
     # Step B3: auto-create Remnawave hosts from the account's host-templates (Ф6).
     # Reuses the SAME configProfileUuid create_node was given; additive/non-fatal.
-    # Optional utilities
-    if "nginx_updater" not in skip:
-        await step_nginx_updater(ssh, task)
-    if "yt_monitoring" not in skip:
-        await step_yt_monitoring(ssh, task, req)
-    if "reshala" not in skip and getattr(req, "install_reshala", False):
-        try:
-            await step_reshala(ssh, task, req)
-        except Exception as _exc:
-            task.add_log(f"\\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Ошибка при установке Решалы: {_exc}\\x1b[0m")
-
     await step_create_hosts(
         task, client, req, node_uuid, config_profile_uuid,
         tpl.get("host_template_ids", []) if isinstance(tpl, dict) else [],
@@ -2510,18 +2499,27 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         else:
             task.add_log("\x1b[90m[vnstat] Пропущено по настройке (install_vnstat=false).\x1b[0m")
 
-        # skip_components (add-existing-server flow): components already present on
-        # the box are begun-but-skipped. Dependency order is preserved (skipping is
-        # per-component, the step sequence is unchanged), so you can't skip a
-        # prerequisite in a way that breaks a later step.
-        skip = set(req.skip_components or [])
+        # Positive selection is authoritative when supplied by the existing-server
+        # flow. `None` preserves full deploys and legacy saved jobs using the old
+        # negative skip_components contract; [] skips every managed component.
+        managed = {
+            "node_accelerator", "trafficguard", "test_tools", "ssl",
+            "remnanode", "masking", "warp", "psiphon", "hysteria2", "haproxy",
+            "nginx_updater", "yt_monitoring", "reshala",
+        }
+        selected = req.install_components
+        skip = (managed - set(selected)) if selected is not None else set(req.skip_components or [])
+        skip_reason = (
+            "не выбран для доустановки (install_components)"
+            if selected is not None else "уже установлено (skip_components)"
+        )
 
         if "node_accelerator" in skip:
-            _skip_component(task, 3, "node-accelerator")
+            _skip_component(task, 3, "node-accelerator", reason=skip_reason)
         else:
             await step_node_accelerator(ssh, task, req)
         if "trafficguard" in skip:
-            _skip_component(task, 4, "TrafficGuard")
+            _skip_component(task, 4, "TrafficGuard", reason=skip_reason)
         elif req.install_trafficguard:
             await step_traffic_guard(ssh, task, backend_ip)
         else:
@@ -2530,7 +2528,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         # Step 5: test toolkit (iperf3/speedtest/xray) — optional, non-fatal,
         # runs in both modes.
         if "test_tools" in skip:
-            _skip_component(task, 5, "test-tools")
+            _skip_component(task, 5, "test-tools", reason=skip_reason)
         else:
             await step_test_tools(ssh, task, req)
         # Step 6 configures dual-port SSH and reboots the box (when enabled),
@@ -2545,7 +2543,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         #    stack (steps 10–14) ──
         if req.mode == "haproxy":
             if "haproxy" in skip:
-                _skip_component(task, 10, "HAProxy", label="Установка HAProxy-реле")
+                _skip_component(task, 10, "HAProxy", label="Установка HAProxy-реле", reason=skip_reason)
             else:
                 await step_haproxy_deploy(ssh, task, req)
         else:
@@ -2553,7 +2551,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
             # domain / SSL / masking — skip steps 10 and 12, use the vanilla install.
             is_vanilla = getattr(req, "node_variant", "egames") == "vanilla"
             if "ssl" in skip or is_vanilla:
-                _skip_component(task, 10, "SSL")
+                _skip_component(task, 10, "SSL", reason=skip_reason)
                 if is_vanilla and "ssl" not in skip:
                     task.add_log("\x1b[90m[skip] Vanilla: локальный SSL не ставится (сертификат от панели).\x1b[0m")
             else:
@@ -2565,12 +2563,29 @@ echo "[vnstat] Демон vnstat установлен и запущен."
             # remnanode install is skipped.)
             remnanode_token = req.remnanode_token  # manual token (may be None)
             _uuid = None
-            if req.create_in_remnawave:
+            if "remnanode" not in skip and req.create_in_remnawave:
                 token, _uuid = await step_remnawave_pre_deploy(task, req)
                 remnanode_token = token
 
+            # Optional utilities used to live inside pre-deploy registration,
+            # where a positive existing-server selection could never reach them.
+            # Preserve legacy full-deploy behaviour (run only with registration),
+            # while explicit install_components can request them independently.
+            if selected is not None or req.create_in_remnawave:
+                if "nginx_updater" not in skip:
+                    await step_nginx_updater(ssh, task)
+                if "yt_monitoring" not in skip:
+                    await step_yt_monitoring(ssh, task, req)
+                if "reshala" not in skip and getattr(req, "install_reshala", False):
+                    try:
+                        await step_reshala(ssh, task, req)
+                    except Exception as _exc:
+                        task.add_log(
+                            f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Ошибка при установке Решалы: {_exc}\x1b[0m"
+                        )
+
             if "remnanode" in skip:
-                _skip_component(task, 11, "remnanode")
+                _skip_component(task, 11, "remnanode", reason=skip_reason)
             else:
                 if not remnanode_token:
                     raise RuntimeError(
@@ -2592,7 +2607,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
             # (masking mutates /var/www/html and must not be affected by WARP's
             # routing changes; ordering: Remnanode → Masking → WARP → Hysteria2).
             if "masking" in skip or is_vanilla:
-                _skip_component(task, 12, "masking")
+                _skip_component(task, 12, "masking", reason=skip_reason)
                 if is_vanilla and "masking" not in skip:
                     task.add_log("\x1b[90m[skip] Vanilla: маскировочный сайт не ставится.\x1b[0m")
             else:
@@ -2600,7 +2615,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
 
             # ── Step 13: WARP Native (non-fatal) ──
             if "warp" in skip:
-                _skip_component(task, 13, "warp")
+                _skip_component(task, 13, "warp", reason=skip_reason)
             elif req.install_warp:
                 try:
                     await step_warp(ssh, task)
@@ -2614,7 +2629,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                 task.add_log("\x1b[90m[skip] WARP не выбран.\x1b[0m")
 
             if "psiphon" in skip:
-                _skip_component(task, 14, "psiphon")
+                _skip_component(task, 14, "psiphon", reason=skip_reason)
             elif getattr(req, "install_psiphon", False):
                 try:
                     await step_psiphon(ssh, task)
@@ -2627,14 +2642,14 @@ echo "[vnstat] Демон vnstat установлен и запущен."
             # ── Step 14: Hysteria2 (Certbot standalone SSL — label only renamed) ──
             # Gated on install_hysteria2 (Plan B 2a); skip_components still wins.
             if "hysteria2" in skip or not req.install_hysteria2:
-                _skip_component(task, 14, "hysteria2")
+                _skip_component(task, 14, "hysteria2", reason=skip_reason)
                 if not req.install_hysteria2 and "hysteria2" not in skip:
                     task.add_log("\x1b[90m[skip] Hysteria2 не выбран.\x1b[0m")
             else:
                 await step_certbot_ssl(ssh, task, req.domain, req.email)
 
             # ── Remnawave post-deploy: assign users to squads ─────
-            if req.create_in_remnawave:
+            if "remnanode" not in skip and req.create_in_remnawave:
                 await step_remnawave_add_squads(task, req)
                 await step_apply_traffic_rules(task, _uuid)
 

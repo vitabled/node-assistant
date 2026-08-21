@@ -49,8 +49,11 @@ export interface FormData {
   external_squad_ids:  string[];
   plugin_uuid:         string;
   template_id:         string;
-  // Components already present on the box → skip during deploy (add-existing-server flow)
+  // Components already present on the box → skip during deploy (legacy saved jobs/API clients)
   skip_components:     string[];
+  // null = full/new-server deploy; an explicit list (including []) = install
+  // exactly these components on an existing server.
+  install_components:  string[] | null;
   // Host-templates (of the selected deploy-template) the operator UNchecked →
   // NOT auto-created as Remnawave hosts at deploy (Ф6).
   disabled_host_template_ids: string[];
@@ -123,6 +126,7 @@ export const FORM_DEFAULT: FormData = {
   plugin_uuid:         "",
   template_id:         "",
   skip_components:     [],
+  install_components:  null,
   disabled_host_template_ids: [],
   optimize:            true,
   opt_network_tuning:  true,
@@ -189,28 +193,31 @@ export function validateForm(f: FormData): Partial<Record<keyof FormData, string
   } else {
     // ── Remnanode mode ──
     const isVanilla = f.node_variant === "vanilla";
-    if (!isVanilla) {
-      // eGames variant: domain/email/cloudflare required (local SSL + masking).
+    const selected = f.install_components;
+    const wantsRemnanode = selected === null || selected.includes("remnanode");
+    const wantsSsl = !isVanilla && (selected === null || selected.includes("ssl"));
+    const wantsHysteria2 = f.install_hysteria2 &&
+      (selected === null || selected.includes("hysteria2"));
+
+    if ((wantsRemnanode && !isVanilla) || wantsSsl || wantsHysteria2) {
       if (!DOMAIN.test(f.domain)) e.domain = "Неверный домен";
-      // Cloudflare token is only required for the cloudflare (DNS-01) provider.
-      if (f.cert_provider === "cloudflare" && !f.cloudflare_api_key.trim())
-        e.cloudflare_api_key = "Обязательное поле";
-      if (!EMAIL_RE.test(f.email)) e.email = "Неверный email";
-    } else {
-      // Vanilla: domain/email/cloudflare optional. Hysteria2 still needs a domain;
-      // otherwise a provided domain must still be well-formed.
-      if (f.install_hysteria2 && !DOMAIN.test(f.domain))
-        e.domain = "Для Hysteria2 в режиме Vanilla укажите домен";
-      else if (f.domain && !DOMAIN.test(f.domain))
-        e.domain = "Неверный домен";
+    } else if (f.domain && !DOMAIN.test(f.domain)) {
+      e.domain = "Неверный домен";
     }
-    if (!f.create_in_remnawave && !f.remnanode_token.trim())
+    if ((wantsSsl || wantsHysteria2) && !EMAIL_RE.test(f.email))
+      e.email = "Неверный email";
+    if (wantsSsl && f.cert_provider === "cloudflare" && !f.cloudflare_api_key.trim())
+      e.cloudflare_api_key = "Обязательное поле";
+
+    if (wantsRemnanode && !f.create_in_remnawave && !f.remnanode_token.trim())
       e.remnanode_token = "Обязательное поле";
-    if (f.create_in_remnawave && !f.template_id)
+    if (wantsRemnanode && f.create_in_remnawave && !f.template_id)
       e.template_id = "Выберите шаблон конфигурации";
-    const np = parseInt(f.remnanode_port, 10);
-    if (isNaN(np) || np < 1 || np > 65535) e.remnanode_port = "1–65535";
-    if (!f.country_code || f.country_code.length !== 2) e.country_code = "Выберите страну";
+    if (wantsRemnanode) {
+      const np = parseInt(f.remnanode_port, 10);
+      if (isNaN(np) || np < 1 || np > 65535) e.remnanode_port = "1–65535";
+      if (!f.country_code || f.country_code.length !== 2) e.country_code = "Выберите страну";
+    }
   }
   return e;
 }
@@ -503,6 +510,14 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
   const f = submitting;
   const isRemna = form.mode === "remnanode";
   const isSkipped = (component: string) => form.skip_components.includes(component);
+  const wantsComponent = (component: string) =>
+    form.install_components === null || form.install_components.includes(component);
+  const showRemnanode = wantsComponent("remnanode");
+  const showSsl = (form.node_variant !== "vanilla" && wantsComponent("ssl")) ||
+    (form.install_hysteria2 && wantsComponent("hysteria2"));
+  const fullDeploy = form.install_components === null;
+  const showOptimization = fullDeploy || ["node_accelerator", "trafficguard", "test_tools"]
+    .some(wantsComponent);
 
   return (
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3">
@@ -546,7 +561,7 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
         onChange={() => set("update_system", !form.update_system)} disabled={f} />
 
       {/* ── Remnanode (только Remnanode) ── */}
-      {isRemna && (
+      {isRemna && showRemnanode && (
       <>
       <SectionLabel>Remnanode</SectionLabel>
       {/* eGames / Vanilla install variant (Plan B 2b) */}
@@ -578,19 +593,23 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
         error={errors.country_code}
         disabled={f}
       />
-      <Toggle label="Установить WARP Native"
+      {!showSsl && form.node_variant !== "vanilla" && (
+        <Field label="Домен ноды" name="domain" value={form.domain} onChange={set}
+          placeholder="node1.example.com" error={errors.domain} disabled={f} />
+      )}
+      {wantsComponent("warp") && <Toggle label="Установить WARP Native"
         checked={form.install_warp}
-        onChange={() => set("install_warp", !form.install_warp)} disabled={f || isSkipped("warp")} />
-      <Toggle label="Установить Psiphon Proxy"
+        onChange={() => set("install_warp", !form.install_warp)} disabled={f || isSkipped("warp")} />}
+      {wantsComponent("psiphon") && <Toggle label="Установить Psiphon Proxy"
         checked={form.install_psiphon}
-        onChange={() => set("install_psiphon", !form.install_psiphon)} disabled={f || isSkipped("psiphon")} />
-      <Toggle label="Установить Решалу (Саппорт бот)"
+        onChange={() => set("install_psiphon", !form.install_psiphon)} disabled={f || isSkipped("psiphon")} />}
+      {wantsComponent("reshala") && <Toggle label="Установить Решалу (Саппорт бот)"
         checked={form.install_reshala}
-        onChange={() => set("install_reshala", !form.install_reshala)} disabled={f || isSkipped("reshala")} />
-      <Toggle label="Установить Hysteria2"
+        onChange={() => set("install_reshala", !form.install_reshala)} disabled={f || isSkipped("reshala")} />}
+      {wantsComponent("hysteria2") && <Toggle label="Установить Hysteria2"
         checked={form.install_hysteria2}
-        onChange={() => set("install_hysteria2", !form.install_hysteria2)} disabled={f || isSkipped("hysteria2")} />
-      {form.node_variant === "egames" && (
+        onChange={() => set("install_hysteria2", !form.install_hysteria2)} disabled={f || isSkipped("hysteria2")} />}
+      {fullDeploy && form.node_variant === "egames" && (
         <Toggle label="Cookie-gate (скрыть хост от сканеров)"
           checked={form.cookie_gate}
           onChange={() => set("cookie_gate", !form.cookie_gate)} disabled={f} />
@@ -723,8 +742,11 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
           </div>
         </div>
       </Collapsible>
+      </>
+      )}
 
       {/* ── Домен и SSL (сворачиваемая) ── */}
+      {isRemna && showSsl && (
       <Collapsible title="Домен и SSL" open={sec.domain} onToggle={() => toggleSec("domain")}>
         <div className="flex flex-col gap-1">
           <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
@@ -751,7 +773,6 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
             placeholder="DNS:Edit permission" error={errors.cloudflare_api_key} disabled={f} secret />
         )}
       </Collapsible>
-      </>
       )}
 
       {/* ── Настройки HAProxy (только HAProxy) — выше «Сети» ── */}
@@ -819,8 +840,10 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       </Collapsible>
 
       {/* ── Оптимизация ОС (сворачиваемая, оба режима) ── */}
+      {showOptimization && (
       <Collapsible title="Оптимизация ОС" open={sec.opt} onToggle={() => toggleSec("opt")}
         icon={<Zap size={12} style={{ color: form.optimize ? "var(--warn)" : "var(--t-faint)" }} />}>
+        {wantsComponent("node_accelerator") && <>
         <Toggle
           label="Применить оптимизацию ОС"
           checked={form.optimize}
@@ -846,27 +869,29 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
               hint="Через запятую, например: 1.1.1.1,8.8.8.8" />
           )}
         </div>
+        </>}
 
         <div className="h-px my-1" style={{ background: "var(--line-soft)" }} />
 
-        {isRemna && (
+        {fullDeploy && isRemna && (
           <Toggle label="Нода за CDN"
             checked={form.behind_cdn}
             onChange={() => set("behind_cdn", !form.behind_cdn)} disabled={f} />
         )}
-        <Toggle label="Установить vnstat (учёт трафика)"
+        {fullDeploy && <Toggle label="Установить vnstat (учёт трафика)"
           checked={form.install_vnstat}
-          onChange={() => set("install_vnstat", !form.install_vnstat)} disabled={f} />
-        <Toggle label="Установить TrafficGuard"
+          onChange={() => set("install_vnstat", !form.install_vnstat)} disabled={f} />}
+        {wantsComponent("trafficguard") && <Toggle label="Установить TrafficGuard"
           checked={form.install_trafficguard}
-          onChange={() => set("install_trafficguard", !form.install_trafficguard)} disabled={f || isSkipped("trafficguard")} />
-        <Toggle label="Установить инструменты тестирования"
+          onChange={() => set("install_trafficguard", !form.install_trafficguard)} disabled={f || isSkipped("trafficguard")} />}
+        {wantsComponent("test_tools") && <Toggle label="Установить инструменты тестирования"
           checked={form.install_test_tools}
-          onChange={() => set("install_test_tools", !form.install_test_tools)} disabled={f || isSkipped("test_tools")} />
-        <Toggle label="Docker registry-mirror (РФ, ускоряет pull)"
+          onChange={() => set("install_test_tools", !form.install_test_tools)} disabled={f || isSkipped("test_tools")} />}
+        {fullDeploy && <Toggle label="Docker registry-mirror (РФ, ускоряет pull)"
           checked={form.docker_mirror}
-          onChange={() => set("docker_mirror", !form.docker_mirror)} disabled={f} />
+          onChange={() => set("docker_mirror", !form.docker_mirror)} disabled={f} />}
 
+        {fullDeploy && <>
         <div className="flex flex-col gap-1">
           <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
             Whitelist IP / CIDR
@@ -888,7 +913,9 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
         <Toggle label="Разрешить SSH-подключение для всех"
           checked={form.allow_ssh_all}
           onChange={() => set("allow_ssh_all", !form.allow_ssh_all)} disabled={f} />
+        </>}
       </Collapsible>
+      )}
 
       {apiError && (
         <div className="mt-2 px-3 py-2 rounded-md border text-xs"

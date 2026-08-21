@@ -100,6 +100,43 @@ def test_skip_components_is_a_valid_field():
     assert r.skip_components == ["node_accelerator", "ssl"]
 
 
+@pytest.mark.parametrize(
+    ("selected", "expected", "unexpected"),
+    [
+        ([], set(), {"step_remnanode", "step_ssl"}),
+        (["remnanode"], {"step_remnanode"}, {"step_ssl"}),
+        (["ssl"], {"step_ssl"}, {"step_remnanode"}),
+        (["remnanode", "ssl"], {"step_remnanode", "step_ssl"}, set()),
+    ],
+)
+def test_install_components_runs_exact_positive_selection(monkeypatch, selected, expected, unexpected):
+    req = _mk_req(
+        install_components=selected,
+        install_hysteria2=False,
+        install_trafficguard=False,
+        install_test_tools=False,
+        optimize=False,
+    )
+    called, task = _run_pipeline_with_spies(monkeypatch, req)
+    assert task.status == TaskStatus.SUCCESS
+    managed_calls = {
+        "step_node_accelerator", "step_traffic_guard", "step_test_tools",
+        "step_ssl", "step_remnanode", "step_remnanode_vanilla",
+        "step_sni_masking", "step_warp", "step_psiphon", "step_certbot_ssl",
+        "step_haproxy_deploy",
+    }
+    assert set(called) & managed_calls == expected
+    assert not (unexpected & set(called))
+
+
+def test_full_new_server_without_install_selection_runs_all_components(monkeypatch):
+    req = _mk_req()
+    assert req.install_components is None
+    called, task = _run_pipeline_with_spies(monkeypatch, req)
+    assert task.status == TaskStatus.SUCCESS
+    assert {"step_remnanode", "step_ssl"} <= set(called)
+
+
 class _Task:
     total_steps = 14
 
@@ -161,7 +198,8 @@ def _run_pipeline_with_spies(monkeypatch, req):
         "step_node_accelerator", "step_traffic_guard", "step_test_tools",
         "step_system_optimize",
         "step_ssl", "step_remnanode", "step_remnanode_vanilla", "step_sni_masking",
-        "step_warp", "step_certbot_ssl", "step_haproxy_deploy",
+        "step_warp", "step_psiphon", "step_certbot_ssl", "step_haproxy_deploy",
+        "step_nginx_updater", "step_yt_monitoring", "step_reshala",
     ):
         monkeypatch.setattr(pipeline, name, rec(name))
     monkeypatch.setattr(pipeline, "step_ssh_dualport_verify", dualport)
@@ -230,6 +268,21 @@ def test_run_pipeline_unknown_skip_component_is_ignored(monkeypatch):
     called, task = _run_pipeline_with_spies(monkeypatch, req)
     assert task.status == TaskStatus.SUCCESS
     assert "step_node_accelerator" in called  # nothing actually skipped
+
+
+@pytest.mark.parametrize("component,step", [
+    ("nginx_updater", "step_nginx_updater"),
+    ("yt_monitoring", "step_yt_monitoring"),
+    ("reshala", "step_reshala"),
+])
+def test_install_components_runs_selected_optional_utility(monkeypatch, component, step):
+    req = _mk_req(
+        install_components=[component], install_hysteria2=False,
+        install_reshala=component == "reshala",
+    )
+    called, task = _run_pipeline_with_spies(monkeypatch, req)
+    assert task.status == TaskStatus.SUCCESS
+    assert step in called
 
 
 # ── (d) /api/node/detect route (SSH mocked) ───────────────────

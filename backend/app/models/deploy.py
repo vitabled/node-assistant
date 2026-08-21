@@ -75,6 +75,11 @@ class DeployRequest(SshCreds):
     # the missing ones. Values are the node_ops `Component` names (unknown ones are
     # ignored by the pipeline). Empty (default) → full deploy.
     skip_components: list[str] = Field(default_factory=list)
+    # Positive component selection for the existing-server flow. `None` keeps the
+    # legacy/full-deploy behaviour; an explicit list (including `[]`) means run
+    # exactly those manageable components. `skip_components` remains accepted for
+    # old saved jobs/API clients and is used only when this field is `None`.
+    install_components: Optional[list[str]] = Field(default=None)
     # Host-templates (from the deploy Template's host_template_ids) the operator
     # UNchecked in the form → NOT auto-created as Remnawave hosts at deploy (Ф6).
     disabled_host_template_ids: list[str] = Field(default_factory=list)
@@ -95,30 +100,32 @@ class DeployRequest(SshCreds):
     def validate_by_mode(self) -> "DeployRequest":
         if self.mode == "remnanode":
             is_vanilla = self.node_variant == "vanilla"
-            if not is_vanilla:
-                # eGames variant: domain/email/Cloudflare needed for DNS + SSL.
-                if not self.domain:
-                    raise ValueError("domain is required in remnanode mode")
-                # Cloudflare token is only needed for the cloudflare (DNS-01) issuer;
-                # letsencrypt/zerossl use HTTP-01 / email-EAB and don't take a token.
-                if self.cert_provider == "cloudflare" and not self.cloudflare_api_key:
-                    raise ValueError("cloudflare_api_key is required for the cloudflare cert provider")
+            selected = None if self.install_components is None else set(self.install_components)
+            wants_remnanode = selected is None or "remnanode" in selected
+            wants_ssl = not is_vanilla and (selected is None or "ssl" in selected)
+            wants_hysteria2 = self.install_hysteria2 and (
+                selected is None or "hysteria2" in selected
+            )
+
+            # eGames Remnanode itself consumes the domain; SSL and Hysteria2 need
+            # domain + ACME email. Unselected sections impose no requirements.
+            if ((wants_remnanode and not is_vanilla) or wants_ssl or wants_hysteria2) and not self.domain:
+                raise ValueError("domain is required for the selected components")
+            if wants_ssl or wants_hysteria2:
                 if not self.email:
-                    raise ValueError("email is required in remnanode mode")
-            else:
-                # Vanilla: no local domain/SSL/masking. But Hysteria2 (Certbot
-                # standalone, step 14) needs a domain if it's enabled.
-                if self.install_hysteria2 and not self.domain:
-                    raise ValueError("domain is required for Hysteria2 in vanilla mode")
-            if not self.create_in_remnawave and not self.remnanode_token:
+                    raise ValueError("email is required for the selected SSL components")
+            if wants_ssl and self.cert_provider == "cloudflare" and not self.cloudflare_api_key:
+                raise ValueError("cloudflare_api_key is required for the cloudflare cert provider")
+
+            if wants_remnanode and not self.create_in_remnawave and not self.remnanode_token:
                 raise ValueError(
                     "remnanode_token is required when create_in_remnawave is False"
                 )
-            if self.create_in_remnawave and not self.template_id:
+            if wants_remnanode and self.create_in_remnawave and not self.template_id:
                 raise ValueError(
                     "template_id is required when create_in_remnawave is True"
                 )
-            if len(self.country_code) != 2:
+            if wants_remnanode and len(self.country_code) != 2:
                 raise ValueError("country_code must be a 2-letter code in remnanode mode")
         else:  # haproxy
             if not self.haproxy_dest_ip.strip():
