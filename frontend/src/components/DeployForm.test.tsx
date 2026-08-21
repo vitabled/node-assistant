@@ -207,3 +207,58 @@ describe("existing-server install component contract", () => {
     expect(screen.getByRole("button", { name: "Домен и SSL" })).toBeInTheDocument();
   });
 });
+
+describe("DeployForm mode-specific rendering", () => {
+  const renderPreset = (preset: Partial<FormData>) => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    return render(<DeployForm onSubmit={async () => {}} preset={preset} />);
+  };
+
+  it("shows only HAProxy-relevant sections for an HAProxy install", () => {
+    const preset = {
+      mode: "haproxy" as const,
+      install_components: ["haproxy"],
+    };
+
+    renderPreset(preset);
+
+    expect(screen.getByText("Настройки HAProxy")).toBeInTheDocument();
+    expect(screen.queryByText("Remnanode", { selector: "p" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remnawave" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Домен и SSL" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Порт remnanode")).not.toBeInTheDocument();
+    expect(screen.queryByText("Домен ноды")).not.toBeInTheDocument();
+    expect(screen.queryByText("Email (ACME)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cloudflare API токен")).not.toBeInTheDocument();
+  });
+
+  it("shows Remnanode fields without the SSL section when SSL is not selected", () => {
+    const preset = {
+      mode: "remnanode" as const,
+      install_components: ["remnanode"],
+    };
+
+    renderPreset(preset);
+
+    expect(screen.getByText("Remnanode", { selector: "p" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remnawave" })).toBeInTheDocument();
+    expect(screen.getByText("Домен ноды")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Домен и SSL" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Email (ACME)")).not.toBeInTheDocument();
+  });
+
+  it("shows both Remnanode and SSL sections when SSL is selected", () => {
+    const preset = {
+      mode: "remnanode" as const,
+      install_components: ["remnanode", "ssl"],
+    };
+
+    renderPreset(preset);
+
+    expect(screen.getByText("Remnanode", { selector: "p" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remnawave" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Домен и SSL" })).toBeInTheDocument();
+    expect(screen.getByText("Email (ACME)")).toBeInTheDocument();
+    expect(screen.getByText("Cloudflare API токен")).toBeInTheDocument();
+  });
+});

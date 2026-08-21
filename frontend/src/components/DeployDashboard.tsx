@@ -359,6 +359,7 @@ function ExistingServerModal({ onClose, onProceed }: {
     const install_components = Object.entries(install).filter(([, v]) => v).map(([k]) => k);
     const s = settings ?? {};
     const preset: Partial<FormData> = {
+      mode: install_components.includes("haproxy") ? "haproxy" : "remnanode",
       ip, ssh_user: sshUser, ssh_password: sshPassword,
       current_ssh_port: sshPort, new_ssh_port: sshPort,
       change_ssh_port: false,   // server is already configured — don't re-do the SSH-port dance

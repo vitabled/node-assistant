@@ -54,15 +54,16 @@ describe("DeployDashboard", () => {
   });
 
   it.each([
-    ["ничего", [], []],
-    ["только Remnanode", ["Remnanode"], ["remnanode"]],
-    ["только SSL", ["SSL-сертификат"], ["ssl"]],
-    ["Remnanode и SSL", ["Remnanode", "SSL-сертификат"], ["remnanode", "ssl"]],
-  ])("existing server sends positive selection: %s", async (_name, labels, expected) => {
+    ["ничего", [], [], "remnanode"],
+    ["только Remnanode", ["Remnanode"], ["remnanode"], "remnanode"],
+    ["только SSL", ["SSL-сертификат"], ["ssl"], "remnanode"],
+    ["Remnanode и SSL", ["Remnanode", "SSL-сертификат"], ["remnanode", "ssl"], "remnanode"],
+    ["только HAProxy", ["HAProxy"], ["haproxy"], "haproxy"],
+  ])("existing server sends positive selection: %s", async (_name, labels, expected, expectedMode) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        results: { remnanode: "present", ssl: "present" },
+        results: { remnanode: "present", ssl: "present", haproxy: "present" },
         settings: {},
       }),
     }));
@@ -81,6 +82,7 @@ describe("DeployDashboard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Продолжить к деплою" }));
 
     await waitFor(() => expect(capturedPreset?.install_components).toEqual(expected));
+    expect(capturedPreset?.mode).toBe(expectedMode);
     expect(capturedPreset?.skip_components).toEqual([]);
   });
 });

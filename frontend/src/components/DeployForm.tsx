@@ -512,9 +512,11 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
   const isSkipped = (component: string) => form.skip_components.includes(component);
   const wantsComponent = (component: string) =>
     form.install_components === null || form.install_components.includes(component);
-  const showRemnanode = wantsComponent("remnanode");
-  const showSsl = (form.node_variant !== "vanilla" && wantsComponent("ssl")) ||
-    (form.install_hysteria2 && wantsComponent("hysteria2"));
+  const showRemnanode = isRemna && wantsComponent("remnanode");
+  const showSsl = isRemna && (
+    (form.node_variant !== "vanilla" && wantsComponent("ssl")) ||
+    (form.install_hysteria2 && wantsComponent("hysteria2"))
+  );
   const fullDeploy = form.install_components === null;
   const showOptimization = fullDeploy || ["node_accelerator", "trafficguard", "test_tools"]
     .some(wantsComponent);
@@ -561,7 +563,7 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
         onChange={() => set("update_system", !form.update_system)} disabled={f} />
 
       {/* ── Remnanode (только Remnanode) ── */}
-      {isRemna && showRemnanode && (
+      {showRemnanode && (
       <>
       <SectionLabel>Remnanode</SectionLabel>
       {/* eGames / Vanilla install variant (Plan B 2b) */}
@@ -746,7 +748,7 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       )}
 
       {/* ── Домен и SSL (сворачиваемая) ── */}
-      {isRemna && showSsl && (
+      {showSsl && (
       <Collapsible title="Домен и SSL" open={sec.domain} onToggle={() => toggleSec("domain")}>
         <div className="flex flex-col gap-1">
           <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
