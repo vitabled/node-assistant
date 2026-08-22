@@ -40,10 +40,13 @@ class AiConfigBody(BaseModel):
     # Потолок 60: измеренный перенос каталога на 205 записей занял 33 вызова
     # (2 открытия + поиск + 25 чтений + 5 пакетных записей). Ниже — не влезает
     # в один заход, выше — уже про разгон, а не про работу.
-    max_steps: int = Field(12, ge=1, le=60)
+    # ⚠️ 0 = АВТО (см. `ai_agent.AUTO_MAX_STEPS`): нижняя граница опущена до 0
+    # именно ради этого режима, 1..60 — прежний ручной режим без изменений.
+    max_steps: int = Field(12, ge=0, le=60)
     # Потолок вывода за тёрн. Нижняя граница не «1»: на 256 токенах не помещается
     # даже короткое тело запроса, и агент упирался бы в обрыв на каждом шаге.
-    max_tokens: int = Field(8192, ge=256, le=64000)
+    # 0 = АВТО: агент сам поднимает потолок ×1.5 на обрыве по длине.
+    max_tokens: int = Field(8192, ge=0, le=64000)
     readonly: bool = True
     active_preset_id: str = Field("", max_length=64)  # Plan I; "" = default preset
     gateway: str = "none"  # Plan J; none | cliproxy
@@ -60,6 +63,15 @@ class AiConfigBody(BaseModel):
     def _provider(cls, v: str) -> str:
         if v not in _PROVIDERS:
             raise ValueError(f"provider должен быть одним из {_PROVIDERS}")
+        return v
+
+    @field_validator("max_tokens")
+    @classmethod
+    def _max_tokens(cls, v: int) -> int:
+        # Разрешаем ровно 0 (авто) и прежний коридор 256..64000. «Мусорные»
+        # 1..255 остаются ошибкой: на них ответ обрывался бы на каждом шаге.
+        if v != 0 and v < 256:
+            raise ValueError("max_tokens: 0 (авто) либо 256..64000")
         return v
 
     @field_validator("gateway")
@@ -146,6 +158,12 @@ def _public(account_id: str | None = None) -> dict:
         "model": cfg.model,
         "max_steps": cfg.max_steps,
         "max_tokens": cfg.max_tokens,
+        # Производные флаги для формы: 0 = «авто». Отдаём явно, чтобы фронт не
+        # заводил свою копию правила «ноль значит особый режим» — она отстанет.
+        "auto_steps": cfg.max_steps <= 0,
+        "auto_tokens": cfg.max_tokens <= 0,
+        "auto_max_steps": ai_agent.AUTO_MAX_STEPS,
+        "auto_token_budget": ai_agent.AUTO_TOKEN_BUDGET,
         "readonly": cfg.readonly,
         "active_preset_id": cfg.active_preset_id,
         "gateway": cfg.gateway,

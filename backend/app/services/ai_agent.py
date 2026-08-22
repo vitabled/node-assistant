@@ -58,6 +58,39 @@ from app.services import (ai_attachments, ai_context, ai_tools, ai_web, net_guar
 # кругу, которое съедало весь бюджет шагов.
 _TOOL_RESULT_CAP = 34_000
 
+# ── авто-бюджет шагов и токенов ───────────────────────────────
+#
+# ⚠️ Ручной потолок шагов упирал объёмную задачу в стену на ровном месте:
+# человек не знает заранее, сколько вызовов займёт перенос каталога, и либо
+# ставит мало (агент бросает работу на середине), либо ставит 60 «на всякий»
+# (и разгон при зацикливании ничем не ограничен). Авто-режим (`max_steps=0`)
+# считает признаком продолжения ПРОГРЕСС, а не число: пока модель зовёт
+# инструменты и они дают новый результат — идём дальше.
+
+#: Физический предохранитель авто-режима. Не бюджет задачи, а защита от разгона:
+#: 200 шагов — это заведомо больше самого длинного измеренного сценария (33
+#: вызова на каталог из 205 записей) и всё ещё конечно.
+AUTO_MAX_STEPS = 200
+
+#: Сколько подряд БЕЗРЕЗУЛЬТАТНЫХ шагов (ошибка провайдера или все инструменты
+#: вернули ok=false) значит «не продвигается». Два — слишком строго: сетевой
+#: сбой бывает и одиночным.
+AUTO_FAIL_STREAK = 3
+
+#: Сколько подряд ОДИНАКОВЫХ пачек вызовов (тот же инструмент с теми же
+#: аргументами) значит «зациклился». Один повтор бывает осмысленным (перечитать
+#: после записи), три подряд — нет.
+AUTO_REPEAT_STREAK = 3
+
+#: Стартовый потолок вывода в авто-режиме токенов (`max_tokens=0`).
+AUTO_TOKENS_START = 8192
+#: Множитель на каждом обрыве по длине и жёсткий потолок сверху.
+AUTO_TOKENS_GROWTH = 1.5
+AUTO_TOKENS_CEILING = 64_000
+#: Суммарный бюджет токенов на один ответ агента. Без него авто-режим по обоим
+#: осям превращается в неограниченный счёт у провайдера.
+AUTO_TOKEN_BUDGET = 200_000
+
 # Потолок на СУММУ результатов инструментов в истории. Без него длинный перенос
 # упирается не в наши лимиты, а в окно модели: 25 кусков по 30k — это ~200 тысяч
 # токенов только на файл. Старые результаты вытесняются: если модель следует
@@ -507,7 +540,11 @@ async def _anthropic_turn(
     url = f"{config.base_url.rstrip('/')}/messages"
     body: dict = {
         "model": config.model,
-        "max_tokens": max(256, int(getattr(config, "max_tokens", 8192))),
+        # 0 = авто-режим: в цикле агента потолок подставляет `run_agent`, но
+        # сюда конфиг может прийти и мимо него (`compact`) — тогда 0 значит
+        # «штатный старт», а не «256», иначе выжимка обрывается на полуслове.
+        "max_tokens": max(256, int(getattr(config, "max_tokens", 8192) or
+                                   AUTO_TOKENS_START)),
         "system": system or _SYSTEM,  # Anthropic takes system at top level, NOT in messages
         "messages": messages,
     }
@@ -904,6 +941,21 @@ async def compact(config: AiConfig, account_id: str,
     return text
 
 
+def _calls_signature(tool_calls: list[dict]) -> str:
+    """Отпечаток пачки вызовов одного тёрна: имя + аргументы, порядок неважен.
+
+    По нему авто-режим отличает работу от хождения по кругу: одна и та же пачка
+    три раза подряд — это не прогресс, а цикл, и продолжать смысла нет."""
+    try:
+        parts = sorted(
+            f"{tc.get('name')}:{json.dumps(tc.get('args') or {}, sort_keys=True, ensure_ascii=False)}"
+            for tc in tool_calls
+        )
+    except Exception:
+        parts = sorted(f"{tc.get('name')}" for tc in tool_calls)
+    return "|".join(parts)
+
+
 async def run_agent(
     prompt: str, config: AiConfig, account_id: str, key: Optional[str] = None,
     attachments: Optional[list[dict]] = None,
@@ -978,20 +1030,44 @@ async def run_agent(
         yield {"type": "tool_result", "name": "__mcp__", "ok": True,
                "preview": f"Подключено инструментов Remnawave: {len(mcp_tools)}"}
 
-    steps = max(1, config.max_steps)
+    # ── бюджет шага ───────────────────────────────────────────
+    # `max_steps == 0` — авто: фиксированного потолка нет, признаком продолжения
+    # служит ПРОГРЕСС (модель зовёт инструменты, и они что-то возвращают).
+    # `AUTO_MAX_STEPS` при этом остаётся физическим предохранителем.
+    auto = int(getattr(config, "max_steps", 12) or 0) <= 0
+    steps = 0 if auto else max(1, int(config.max_steps))
+    limit = AUTO_MAX_STEPS if auto else steps
+
+    # ── бюджет вывода ─────────────────────────────────────────
+    # `max_tokens == 0` — авто: на обрыве по длине поднимаем потолок сами,
+    # вместо просьбы «поднимите Токенов на ответ» и потерянной работы.
+    auto_tokens = int(getattr(config, "max_tokens", 8192) or 0) <= 0
+    token_cap = (AUTO_TOKENS_START if auto_tokens
+                 else int(getattr(config, "max_tokens", 8192)))
+
+    fails = 0          # подряд идущих шагов, где все инструменты дали ok=false
+    repeats = 0        # подряд идущих повторов одной и той же пачки вызовов
+    last_sig = ""
+    stop_note = ""     # текст, который объясняет ДОСРОЧНУЮ остановку
+
     # ⚠️ Состояние отдаём СРАЗУ, до первого обращения к провайдеру: первый тёрн
     # с большим файлом идёт десятки секунд, и всё это время в чате не было
     # ничего — «вроде работает, вроде нет». Пустой лог не отличить от зависшего.
     tokens = 0
     yield {"type": "status", "phase": "thinking", "step": 1, "steps": steps,
-           "tokens": 0}
-    for step in range(steps):
+           "tokens": 0, "auto": auto}
+    step = 0
+    for step in range(limit):
         # Reserve the LAST step for a tools-off turn so the model must synthesize a
         # final answer from what it fetched, instead of dead-ending on the budget.
-        is_last = step == steps - 1
+        # ⚠️ В АВТО-режиме резервировать нечего: там нет «последнего» шага —
+        # завершением служит сам факт, что модель перестала звать инструменты.
+        is_last = (not auto) and step == steps - 1
+        turn_config = (config.model_copy(update={"max_tokens": token_cap})
+                       if auto_tokens else config)
         try:
             turn = await _provider_turn(
-                config, key, messages, with_tools=not is_last, system=system,
+                turn_config, key, messages, with_tools=not is_last, system=system,
                 mcp=mcp_tools, ctx=ctx,
             )
         except AgentError as exc:
@@ -1018,22 +1094,54 @@ async def run_agent(
             elif turn.get("stop") in ("length", "max_tokens"):
                 # Обрыв по потолку вывода — самая частая причина пустоты: тело
                 # одной записи не поместилось, и разбирать стало нечего.
-                yield {"type": "text", "delta": (
-                    f"(ответ не поместился в лимит вывода в "
-                    f"{getattr(config, 'max_tokens', 8192)} токенов — поднимите "
-                    f"«Токенов на ответ» в «Настройки → AI» или попросите "
-                    f"обрабатывать данные меньшими порциями)")}
+                #
+                # В авто-режиме токенов это НЕ повод останавливать работу:
+                # поднимаем потолок ×1.5 и повторяем тот же тёрн — история
+                # (`messages`) не менялась, так что повтор безопасен.
+                grown = min(int(token_cap * AUTO_TOKENS_GROWTH),
+                            AUTO_TOKENS_CEILING)
+                if auto_tokens and grown > token_cap and step + 1 < limit \
+                        and tokens < AUTO_TOKEN_BUDGET:
+                    token_cap = grown
+                    yield {"type": "status", "phase": "thinking",
+                           "step": step + 2, "steps": steps, "tokens": tokens,
+                           "auto": auto, "max_tokens": token_cap}
+                    continue
+                if auto_tokens:
+                    yield {"type": "text", "delta": (
+                        f"(ответ не поместился даже в {token_cap} токенов "
+                        f"вывода — попросите обрабатывать данные меньшими "
+                        f"порциями)")}
+                else:
+                    yield {"type": "text", "delta": (
+                        f"(ответ не поместился в лимит вывода в "
+                        f"{getattr(config, 'max_tokens', 8192)} токенов — "
+                        f"поднимите «Токенов на ответ» в «Настройки → AI» или "
+                        f"попросите обрабатывать данные меньшими порциями)")}
             else:
                 yield {"type": "text", "delta": (
                     "(модель вернула пустой ответ — попробуйте переспросить; "
                     "если файл большой, попросите обрабатывать его частями)")}
             yield {"type": "status", "phase": "done", "step": step + 1,
-                   "steps": steps, "tokens": tokens}
+                   "steps": steps, "tokens": tokens, "auto": auto}
             yield {"type": "done"}
             return
 
+        # Зацикливание: та же пачка вызовов с теми же аргументами N раз подряд.
+        # Считаем ДО выполнения — повторять третий раз бессмысленно в любом
+        # случае, а лишний вызов панели стоит времени.
+        sig = _calls_signature(turn["tool_calls"])
+        repeats = repeats + 1 if sig and sig == last_sig else 0
+        last_sig = sig
+        if auto and repeats + 1 >= AUTO_REPEAT_STREAK:
+            stop_note = (
+                f"(задача не продвигается: агент {repeats + 1} раза подряд "
+                f"повторил один и тот же вызов. Работа остановлена — уточните "
+                f"задачу или напишите «Продолжи»)")
+            break
+
         yield {"type": "status", "phase": "tools", "step": step + 1,
-               "steps": steps, "tokens": tokens}
+               "steps": steps, "tokens": tokens, "auto": auto}
 
         # ⚠️ Инструменты одного тёрна выполняются ПАРАЛЛЕЛЬНО. Модель часто просит
         # сразу несколько чтений или запросов к панели, и последовательное
@@ -1066,27 +1174,58 @@ async def run_agent(
                                              config, ctx)
 
         results = []
+        any_ok = False
         for tc in turn["tool_calls"]:
             ok, out = done.get(tc["id"], (False, "инструмент не выполнился"))
+            any_ok = any_ok or bool(ok)
             yield {"type": "tool_result", "id": tc["id"], "name": tc["name"],
                    "ok": ok, "preview": json.dumps(out, ensure_ascii=False)[:500]}
             results.append({"id": tc["id"], "result": out})
+
+        # Шаг, где НИ ОДИН инструмент не отработал, прогресса не дал. Один такой
+        # бывает и на исправимой опечатке в аргументах, три подряд — это стена.
+        fails = 0 if any_ok else fails + 1
+        if auto and fails >= AUTO_FAIL_STREAK:
+            stop_note = (
+                f"(задача не продвигается: {fails} шага подряд все инструменты "
+                f"завершились ошибкой. Работа остановлена — посмотрите ошибки "
+                f"выше и уточните задачу)")
+            break
 
         if config.provider == "anthropic":
             _append_tool_results_anthropic(messages, turn["raw"], results)
         else:
             _append_tool_results_openai(messages, turn["raw"], results)
-        if step + 1 < steps:
-            yield {"type": "status", "phase": "thinking", "step": step + 2,
-                   "steps": steps, "tokens": tokens}
 
-    # Сюда попадаем, если даже последний тёрн без инструментов запросил вызовы.
+        # Суммарный расход за один ответ. Защита от разгона в авто-режиме: без
+        # неё «пока есть прогресс» может означать неограниченный счёт.
+        if (auto or auto_tokens) and tokens >= AUTO_TOKEN_BUDGET:
+            stop_note = (
+                f"(израсходован суммарный бюджет в {AUTO_TOKEN_BUDGET} токенов "
+                f"за один ответ. Работа остановлена — напишите «Продолжи», "
+                f"контекст сохранён)")
+            break
+
+        if step + 1 < limit:
+            yield {"type": "status", "phase": "thinking", "step": step + 2,
+                   "steps": steps, "tokens": tokens, "auto": auto}
+
+    # Сюда попадаем, если даже последний тёрн без инструментов запросил вызовы,
+    # либо авто-режим упёрся в предохранитель / зацикливание.
     # Лимит шагов — штатная ситуация на большой задаче, поэтому говорим не «всё
     # плохо», а что именно делать: продолжить или поднять потолок.
-    yield {"type": "text", "delta": (
-        f"(достигнут предел в {steps} шагов за один ответ. Напишите «Продолжи» — "
-        f"файл и контекст сохранены; либо поднимите «Шагов агента» в "
-        f"«Настройки → AI»)")}
-    yield {"type": "status", "phase": "done", "step": steps, "steps": steps,
-           "tokens": tokens}
+    if stop_note:
+        yield {"type": "text", "delta": stop_note}
+    elif auto:
+        yield {"type": "text", "delta": (
+            f"(сработал предохранитель авто-режима: {AUTO_MAX_STEPS} шагов за "
+            f"один ответ. Работа остановлена — напишите «Продолжи», файл и "
+            f"контекст сохранены)")}
+    else:
+        yield {"type": "text", "delta": (
+            f"(достигнут предел в {steps} шагов за один ответ. Напишите "
+            f"«Продолжи» — файл и контекст сохранены; либо поднимите «Шагов "
+            f"агента» в «Настройки → AI»)")}
+    yield {"type": "status", "phase": "done", "step": step + 1,
+           "steps": steps, "tokens": tokens, "auto": auto}
     yield {"type": "done"}
