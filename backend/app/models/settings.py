@@ -176,6 +176,23 @@ class AiConfig(BaseModel):
         return self.base_url
 
 
+class LatencyLabConfig(BaseModel):
+    """Latency Lab (console.latencylab.ru) personal API key + scan defaults.
+
+    Тот же контракт секрета, что у `AiConfig`: ключ лежит Fernet-шифротекстом
+    (`api_key_enc`) и НИКОГДА не отдаётся клиенту — наружу уходят только
+    `has_key` и маска последних символов.
+    """
+
+    enabled: bool = False
+    api_key_enc: str = ""  # Fernet ciphertext (base64); never plaintext
+    base_url: str = "https://console.latencylab.ru"
+    #: Узел-агент, с которого идут замеры. По умолчанию единственный — orel.
+    node_id: str = "orel"
+    #: Пусто = мультискан по всем online-операторам (1 запрос к лимиту).
+    default_operator: str = ""
+
+
 class HaproxyConfig(BaseModel):
     """Wave-7: connection to a NodeFlow HAProxy panel (deploy + proxy integration).
 
@@ -253,6 +270,7 @@ class AppSettings(BaseModel):
     cloudflare: CloudflareConfig = CloudflareConfig()
     appearance: AppearanceConfig = AppearanceConfig()
     auto_backup: AutoBackupConfig = AutoBackupConfig()
+    latency: LatencyLabConfig = LatencyLabConfig()
 
     @model_validator(mode="after")
     def _resolve_active_panel(self):

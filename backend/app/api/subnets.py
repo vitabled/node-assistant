@@ -3,6 +3,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.services import latency_lab
 from app.services import subnets_store as store
 
 router = APIRouter(prefix="/api/subnets")
@@ -201,3 +202,143 @@ async def enrich_rows(provider_id: str, list_id: str, body: EnrichBody):
                                  f"AS{num}" if num else "", asnname)
             updated += 1
     return {"updated": updated, "of": len(rows)}
+
+
+# ── Latency Lab: замер подсетей списка ────────────────────────
+#
+# Потолок на пачку. Мультискан — ОДИН запрос суточного лимита независимо от
+# числа целей, а вот поштучный `subnet-scan` тратит по запросу на подсеть,
+# поэтому случайный «выделить всё» на списке в 500 строк обнулил бы лимит
+# аккаунта одним нажатием.
+MAX_SCAN_SUBNETS = 64
+
+
+class LatencyScanBody(BaseModel):
+    provider_id: str
+    list_id: str
+    row_ids: list[str] = Field(default_factory=list)
+    all: bool = False
+    #: Пусто = мультискан по всем online-операторам (1 запрос лимита);
+    #: конкретный оператор = поштучный subnet-scan.
+    operator: str = ""
+    async_: bool = Field(False, alias="async_")
+
+    model_config = {"populate_by_name": True}
+
+
+def _collect_subnets(provider_id: str, list_id: str, row_ids: list[str],
+                     take_all: bool) -> list[str]:
+    """Подсети выбранных строк: колонка `subnet`, иначе первая колонка списка."""
+    data = store.get_store()
+    lst = next((l for p in data["providers"] if p["id"] == provider_id
+                for l in p.get("lists", []) if l["id"] == list_id), None)
+    if not lst:
+        raise HTTPException(404, "Список не найден")
+    rows = lst.get("rows", [])
+    if not take_all:
+        wanted = set(row_ids)
+        rows = [r for r in rows if r.get("id") in wanted]
+    if not rows:
+        raise HTTPException(404, "Строки не найдены")
+    keys = [c["key"] for c in lst.get("columns", [])] or ["subnet"]
+    key = "subnet" if "subnet" in keys else keys[0]
+    out: list[str] = []
+    for row in rows:
+        value = (row.get("values", {}).get(key) or "").strip()
+        if value and value not in out:
+            out.append(value)
+    if not out:
+        raise HTTPException(400, "В выбранных строках нет подсетей")
+    return out
+
+
+def _latency_client():
+    """Клиент Latency Lab или 400: ключ обязателен и интеграция включена."""
+    cfg = latency_lab.config()
+    if not cfg.enabled:
+        raise HTTPException(400, "Latency Lab выключен в настройках")
+    if not cfg.api_key_enc:
+        raise HTTPException(400, "Не задан API-ключ Latency Lab")
+    client = latency_lab.client()
+    if client is None:
+        raise HTTPException(400, "Не удалось расшифровать API-ключ Latency Lab")
+    return client
+
+
+@router.post("/latency-scan")
+async def latency_scan(body: LatencyScanBody):
+    """Замер выбранных подсетей через Latency Lab.
+
+    Без оператора — мультискан (все online-операторы, один запрос лимита);
+    с оператором — поштучный `subnet-scan` по каждой подсети.
+    """
+    client = _latency_client()
+    cfg = latency_lab.config()
+    subnets = _collect_subnets(body.provider_id, body.list_id,
+                               body.row_ids, body.all)
+    if len(subnets) > MAX_SCAN_SUBNETS:
+        raise HTTPException(
+            400, f"За раз не больше {MAX_SCAN_SUBNETS} подсетей "
+                 f"(выбрано {len(subnets)})")
+
+    operator = latency_lab.normalize_operator(body.operator or cfg.default_operator)
+    if operator and operator not in latency_lab.OPERATORS:
+        raise HTTPException(400, f"Неизвестный оператор: {operator}")
+
+    jobs: list[dict] = []
+    errors: list[str] = []
+
+    if not operator:
+        # Мультискан принимает цели одним текстом — это ровно один запрос
+        # суточного лимита на всю пачку.
+        data, err = await client.multiscan("\n".join(subnets),
+                                           is_async=body.async_)
+        if err:
+            raise HTTPException(502, f"Latency Lab: {err}")
+        data = data or {}
+        jobs.append({"targets": subnets, "req_id": data.get("req_id", ""),
+                     "status": data.get("status", "done"),
+                     "result": data.get("result")})
+    else:
+        for subnet in subnets:
+            data, err = await client.subnet_scan(operator, subnet,
+                                                 is_async=body.async_)
+            if err:
+                errors.append(f"{subnet}: {err}")
+                continue
+            data = data or {}
+            jobs.append({"targets": [subnet], "req_id": data.get("req_id", ""),
+                         "status": data.get("status", "done"),
+                         "result": data.get("result")})
+        if not jobs:
+            raise HTTPException(502, "Latency Lab: " + "; ".join(errors[:3]))
+
+    return {"ok": True,
+            "mode": "multiscan" if not operator else "subnet-scan",
+            "operator": operator, "async": body.async_,
+            "jobs": jobs, "errors": errors}
+
+
+@router.get("/latency-scan/{req_id}")
+async def latency_scan_status(req_id: str):
+    client = _latency_client()
+    data, err = await client.job_status(req_id)
+    if err:
+        return {"ok": False, "error": err, "req_id": req_id}
+    data = data or {}
+    return {"ok": True, "req_id": req_id, "status": data.get("status", ""),
+            "result": data.get("result")}
+
+
+class LatencyCancelBody(BaseModel):
+    req_id: str
+
+
+@router.post("/latency-scan/cancel")
+async def latency_scan_cancel(body: LatencyCancelBody):
+    client = _latency_client()
+    data, err = await client.cancel(body.req_id)
+    if err:
+        return {"ok": False, "error": err, "req_id": body.req_id}
+    return {"ok": True, "req_id": body.req_id,
+            "result": (data or {}).get("result")}

@@ -65,6 +65,7 @@ from app.api import (
     instances,
     regru_vip,
     integration_deployments,
+    latency,
 )
 from app.api.auth import require_identity as require_account
 from app.services import job_runner, shared_task_store, worker_lease
@@ -210,6 +211,7 @@ app.include_router(obhod.router, dependencies=_auth)
 app.include_router(sitecopy.router, dependencies=_auth)
 app.include_router(f2b_list.router, dependencies=_auth)
 app.include_router(subnets.router, dependencies=_auth)
+app.include_router(latency.router, dependencies=_auth)
 app.include_router(instances.router, dependencies=_auth)
 app.include_router(regru_vip.router, dependencies=_auth)
 app.include_router(integration_deployments.router, dependencies=_auth)

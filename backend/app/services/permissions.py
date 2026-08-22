@@ -76,6 +76,10 @@ SPECIAL: dict[str, str] = {
     "billing.purchase": "Покупка ресурсов и доменов (тратит деньги)",
     "deploy.credentials":
         "Передача SSH-учётных данных в запросах (деплой, операции с нодой, замеры)",
+    # Замер тратит СУТОЧНЫЙ лимит внешнего аккаунта Latency Lab (общий с ботом и
+    # консолью), поэтому это не «просмотр подсетей»: право запускать замеры
+    # выдаётся отдельно от права смотреть и править сам справочник.
+    "latency.scan": "Замеры доступности подсетей через Latency Lab (тратит лимит аккаунта)",
 }
 
 # Человеческие имена домена — для UI ролей.
@@ -164,7 +168,8 @@ BUILTIN_ROLES: tuple[dict, ...] = (
             + _full("deploy", "certs", "monitoring", "hosts")
             + ["automation.edit", "automation.execute", "configs.edit",
                "library.create", "library.edit", "stats.edit",
-               "assistant.execute", "account.edit", "deploy.credentials"]
+               "assistant.execute", "account.edit", "deploy.credentials",
+               "latency.scan"]
         ),
     },
     {
@@ -311,8 +316,18 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     # Обходы БС: Beeline-инструмент правит хосты панели — configs, как хосты.
     ("/api/obhod", {"GET": "configs.view", "*": "configs.edit"}),
     # Подсети — справочные данные, как каталог хостингов.
+    # ⚠️ Замер через Latency Lab идёт РАНЬШЕ общего префикса: он тратит суточный
+    # лимит внешнего аккаунта, поэтому это не «правка справочника».
+    ("/api/subnets/latency-scan", {"*": "latency.scan"}),
     ("/api/subnets", {"GET": "hostings.view", "POST": "hostings.create",
                       "*": "hostings.edit"}),
+
+    # ── Latency Lab (замеры доступности подсетей) ────────────
+    # Ключ — секрет установки, поэтому его правка живёт в настройках; сами
+    # замеры — отдельная привилегия (см. SPECIAL).
+    ("/api/latency/config", {"GET": "settings.view", "*": "settings.edit"}),
+    ("/api/latency/check", {"*": "settings.view"}),
+    ("/api/latency/operators", {"GET": "hostings.view"}),
 
     # ── мосты: правка routing в config-профилях панели (затрагивает всех её
     # пользователей) — create/edit на уровне оператора, как automation.

@@ -35,6 +35,7 @@ _SECRET_EXCLUDE = {"netbird.json"}
 SETTINGS_SECTIONS = [
     "remnawave", "remnawave_registry", "deploy_defaults", "optimization",
     "xray_checker", "mcp", "ai", "haproxy", "cloudflare", "appearance", "auto_backup",
+    "latency",
 ]
 
 # Префикс виртуального стора для секции настроек.
