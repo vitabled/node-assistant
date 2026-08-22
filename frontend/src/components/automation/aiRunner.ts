@@ -258,7 +258,18 @@ async function consume(url: string, init: RequestInit,
   ac = controller;
   try {
     const res = await fetch(url, { ...init, signal: controller.signal });
-    if (!res.ok || !res.body) throw new Error("stream failed");
+    if (!res.ok) {
+      // Не «Ошибка соединения» — сервер ответил, но отказал (413 файл велик,
+      // 422 валидация, 503 провайдер). Читаем реальную причину из тела.
+      let detail = "";
+      try {
+        const t = await res.text();
+        try { detail = JSON.parse(t)?.detail || t; } catch { detail = t; }
+      } catch { /* тело не читается — ниже фолбэк */ }
+      throw new Error(detail ? `Сервер ответил ${res.status}: ${detail}`
+                             : `Сервер ответил ${res.status}`);
+    }
+    if (!res.body) throw new Error("stream failed");
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -294,9 +305,14 @@ async function consume(url: string, init: RequestInit,
         }
       }
     }
-  } catch {
+  } catch (e) {
     if (!controller.signal.aborted) {
-      patchLast(a => { a.text += "\n⚠️ Ошибка соединения с ИИ."; });
+      const msg = e instanceof Error ? e.message : "";
+      patchLast(a => {
+        a.text += msg
+          ? `\n⚠️ ${msg}`
+          : "\n⚠️ Ошибка соединения с ИИ.";
+      });
     }
   } finally {
     if (ac === controller) ac = null;
