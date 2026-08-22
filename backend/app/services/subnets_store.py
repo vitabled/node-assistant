@@ -296,3 +296,145 @@ def update_row_asn(provider_id: str, list_id: str, row_id: str, asn: str, asnnam
 
 def get_store(account_id: Optional[str] = None) -> dict:
     return _load(account_id)
+
+
+# ── импорт (см. api/subnets.py: /import) ───────────────────────
+def set_store(data: dict, account_id: Optional[str] = None) -> None:
+    """Заменить дерево целиком (режим replace при импорте)."""
+    _save({"providers": list(data.get("providers") or [])}, account_id)
+
+
+def ensure_provider(name: str, account_id: Optional[str] = None) -> dict:
+    """Провайдер по имени: существующий или новый."""
+    wanted = (name or "").strip() or "Импортированные"
+    data = _load(account_id)
+    p = next((x for x in data["providers"]
+              if (x.get("name") or "").strip().lower() == wanted.lower()), None)
+    return p if p else add_provider(wanted, account_id)
+
+
+def ensure_list(provider_id: str, name: str, columns: Optional[list] = None,
+                account_id: Optional[str] = None) -> dict:
+    """Список по имени внутри провайдера: существующий или новый."""
+    wanted = (name or "").strip() or "Импорт"
+    data = _load(account_id)
+    p = _find_provider(data, provider_id)
+    if not p:
+        raise KeyError(provider_id)
+    lst = next((l for l in p.get("lists", [])
+                if (l.get("name") or "").strip().lower() == wanted.lower()), None)
+    if lst:
+        return lst
+    lst = add_list(provider_id, wanted, account_id)
+    if columns:
+        keys = {c.get("key") for c in columns if isinstance(c, dict)}
+        if "subnet" in keys:
+            data = _load(account_id)
+            fresh = _find_list(data, provider_id, lst["id"])
+            if fresh:
+                fresh["columns"] = [{"key": c["key"], "title": c.get("title") or c["key"]}
+                                    for c in columns
+                                    if isinstance(c, dict) and c.get("key")]
+                _save(data, account_id)
+                return fresh
+    return lst
+
+
+def _column_key(lst: dict, title: str) -> str:
+    """Ключ столбца по заголовку: существующий или новый (создаётся)."""
+    t = (title or "").strip()
+    col = next((c for c in lst["columns"]
+                if (c.get("title") or "").strip().lower() == t.lower()
+                or c.get("key") == t), None)
+    if col:
+        return col["key"]
+    col = {"key": f"col_{uuid.uuid4().hex[:8]}", "title": t or "Столбец"}
+    lst["columns"].append(col)
+    return col["key"]
+
+
+def import_rows(provider_id: str, list_id: str, items: list[dict],
+                replace: bool = False, account_id: Optional[str] = None) -> dict:
+    """Импорт строк в список.
+
+    item = {subnet: str, values: {colKey: str}, extra: {заголовок: str},
+            operators: {opKey: bool}}. Дубликаты подсетей — skip.
+    """
+    data = _load(account_id)
+    lst = _find_list(data, provider_id, list_id)
+    if not lst:
+        raise KeyError(list_id)
+    if replace:
+        lst["rows"] = []
+    rows = lst.setdefault("rows", [])
+    seen = {(r.get("values") or {}).get("subnet") for r in rows}
+    op_keys = {o["key"] for o in OPERATORS}
+    imported, skipped, errors = 0, 0, []
+    for item in items:
+        try:
+            subnet, ipver = parse_subnet(str(item.get("subnet") or ""))
+        except ValueError as exc:
+            errors.append(str(exc))
+            skipped += 1
+            continue
+        if subnet in seen:
+            skipped += 1
+            continue
+        if len(rows) >= MAX_ROWS:
+            errors.append(f"Лимит {MAX_ROWS} строк в списке")
+            skipped += 1
+            break
+        values = {"subnet": subnet, "ipver": ipver, "date": time.strftime("%Y-%m-%d")}
+        for k, v in (item.get("values") or {}).items():
+            if k in ("subnet", "ipver") or v in (None, ""):
+                continue
+            values[k] = str(v)
+        for title, v in (item.get("extra") or {}).items():
+            if v in (None, ""):
+                continue
+            values[_column_key(lst, title)] = str(v)
+        operators = {k: True for k in op_keys}
+        for k, v in (item.get("operators") or {}).items():
+            if k in op_keys:
+                operators[k] = bool(v)
+        rows.append({"id": uuid.uuid4().hex[:10], "values": values,
+                     "operators": operators})
+        seen.add(subnet)
+        imported += 1
+    _save(data, account_id)
+    return {"imported": imported, "skipped": skipped, "errors": errors}
+
+
+def rows_to_items(rows: Optional[list]) -> list[dict]:
+    """Строки снимка → items для import_rows."""
+    out = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        values = r.get("values") or {}
+        out.append({"subnet": values.get("subnet") or "", "values": values,
+                    "operators": r.get("operators") or {}})
+    return out
+
+
+def import_tree(providers: list, replace: bool = False,
+                account_id: Optional[str] = None) -> dict:
+    """Слить снимок дерева (provider→list→rows) в хранилище аккаунта."""
+    if replace:
+        set_store({"providers": []}, account_id)
+    total = {"imported": 0, "skipped": 0, "errors": []}
+    for sp in providers or []:
+        if not isinstance(sp, dict):
+            continue
+        p = ensure_provider(sp.get("name") or "", account_id)
+        for sl in sp.get("lists") or []:
+            if not isinstance(sl, dict):
+                continue
+            lst = ensure_list(p["id"], sl.get("name") or "", sl.get("columns"),
+                              account_id)
+            res = import_rows(p["id"], lst["id"], rows_to_items(sl.get("rows")),
+                              account_id=account_id)
+            total["imported"] += res["imported"]
+            total["skipped"] += res["skipped"]
+            total["errors"] += res["errors"]
+    return total

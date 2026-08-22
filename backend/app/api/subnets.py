@@ -1,6 +1,12 @@
 """API «Подсети» (Обходы БС, Wave-5 PR-5). Хранилище — services/subnets_store."""
+import csv
+import io
+import json
+import time
+
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.services import latency_lab
@@ -342,3 +348,258 @@ async def latency_scan_cancel(body: LatencyCancelBody):
         return {"ok": False, "error": err, "req_id": body.req_id}
     return {"ok": True, "req_id": body.req_id,
             "result": (data or {}).get("result")}
+
+
+# ── импорт/экспорт (json/csv/txt) ─────────────────────────────
+#
+# Плоские форматы (csv/txt) описывают ровно один список, поэтому требуют
+# list_id; json умеет и полный снимок дерева, и снимок одного списка.
+MAX_IMPORT_ROWS = 5000
+JSON_FORMAT = "na-subnets"
+JSON_VERSION = 1
+_DEFAULT_KEYS = {c["key"] for c in store.DEFAULT_COLUMNS}
+_OP_KEYS = [o["key"] for o in store.OPERATORS]
+_CSV_ALIASES = {"version": "ipver", "версия ip": "ipver", "подсеть": "subnet",
+                "дата": "date", "название asn": "asnname"}
+_MEDIA = {"json": "application/json; charset=utf-8",
+          "csv": "text/csv; charset=utf-8",
+          "txt": "text/plain; charset=utf-8"}
+
+
+def _pick_list(provider_id: str, list_id: str) -> tuple[dict, dict]:
+    data = store.get_store()
+    for p in data["providers"]:
+        for l in p.get("lists", []):
+            if l.get("id") == list_id and (not provider_id or p.get("id") == provider_id):
+                return p, l
+    raise HTTPException(404, "Список не найден")
+
+
+def _flat_header(lst: dict) -> list[tuple[str, str]]:
+    """Колонки плоского CSV: (заголовок, ключ). operators разворачивается."""
+    out: list[tuple[str, str]] = []
+    for col in lst.get("columns", []):
+        key = col.get("key") or ""
+        if key == "operators":
+            out += [(k, f"op:{k}") for k in _OP_KEYS]
+        elif key in _DEFAULT_KEYS:
+            out.append((key, key))
+        else:
+            out.append((col.get("title") or key, key))
+    return out
+
+
+def _list_to_csv(lst: dict) -> str:
+    header = _flat_header(lst)
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow([h for h, _ in header])
+    for row in lst.get("rows", []):
+        values, ops = row.get("values") or {}, row.get("operators") or {}
+        line = []
+        for _, key in header:
+            if key.startswith("op:"):
+                line.append("1" if ops.get(key[3:], False) else "0")
+            else:
+                line.append(str(values.get(key) or ""))
+        w.writerow(line)
+    return buf.getvalue()
+
+
+def _list_to_txt(lst: dict) -> str:
+    out = [f"# {lst.get('name') or 'Список'}"]
+    for row in lst.get("rows", []):
+        subnet = (row.get("values") or {}).get("subnet") or ""
+        if subnet:
+            out.append(subnet)
+    return "\n".join(out) + "\n"
+
+
+@router.get("/export")
+async def export_subnets(provider_id: str = "", list_id: str = "", format: str = "json"):
+    fmt = (format or "json").strip().lower()
+    if fmt not in _MEDIA:
+        raise HTTPException(400, "Формат должен быть json, csv или txt")
+    if fmt in ("csv", "txt") and not list_id:
+        raise HTTPException(400, "Для формата csv/txt укажите список (list_id)")
+
+    if list_id:
+        provider, lst = _pick_list(provider_id, list_id)
+    else:
+        provider, lst = None, None
+
+    if fmt == "json":
+        if lst is not None and provider is not None:
+            payload = {"_format": JSON_FORMAT, "_version": JSON_VERSION,
+                       "providers": [{"id": provider["id"], "name": provider["name"],
+                                      "lists": [lst]}]}
+        else:
+            data = store.get_store()
+            providers = data["providers"]
+            if provider_id:
+                providers = [p for p in providers if p.get("id") == provider_id]
+                if not providers:
+                    raise HTTPException(404, "Провайдер не найден")
+            payload = {"_format": JSON_FORMAT, "_version": JSON_VERSION,
+                       "providers": providers}
+        body = json.dumps(payload, ensure_ascii=False, indent=1)
+    elif fmt == "csv":
+        body = _list_to_csv(lst or {})
+    else:
+        body = _list_to_txt(lst or {})
+
+    name = f"subnets_{time.strftime('%Y%m%d-%H%M%S')}.{fmt}"
+    return Response(body.encode("utf-8"), media_type=_MEDIA[fmt],
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+def _detect_format(filename: str, text: str) -> str:
+    ext = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
+    if ext in ("json", "csv", "txt"):
+        return ext
+    head = text.lstrip()[:1]
+    if head in ("{", "["):
+        return "json"
+    first = next((l for l in text.splitlines() if l.strip()), "")
+    return "csv" if ("," in first or ";" in first) else "txt"
+
+
+def _parse_txt(text: str) -> list[dict]:
+    items = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or s.startswith("//"):
+            continue
+        for sep in ("#", "—", " - ", "\t", ";", ","):
+            if sep in s:
+                s = s.split(sep, 1)[0].strip()
+        if s:
+            items.append({"subnet": s})
+    return items
+
+
+_TRUE = {"1", "true", "yes", "y", "да", "+", "on", "истина"}
+
+
+def _parse_csv(text: str) -> list[dict]:
+    sample = next((l for l in text.splitlines() if l.strip()), "")
+    delim = ";" if sample.count(";") > sample.count(",") else ","
+    rows = list(csv.reader(io.StringIO(text), delimiter=delim))
+    rows = [r for r in rows if any((c or "").strip() for c in r)]
+    if not rows:
+        return []
+    head = [(c or "").strip() for c in rows[0]]
+    lowered = [h.lower() for h in head]
+    has_header = any(_CSV_ALIASES.get(h, h) == "subnet" for h in lowered)
+    if not has_header:
+        return [{"subnet": (r[0] or "").strip()} for r in rows if (r[0] or "").strip()]
+
+    items = []
+    for r in rows[1:]:
+        cells = [(c or "").strip() for c in r]
+        item: dict = {"subnet": "", "values": {}, "extra": {}, "operators": {}}
+        for i, title in enumerate(head):
+            val = cells[i] if i < len(cells) else ""
+            key = _CSV_ALIASES.get(lowered[i], lowered[i])
+            if key == "subnet":
+                item["subnet"] = val
+            elif key in _OP_KEYS:
+                item["operators"][key] = val.strip().lower() in _TRUE
+            elif key in _DEFAULT_KEYS:
+                item["values"][key] = val
+            elif title:
+                item["extra"][title] = val
+        if item["subnet"]:
+            items.append(item)
+    return items
+
+
+def _snapshot_providers(payload) -> list:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Некорректный JSON: ожидался объект снимка")
+    providers = payload.get("providers")
+    if isinstance(providers, list):
+        return providers
+    if isinstance(payload.get("lists"), list):  # снимок одного провайдера
+        return [payload]
+    if isinstance(payload.get("rows"), list):  # снимок одного списка
+        return [{"name": "Импортированные", "lists": [payload]}]
+    raise HTTPException(400, "Некорректный JSON: нет providers/lists/rows")
+
+
+def _snapshot_items(providers: list) -> list[dict]:
+    """Все строки снимка плоским списком (импорт в конкретный список)."""
+    items: list[dict] = []
+    for p in providers:
+        if not isinstance(p, dict):
+            continue
+        for l in p.get("lists") or []:
+            if isinstance(l, dict):
+                items += store.rows_to_items(l.get("rows"))
+    return items
+
+
+@router.post("/import")
+async def import_subnets(file: UploadFile = File(...), provider_id: str = Form(""),
+                         list_id: str = Form(""), mode: str = Form("merge"),
+                         format: str = Form("")):
+    mode = (mode or "merge").strip().lower()
+    if mode not in ("merge", "replace"):
+        raise HTTPException(400, "Режим должен быть merge или replace")
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(400, "Файл пуст")
+    try:
+        text = blob.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "Файл должен быть в кодировке UTF-8")
+
+    fmt = (format or "").strip().lower() or _detect_format(file.filename or "", text)
+    if fmt not in ("json", "csv", "txt"):
+        raise HTTPException(400, "Поддерживаются только json, csv и txt")
+
+    if fmt == "json":
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            raise HTTPException(400, "Некорректный JSON-файл")
+        providers = _snapshot_providers(payload)
+        rows_total = sum(len(l.get("rows") or [])
+                         for p in providers if isinstance(p, dict)
+                         for l in (p.get("lists") or []) if isinstance(l, dict))
+        if rows_total > MAX_IMPORT_ROWS:
+            raise HTTPException(400, f"За раз не больше {MAX_IMPORT_ROWS} строк "
+                                     f"(в файле {rows_total})")
+        if not list_id:
+            res = store.import_tree(providers, replace=(mode == "replace"))
+            return {"ok": True, **res}
+        items = _snapshot_items(providers)
+    else:
+        items = _parse_csv(text) if fmt == "csv" else _parse_txt(text)
+        if len(items) > MAX_IMPORT_ROWS:
+            raise HTTPException(400, f"За раз не больше {MAX_IMPORT_ROWS} строк "
+                                     f"(в файле {len(items)})")
+
+    if not items:
+        raise HTTPException(400, "В файле не найдено подсетей")
+
+    if list_id:
+        provider, lst = _pick_list(provider_id, list_id)
+        pid, lid = provider["id"], lst["id"]
+    else:
+        provider = (store.ensure_provider("Импортированные") if not provider_id
+                    else next((p for p in store.get_store()["providers"]
+                               if p.get("id") == provider_id), None))
+        if not provider:
+            raise HTTPException(404, "Провайдер не найден")
+        lst = store.ensure_list(provider["id"],
+                                f"Импорт {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        pid, lid = provider["id"], lst["id"]
+
+    try:
+        res = store.import_rows(pid, lid, items, replace=(mode == "replace"))
+    except KeyError:
+        raise HTTPException(404, "Список не найден")
+    return {"ok": True, **res}
