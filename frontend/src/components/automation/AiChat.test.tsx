@@ -408,6 +408,73 @@ describe("AiChat", () => {
     expect(fmtElapsed(510)).toBe("8м 30с");
   });
 
+  // Авто-режим: steps=0 на сервере, UI не должен рисовать «шаг 1 из 0» —
+  // это пугает и выглядит багом, хотя бюджет бесконечный.
+  it("renders 'шаг N' without 'из 0' when steps are auto (0)", async () => {
+    let push!: (line: string) => void;
+    let finish!: () => void;
+    const body = new ReadableStream({
+      start(c) {
+        const enc = new TextEncoder();
+        push = (line: string) => c.enqueue(enc.encode(line + "\n"));
+        finish = () => c.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch" as any).mockImplementation((url: any) => {
+      const u = String(url);
+      if (u.includes("/api/ai/config"))
+        return Promise.resolve(new Response(JSON.stringify({ enabled: true, has_key: true }), { status: 200 }));
+      if (u.includes("/api/ai/tools"))
+        return Promise.resolve(new Response(JSON.stringify({ builtin: 1, writes: false, web: false, web_provider: "duckduckgo" }), { status: 200 }));
+      if (u.includes("/api/ai/chat/history"))
+        return Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200 }));
+      if (u.includes("/api/ai/chat/state"))
+        return Promise.resolve(new Response(JSON.stringify({ active: false, events: 0 }), { status: 200 }));
+      return Promise.resolve(new Response(body, { status: 200 }));
+    });
+
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    fireEvent.change(input, { target: { value: "сделай что-нибудь" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(runner.getRunState().busy).toBe(true));
+
+    push(JSON.stringify({ type: "status", phase: "tools", step: 3, steps: 0, tokens: 500, auto: true, tool: "panel_get" }));
+    push(JSON.stringify({ type: "tool_call", id: "1", name: "panel_get" }));
+    push(JSON.stringify({ type: "tool_result", id: "1", name: "panel_get", ok: true }));
+    // Пока статус ещё в DOM (busy) — «шаг 3» есть, а «из 0» — нет.
+    await waitFor(() => expect(screen.getByText(/шаг 3/)).toBeInTheDocument());
+    expect(screen.queryByText(/шаг 3 из 0/)).not.toBeInTheDocument();
+
+    push(JSON.stringify({ type: "text", delta: "Готово." }));
+    push(JSON.stringify({ type: "done" }));
+    finish();
+    await waitFor(() => expect(screen.queryByTestId("ai-status")).not.toBeInTheDocument());
+  });
+
+  // busy привязан к сессии: ответ в чате A не должен запирать композер чата B.
+  it("does not show loading spinner for a session that is not running", async () => {
+    installFetch([
+      { type: "status", phase: "tools", step: 1, steps: 4, tokens: 100 },
+      { type: "tool_call", id: "1", name: "panel_get" },
+      { type: "tool_result", id: "1", name: "panel_get", ok: true },
+      { type: "text", delta: "Ответ A." },
+      { type: "done" },
+    ]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "задача в чате A");
+
+    // Создаём второй разговор: пока идёт ответ в A, спиннер должен быть
+    // только у сессии A, а не у новой B.
+    await waitFor(() => expect(runner.getRunState().busy).toBe(true));
+    fireEvent.click(screen.getByText("Новый разговор"));
+    const rows = screen.getAllByTestId("ai-session-row");
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    // В B композер активен (не disabled) — туда можно писать, пока A отвечает.
+    expect(input).not.toBeDisabled();
+  });
+
   // ── прогресс переживает уход со страницы ────────────────────
   it("keeps the answer running when the user leaves the page", async () => {
     // Стрим, который мы отпускаем по частям: имитируем долгий ответ.

@@ -164,8 +164,11 @@ export interface SendArgs {
 }
 
 export async function send(args: SendArgs): Promise<void> {
-  if (state.busy) return;
   const sessionId = getActive(getSessions()).id;
+  // Отправка в ЭТУ сессию невозможна, пока в ней идёт ответ. Ответ в другой
+  // сессии — не блокер: задачи на сервере независимы по session_id, и у каждой
+  // сессии может идти своя работа (см. переключение чатов в AiChat).
+  if (state.busy && state.sessionId === sessionId) return;
 
   const asked: Msg = {
     role: "user", text: args.prompt,

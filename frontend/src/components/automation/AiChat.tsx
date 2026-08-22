@@ -176,7 +176,11 @@ export function AiChat() {
    *  локально, в отличие от длинного ответа агента. */
   const [compacting, setCompacting] = useState(false);
   // Композер запираем и на сжатие: оно тоже ходит к модели.
-  const busy = run.busy || compacting;
+  // ⚠️ busy — только когда ответ идёт В ЭТОЙ сессии. Ответ в другой сессии
+  // (переключились посмотреть соседний чат) не должен запирать композер и
+  // рисовать спиннер здесь — он принадлежит той сессии, там он и виден.
+  const activeId = getActive(store).id;
+  const busy = (run.busy && run.sessionId === activeId) || compacting;
   // Список разговоров. На узком экране закрыт по умолчанию: панель в 224px
   // съела бы больше половины ширины телефона (там она ложится ПОВЕРХ чата —
   // правило `.ni-ai-sessions` в index.css).
@@ -364,12 +368,17 @@ export function AiChat() {
                 <div key={s2.id} className="group relative">
                   <button onClick={() => { commit(setActive(store, s2.id)); void runner.resume(uid, s2.id); }}
                     title={s2.title || "Новый разговор"} data-testid="ai-session-row"
-                    className="w-full text-left pl-2 pr-7 py-1.5 rounded-lg text-xs truncate
+                    className="w-full flex items-center gap-2 pl-2 pr-7 py-1.5 rounded-lg text-xs truncate
                                disabled:opacity-40"
                     style={active
                       ? { background: "var(--accent-dim)", color: "var(--t-hi)" }
                       : { color: "var(--t-mid)" }}>
-                    {s2.title || "Новый разговор"}
+                    <span className="shrink-0">
+                      {run.busy && run.sessionId === s2.id
+                        ? <Loader2 size={12} className="animate-spin text-[var(--accent-hi)]" />
+                        : <span className="w-3" />}
+                    </span>
+                    <span className="truncate min-w-0">{s2.title || "Новый разговор"}</span>
                   </button>
                   <button title="Удалить разговор" disabled={busy}
                     onClick={() => dropSession(s2.id)}
@@ -478,7 +487,7 @@ export function AiChat() {
             {status && (
               <>
                 <span>·</span>
-                <span>шаг {status.step} из {status.steps}</span>
+                <span>шаг {status.step}{status.steps > 0 ? ` из ${status.steps}` : ""}</span>
               </>
             )}
             {status && status.tokens > 0 && (
@@ -567,9 +576,11 @@ export function AiChat() {
               if (files.length) { e.preventDefault(); void addFiles(files); }
             }}
             onKeyDown={e => { if (e.key === "Enter") send(); }} />
-        {run.busy ? (
+        {run.busy && run.sessionId === activeId ? (
           // Отмена теперь ТОЛЬКО отсюда: уход со страницы запрос не обрывает,
           // значит должен быть явный способ его прекратить.
+          // Кнопка — ТОЛЬКО в той сессии, где идёт ответ (переключились на
+          // соседний чат — чужой стоп здесь не рисуем).
           <button onClick={() => runner.stop()} title="Остановить ответ"
             className="p-2.5 rounded-lg bg-[var(--bg3)] hover:bg-[var(--err-dim)] text-[var(--err)]">
             <Square size={16} />
