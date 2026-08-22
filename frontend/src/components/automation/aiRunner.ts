@@ -196,10 +196,13 @@ export async function send(args: SendArgs): Promise<void> {
  *  ⚠️ Ради этого всё и делалось: перезагрузка убивает наш поток, но не работу.
  *  События приходят С НАЧАЛА — клиент не знает, сколько успел применить до F5,
  *  поэтому последняя реплика собирается заново, а не дописывается. */
-export async function resume(uid: string | null): Promise<void> {
-  if (state.busy) return;
+export async function resume(uid: string | null, targetSessionId?: string): Promise<void> {
+  // Переключение на ДРУГУЮ сессию разрешено даже во время ответа в текущей:
+  // задачи на сервере независимы по session_id, и здешний поток обязан уметь
+  // переезжать. Повторный resume той же сессии во время её же ответа — no-op.
   ensureSessions(uid);
-  const sessionId = getActive(getSessions()).id;
+  const sessionId = targetSessionId || getActive(getSessions()).id;
+  if (state.busy && state.sessionId === sessionId) return;
   try {
     const res = await fetch(
       `/api/ai/chat/state?session_id=${encodeURIComponent(sessionId)}`);

@@ -1064,7 +1064,25 @@ async def run_agent(
     # тому, сколько их оказалось внутри архива, — см. `cap_attachments`.
     # Распаковываем РОВНО ОДИН раз и дальше передаём готовый список: разбор
     # стомегабайтного tar.gz дважды за ход — это лишние секунды на ровном месте.
-    ready = cap_attachments(expand_archives(attachments or []))
+    #
+    # ⚠️ Стомегабайтный архив распаковывается СЕКУНДАМИ-МИНУТАМИ. Если делать
+    # это до первого события, клиент видит «Отправка…» без прогресса и думает,
+    # что всё зависло. Поэтому сначала шлём честный статус, потом распаковываем
+    # в `to_thread` (не блокируя event loop), потом сообщаем результат.
+    if any(a.get("data_b64") and ai_archives.is_archive(a.get("name") or "",
+                                                        a.get("mime") or "")
+           for a in (attachments or [])):
+        auto_flag = int(getattr(config, "max_steps", 12) or 0) <= 0
+        yield {"type": "status", "phase": "tools", "step": 1, "steps": 0,
+               "tokens": 0, "auto": auto_flag, "tool": "распаковка архива…"}
+        ready = await asyncio.to_thread(
+            lambda: cap_attachments(expand_archives(attachments or [])))
+        if len(ready) > 1:
+            yield {"type": "status", "phase": "tools", "step": 1, "steps": 0,
+                   "tokens": 0, "auto": auto_flag,
+                   "tool": f"распаковано файлов: {len(ready) - 1}"}
+    else:
+        ready = cap_attachments(expand_archives(attachments or []))
     for a in ready:
         if (a.get("mime") or "") in _IMAGE_MIME:
             continue

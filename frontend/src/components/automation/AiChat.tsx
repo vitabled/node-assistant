@@ -362,7 +362,7 @@ export function AiChat() {
                 // Строка целиком кликабельна, крестик — поверх неё; иначе на
                 // узкой панели в 224px попасть в маленькую цель тяжело.
                 <div key={s2.id} className="group relative">
-                  <button disabled={busy} onClick={() => commit(setActive(store, s2.id))}
+                  <button onClick={() => { commit(setActive(store, s2.id)); void runner.resume(uid, s2.id); }}
                     title={s2.title || "Новый разговор"} data-testid="ai-session-row"
                     className="w-full text-left pl-2 pr-7 py-1.5 rounded-lg text-xs truncate
                                disabled:opacity-40"
