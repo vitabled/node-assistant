@@ -153,6 +153,48 @@ TOOLS = ai_tools.TOOLS
 _READONLY_TOOL = ai_tools.Tool('?', '', {}, None, write=False)  # type: ignore[arg-type]
 
 
+def _write_resource(tc: dict) -> Optional[str]:
+    """За какой файл стора дерётся эта запись: первый сегмент после `/api/`.
+
+    `/api/subnets` и `/api/subnets/42` — один и тот же стор («subnets»), их
+    нельзя выполнять одновременно. `/api/hostings` — другой файл, с ним можно
+    параллельно. Если пути нет или он непонятного вида (например
+    `save_attachment_image`), возвращаем None — такую запись мы НЕ параллелим
+    ни с чем.
+    """
+    path = (tc.get("args") or {}).get("path")
+    if not isinstance(path, str):
+        return None
+    parts = [p for p in path.split("?")[0].split("/") if p]
+    if len(parts) < 2 or parts[0] != "api":
+        return None
+    return parts[1]
+
+
+def _write_waves(writes: list[dict]) -> list[list[list[dict]]]:
+    """Разложить записи на волны: [волна][цепочка][вызов].
+
+    Внутри волны цепочки идут ПАРАЛЛЕЛЬНО (разные ресурсы — разные файлы),
+    внутри цепочки — строго ПО ОЧЕРЕДИ (один ресурс = гонка за файлом).
+    Запись с неизвестным ресурсом становится барьером: своя волна из одной
+    цепочки, ничего рядом с ней не выполняется.
+    """
+    waves: list[list[list[dict]]] = []
+    cur: dict[str, list[dict]] = {}
+    for tc in writes:
+        res = _write_resource(tc)
+        if res is None:
+            if cur:
+                waves.append(list(cur.values()))
+                cur = {}
+            waves.append([[tc]])
+            continue
+        cur.setdefault(res, []).append(tc)
+    if cur:
+        waves.append(list(cur.values()))
+    return waves
+
+
 def build_context(config: AiConfig, account_id: str,
                   user_id: str = "") -> ai_tools.ToolContext:
     """Контекст одного ответа: кто спрашивает, что разрешено, чем ходить в веб.
@@ -1245,9 +1287,13 @@ async def run_agent(
         # выполнение складывало их задержки: пять чтений по секунде — это пять
         # секунд на ровном месте.
         #
-        # Изменяющие вызовы из общей пачки ИСКЛЮЧЕНЫ и идут по очереди после
-        # чтений: у них важен порядок, а два одновременных POST в один и тот же
-        # стор — это гонка за файлом (сторы читают-меняют-пишут целиком).
+        # Изменяющие вызовы из общей пачки ИСКЛЮЧЕНЫ из общего gather и идут
+        # после чтений — но не строго по одному. Гонка возможна только за ОДИН
+        # файл стора, поэтому записи в РАЗНЫЕ ресурсы (`/api/subnets` против
+        # `/api/hostings`) идут параллельно, а записи в один ресурс — по
+        # очереди, в исходном порядке. Запись без внятного пути параллелить не с
+        # чем — она выполняется в одиночку. Это и ускоряет импорт архивов, где
+        # модель за шаг пишет сразу в несколько разделов.
         for tc in turn["tool_calls"]:
             yield {"type": "tool_call", "id": tc["id"], "name": tc["name"],
                    "args": tc["args"]}
@@ -1266,9 +1312,20 @@ async def run_agent(
             for tc, res in zip(reads, outs):
                 done[tc["id"]] = ((False, redact(str(res)))
                                   if isinstance(res, BaseException) else res)
-        for tc in writes:
-            done[tc["id"]] = await _run_tool(tc["name"], tc["args"], account_id,
-                                             config, ctx)
+
+        async def _run_chain(chain: list[dict]) -> None:
+            for tc in chain:
+                try:
+                    done[tc["id"]] = await _run_tool(
+                        tc["name"], tc["args"], account_id, config, ctx)
+                except Exception as exc:  # noqa: BLE001 — как и у чтений
+                    done[tc["id"]] = (False, redact(str(exc)))
+
+        for wave in _write_waves(writes):
+            if len(wave) == 1:
+                await _run_chain(wave[0])
+            else:
+                await asyncio.gather(*[_run_chain(c) for c in wave])
 
         results = []
         any_ok = False
