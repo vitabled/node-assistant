@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { AiChat, fmtTokens, fmtElapsed } from "./AiChat";
+import { AiChat, fmtTokens, fmtElapsed, readFile } from "./AiChat";
 import * as runner from "./aiRunner";
 import { load, getActive } from "./aiSessions";
 
@@ -614,5 +614,72 @@ describe("AiChat", () => {
     const input = await screen.findByPlaceholderText(/Сообщение агенту/);
     await ask(input, "вопрос");
     await waitFor(() => expect(log().getByText(/всё равно ответил/)).toBeInTheDocument());
+  });
+});
+
+/** Архив во вложении.
+ *
+ *  ⚠️ Регрессия на настоящий баг: `.tar.gz` читался как текст (`f.text()` на
+ *  gzip даёт мусор или пустоту), вложение отбрасывалось с «пустой или
+ *  нечитаемый файл», и агент уходил искать данные в вебе — до него не доезжало
+ *  НИЧЕГО. Архив обязан уехать на сервер сырым: распаковывает его бэкенд
+ *  (`ai_archives.unpack`). */
+describe("readFile: архивы", () => {
+  /** Минимальный File-подобный объект: `readFile` берёт только эти поля, а
+   *  настоящий File с arrayBuffer() в jsdom собирать незачем. */
+  const fakeFile = (name: string, type: string, bytes: number[], size?: number) =>
+    ({
+      name, type, size: size ?? bytes.length,
+      arrayBuffer: async () => new Uint8Array(bytes).buffer,
+      text: async () => "\u0000\u0000garbage",
+    } as unknown as File);
+
+  // Заголовок gzip: как раз тот случай, где f.text() возвращает мусор.
+  const GZIP = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+  it("шлёт .tar.gz как base64, а не отбрасывает", async () => {
+    const r = await readFile(fakeFile("as-ip-blocks-ipv4-only.tar.gz", "application/gzip", GZIP));
+    expect(typeof r).not.toBe("string");
+    const a = r as Exclude<typeof r, string>;
+    expect(a.name).toBe("as-ip-blocks-ipv4-only.tar.gz");
+    expect(a.data_b64).toBe(btoa(String.fromCharCode(...GZIP)));
+    expect(a.text).toBe("");
+  });
+
+  it.each([
+    ["dump.tgz", ""],
+    ["dump.zip", ""],
+    ["dump.tar", ""],
+    // Windows шлёт пустой mime, но и с zip-овским mime без расширения тоже
+    // должно работать — узнаём и по имени, и по типу.
+    ["blob", "application/zip"],
+    ["blob2", "application/x-zip-compressed"],
+  ])("узнаёт архив %s (mime %s)", async (name, mime) => {
+    const r = await readFile(fakeFile(name, mime, GZIP));
+    expect(typeof r).not.toBe("string");
+    expect((r as any).data_b64.length).toBeGreaterThan(0);
+  });
+
+  it("отказывает архиву больше 50 МБ понятной строкой", async () => {
+    const r = await readFile(fakeFile("huge.tar.gz", "application/gzip", GZIP,
+                                      60 * 1024 * 1024));
+    expect(r).toBe("huge.tar.gz: архив больше 50 МБ");
+  });
+
+  it("не ломает текстовые файлы: лог по-прежнему едет текстом", async () => {
+    const f = {
+      name: "nodes.log", type: "text/plain", size: 10,
+      text: async () => "node-1 online\nnode-2 offline\n",
+    } as unknown as File;
+    const r = await readFile(f);
+    expect(typeof r).not.toBe("string");
+    expect((r as any).text).toContain("node-1 online");
+    expect((r as any).data_b64).toBe("");
+  });
+
+  it("пустой текстовый файл по-прежнему отбивается сообщением", async () => {
+    const f = { name: "empty.txt", type: "text/plain", size: 0,
+                text: async () => "   " } as unknown as File;
+    expect(await readFile(f)).toBe("empty.txt: пустой или нечитаемый файл");
   });
 });

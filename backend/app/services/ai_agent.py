@@ -41,8 +41,8 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import settings
 from app.models.settings import AiConfig, AppSettings
-from app.services import (ai_attachments, ai_context, ai_tools, ai_web, net_guard,
-                          prompt_presets_store, storage)
+from app.services import (ai_archives, ai_attachments, ai_context, ai_tools,
+                          ai_web, net_guard, prompt_presets_store, storage)
 
 # Cap on a single tool result serialized back into the message history (prevents
 # unbounded growth / token blow-up across the tool-calling loop).
@@ -806,6 +806,73 @@ def extract_data_uris(text: str, start_index: int = 0) -> tuple[str, list[dict]]
     return _DATA_URI_RE.sub(_sub, text or ""), images
 
 
+def expand_archives(items: list[dict]) -> list[dict]:
+    """Заменить вложения-архивы их содержимым.
+
+    ⚠️ Вызывается ПОСЛЕ среза по `MAX_ATTACHMENTS`: потолок в пять штук — про
+    файлы, которые приложил человек, а не про то, сколько их оказалось внутри
+    одного tar.gz. Иначе архив из сотни подсетей превращался бы в пять.
+
+    Архив становится ОДНОЙ справочной записью (список файлов + чем их читать), а
+    сами файлы едут следом с `inline=False`: в промпт их вклеивать нельзя — это
+    мегабайты, — но инструментам они доступны как обычные вложения.
+
+    Идемпотентна: у развёрнутых записей нет `data_b64`, поэтому повторный вызов
+    ничего не делает (`run_agent` и `build_user_content` зовут её независимо).
+    """
+    out: list[dict] = []
+    for a in items:
+        name = a.get("name") or "файл"
+        if not (a.get("data_b64") and ai_archives.is_archive(name, a.get("mime") or "")):
+            out.append(a)
+            continue
+        try:
+            res = ai_archives.unpack(name, a.get("data_b64") or "")
+        except Exception:            # повреждённый архив не должен ронять ход
+            log.warning("не удалось распаковать вложение %s", name, exc_info=True)
+            res = None
+        if not res:
+            # Не архив или битый: оставляем вложение, чтобы модель хотя бы
+            # видела имя файла и могла сказать о нём человеку. Пустой текст
+            # отбрасывается дальше по пути, поэтому подставляем пояснение.
+            out.append({**a, "text": a.get("text") or (
+                f"[Файл «{name}» приложен, но распаковать его не удалось: "
+                f"это не архив поддерживаемого формата или он повреждён. "
+                f"Содержимое недоступно — скажи об этом пользователю.]")})
+            continue
+        out.append({"name": name, "mime": "text/plain",
+                    "text": ai_archives.describe(name, res), "images": []})
+        for f in res["files"]:
+            out.append({**f, "inline": False, "from_archive": True})
+    return out
+
+
+def cap_attachments(items: list[dict]) -> list[dict]:
+    """Потолок `MAX_ATTACHMENTS` — на файлы ОТ ПОЛЬЗОВАТЕЛЯ.
+
+    ⚠️ Считать в нём распакованное из архива нельзя: в одном tar.gz бывают сотни
+    файлов, и обычный срез оставил бы от него пять штук наугад. Записи с
+    `from_archive` едут «прицепом» к своему архиву — вместе с ним попадают и
+    вместе с ним отбрасываются.
+
+    Список уже развёрнутых вложений проходит через функцию без потерь, поэтому
+    `run_agent` может отдать его в `build_user_content` как есть.
+    """
+    out: list[dict] = []
+    kept = 0
+    keep_tail = False
+    for a in items:
+        if a.get("from_archive"):
+            if keep_tail:
+                out.append(a)
+            continue
+        keep_tail = kept < MAX_ATTACHMENTS
+        if keep_tail:
+            kept += 1
+            out.append(a)
+    return out
+
+
 def build_user_content(prompt: str, attachments: Optional[list[dict]], provider: str):
     """Первое сообщение пользователя с учётом вложений.
 
@@ -816,12 +883,17 @@ def build_user_content(prompt: str, attachments: Optional[list[dict]], provider:
 
     Без картинок возвращается обычная строка: старый путь не меняется.
     """
-    items = (attachments or [])[:MAX_ATTACHMENTS]
+    items = cap_attachments(expand_archives(attachments or []))
     texts = [a for a in items if not (a.get("mime") or "") in _IMAGE_MIME]
     images = [a for a in items if (a.get("mime") or "") in _IMAGE_MIME]
 
     text = prompt
     for a in texts:
+        # Файлы ИЗ архива в промпт не вклеиваем: их могут быть сотни, и вместе
+        # они весят мегабайты. Модель уже прочитала справку с их списком и
+        # берёт нужное через read_attachment.
+        if a.get("inline") is False:
+            continue
         body, _imgs = extract_data_uris((a.get("text") or "")[:MAX_TEXT_CHARS])
         if not body:
             continue
@@ -987,7 +1059,13 @@ async def run_agent(
     ctx = build_context(config, account_id)
     # Текстовые вложения кладём в контекст инструментов: в промпт уходит только
     # начало большого файла, остальное модель дочитывает read_attachment.
-    for a in (attachments or []):
+    #
+    # ⚠️ Потолок MAX_ATTACHMENTS применяется к файлам ОТ ПОЛЬЗОВАТЕЛЯ, а не к
+    # тому, сколько их оказалось внутри архива, — см. `cap_attachments`.
+    # Распаковываем РОВНО ОДИН раз и дальше передаём готовый список: разбор
+    # стомегабайтного tar.gz дважды за ход — это лишние секунды на ровном месте.
+    ready = cap_attachments(expand_archives(attachments or []))
+    for a in ready:
         if (a.get("mime") or "") in _IMAGE_MIME:
             continue
         # Картинки клиент уже мог вынести в `images` (тогда в тексте маркеры);
@@ -1011,7 +1089,7 @@ async def run_agent(
     elif session_id:
         ctx.attachments = ai_attachments.recall(user_id, session_id)
     system = await build_system(account_id, config, ctx)
-    content = build_user_content(prompt, attachments, config.provider)
+    content = build_user_content(prompt, ready, config.provider)
     prior = build_history(history)
     if config.provider == "anthropic":
         messages: list[dict] = [*prior, {"role": "user", "content": content}]

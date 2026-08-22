@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Loader2, Send, Square, Bot, PanelLeft, Wrench, AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Globe, Trash2, MessageSquarePlus } from "lucide-react";
+import { Loader2, Send, Square, Bot, PanelLeft, Wrench, AlertCircle, Paperclip, X, FileText, FileArchive, Image as ImageIcon, Globe, Trash2, MessageSquarePlus } from "lucide-react";
 import { usePermissions } from "../../auth/usePermissions";
 import {
   listSessions, getActive, setActive, newSession, clearActive,
@@ -60,16 +60,54 @@ const DATA_URI_RE = /data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)/gi;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
+// Архивы едут на сервер СЫРЫМИ (base64), и разворачивает их бэкенд
+// (`ai_archives.unpack`). Раньше их пытались прочитать как текст: `f.text()` на
+// gzip даёт мусор или пустоту, файл отбрасывался с «пустой или нечитаемый», и
+// агент уходил искать данные в вебе — до архива не доезжало НИЧЕГО.
+const ARCHIVE_MIME = [
+  "application/gzip", "application/x-gzip", "application/x-tar",
+  "application/x-tgz", "application/tar+gzip", "application/x-gtar",
+  "application/zip", "application/x-zip-compressed", "application/x-compressed",
+  "application/x-bzip2", "application/x-xz",
+];
+const ARCHIVE_EXT = [".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz",
+                     ".zip", ".tar"];
+// Потолок больше картиночного: архив на то и архив, что в нём данные, а не
+// одна иллюстрация. Дальше упирается лимит тела запроса на бэкенде.
+const MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
+
+const isArchive = (f: File) =>
+  ARCHIVE_MIME.includes((f.type || "").toLowerCase()) ||
+  ARCHIVE_EXT.some(e => f.name.toLowerCase().endsWith(e));
+
+/** Байты → base64. Порциями: `String.fromCharCode(...buf)` на мегабайтах
+ *  переполняет стек аргументов и падает прямо в момент прикрепления файла. */
+function toBase64(buf: Uint8Array): string {
+  let bin = "";
+  const STEP = 0x8000;
+  for (let i = 0; i < buf.length; i += STEP)
+    bin += String.fromCharCode(...buf.subarray(i, i + STEP));
+  return btoa(bin);
+}
+
 /** Читаем файл ЗДЕСЬ, а не грузим в хранилище медиа: вложение чата эфемерно,
- *  складывать его в общую библиотеку значило бы засорять её. */
-async function readFile(f: File): Promise<Attachment | string> {
+ *  складывать его в общую библиотеку значило бы засорять её.
+ *
+ *  Экспортируется ради теста: путь «архив не отбрасывается» проверяется прямо
+ *  на функции — собрать в jsdom настоящий gzip-`File` и провести его через DOM
+ *  дороже, чем он того стоит. */
+export async function readFile(f: File): Promise<Attachment | string> {
   const mime = f.type || "";
   if (IMAGE_MIME.includes(mime)) {
     if (f.size > MAX_IMAGE_BYTES) return `${f.name}: картинка больше 4 МБ`;
-    const buf = new Uint8Array(await f.arrayBuffer());
-    let bin = "";
-    for (const b of buf) bin += String.fromCharCode(b);
-    return { name: f.name, mime, text: "", data_b64: btoa(bin) };
+    return { name: f.name, mime, text: "", data_b64: toBase64(new Uint8Array(await f.arrayBuffer())) };
+  }
+  if (isArchive(f)) {
+    if (f.size > MAX_ARCHIVE_BYTES) return `${f.name}: архив больше 50 МБ`;
+    return {
+      name: f.name, mime: mime || "application/octet-stream", text: "",
+      data_b64: toBase64(new Uint8Array(await f.arrayBuffer())),
+    };
   }
   // Всё остальное считаем текстом: логи, конфиги, куски кода. Бинарь тоже
   // прочитается, но пользы от него модели не будет — предупреждаем размером.
@@ -483,7 +521,11 @@ export function AiChat() {
               <span key={i} title={a.name}
                 className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg max-w-[220px]"
                 style={{ background: "var(--bg3)", border: "1px solid var(--line-soft)", color: "var(--t-mid)" }}>
-                {a.data_b64 ? <ImageIcon size={11} /> : <FileText size={11} />}
+                {/* ⚠️ Иконку выбираем по mime, а не по наличию `data_b64`:
+                    после появления архивов base64 есть и у них, и картиночная
+                    иконка врала бы про содержимое. */}
+                {IMAGE_MIME.includes(a.mime) ? <ImageIcon size={11} />
+                  : a.data_b64 ? <FileArchive size={11} /> : <FileText size={11} />}
                 <span className="truncate">{a.name}</span>
                 <button onClick={() => setAttach(list => list.filter((_, j) => j !== i))}
                   className="text-[var(--t-low)] hover:text-[var(--err)]"><X size={11} /></button>

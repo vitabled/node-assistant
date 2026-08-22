@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os.path
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
@@ -183,9 +184,24 @@ def _find_attachment(ctx: ToolContext, name: str) -> Optional[dict]:
     if exact:
         return exact
     low = name.lower()
+    # ⚠️ Файлы из распакованного архива зовутся полным путём внутри него
+    # («as-ip-blocks/data/ru.csv»), а модель просит просто «ru.csv». Совпадение
+    # по ПОСЛЕДНЕМУ компоненту пути точнее подстроки и разбирает случай, когда
+    # одно и то же имя лежит в нескольких каталогах: тогда подстрочный поиск
+    # даёт несколько кандидатов и раньше сдавался.
+    base = os.path.basename(low.replace("\\", "/"))
+    if base:
+        by_base = [a for a in items
+                   if os.path.basename((a.get("name") or "").lower()) == base]
+        if by_base:
+            return by_base[0]
     part = [a for a in items if low in (a.get("name") or "").lower()]
     if len(part) == 1:
         return part[0]
+    # Обратное направление: модель написала имя ПОДРОБНЕЕ, чем оно записано.
+    tail = [a for a in items if (a.get("name") or "").lower() in low]
+    if len(tail) == 1:
+        return tail[0]
     return items[0] if len(items) == 1 else None
 
 
