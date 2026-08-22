@@ -50,7 +50,7 @@ const SCAN_RESULT = {
 };
 
 /** `latency` — конфиг интеграции; `job` — очередь ответов GET /latency-scan/{id}. */
-function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[] }) {
+function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown }) {
   const calls: { url: string; init?: RequestInit }[] = [];
   const jobQueue = [...(opts?.job ?? [])];
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -63,6 +63,14 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
     if (url === "/api/subnets/latency-scan") return json({ ok: true, req_id: "req-1", status: "pending" });
     if (url.startsWith("/api/subnets/latency-scan/") && !url.endsWith("/cancel"))
       return json(jobQueue.length > 1 ? jobQueue.shift() : jobQueue[0] ?? { status: "pending" });
+    if (url.startsWith("/api/subnets/export"))
+      return new Response("subnet\n203.0.113.0/24\n", {
+        status: 200,
+        // только ASCII: заголовки в undici — ByteString, кириллица бросит TypeError
+        headers: { "Content-Disposition": 'attachment; filename="subnets-l1.csv"' },
+      });
+    if (url === "/api/subnets/import")
+      return json(opts?.imp ?? { ok: true, imported: 2, skipped: 1, errors: [] });
     return new Response("{}", { status: 200 });
   });
   vi.stubGlobal("fetch", fn);
@@ -206,5 +214,93 @@ describe("Subnets", () => {
       expect(JSON.parse(String(c!.init!.body))).toEqual({ req_id: "req-1" });
     });
     expect(screen.getByText("Отменено")).toBeInTheDocument();
+  });
+
+  // ── Импорт/экспорт ───────────────────────────────────────────
+
+  /** jsdom не умеет blob-URL и навигацию по <a> — подменяем обе точки.
+   *  click объявлен на HTMLElement.prototype, у HTMLAnchorElement своего нет. */
+  function stubDownload() {
+    const clicked: { href: string; download: string }[] = [];
+    vi.stubGlobal("URL", Object.assign(Object.create(URL), {
+      createObjectURL: vi.fn(() => "blob:mock"),
+      revokeObjectURL: vi.fn(),
+    }));
+    const spy = vi.spyOn(HTMLElement.prototype, "click")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this instanceof HTMLAnchorElement)
+          clicked.push({ href: this.href, download: this.download });
+      });
+    return { clicked, spy };
+  }
+
+  async function openIo() {
+    await openList();
+    fireEvent.click(await screen.findByTestId("subnets-io-toggle"));
+    return screen.findByTestId("subnets-io-panel");
+  }
+
+  it("кнопка «Импорт/экспорт» открывает панель с выбором формата", async () => {
+    installFetch();
+    await openIo();
+    const fmt = screen.getByTestId("export-format") as HTMLSelectElement;
+    expect(fmt.options.length).toBe(3);
+    expect([...fmt.options].map(o => o.value)).toEqual(["json", "csv", "txt"]);
+    expect(screen.getByTestId("export-run")).toBeInTheDocument();
+    expect(screen.getByTestId("import-run")).toBeDisabled(); // файл не выбран
+  });
+
+  it("экспорт дёргает /export с provider_id/list_id/format и скачивает файл", async () => {
+    const calls = installFetch();
+    const { clicked, spy } = stubDownload();
+    await openIo();
+    fireEvent.change(screen.getByTestId("export-format"), { target: { value: "csv" } });
+    fireEvent.click(screen.getByTestId("export-run"));
+    await waitFor(() => {
+      const c = calls.find(x => x.url.startsWith("/api/subnets/export"));
+      expect(c).toBeTruthy();
+      const q = new URLSearchParams(c!.url.split("?")[1]);
+      expect(q.get("provider_id")).toBe("p1");
+      expect(q.get("list_id")).toBe("l1");
+      expect(q.get("format")).toBe("csv");
+    });
+    // имя берётся из Content-Disposition
+    await waitFor(() => expect(clicked[0]?.download).toBe("subnets-l1.csv"));
+    spy.mockRestore();
+  });
+
+  it("импорт шлёт multipart POST с файлом, provider_id/list_id и mode", async () => {
+    const calls = installFetch();
+    await openIo();
+    const file = new File(['{"rows":[]}'], "subnets.json", { type: "application/json" });
+    fireEvent.change(screen.getByTestId("import-file"), { target: { files: [file] } });
+    fireEvent.change(screen.getByTestId("import-mode"), { target: { value: "replace" } });
+    fireEvent.click(screen.getByTestId("import-run"));
+    await waitFor(() => {
+      const post = calls.find(c => c.url === "/api/subnets/import");
+      expect(post).toBeTruthy();
+      expect(post!.init!.method).toBe("POST");
+      const fd = post!.init!.body as FormData;
+      expect(fd).toBeInstanceOf(FormData);
+      expect((fd.get("file") as File).name).toBe("subnets.json");
+      expect(fd.get("provider_id")).toBe("p1");
+      expect(fd.get("list_id")).toBe("l1");
+      expect(fd.get("mode")).toBe("replace");
+    });
+  });
+
+  it("результат импорта виден; «в новый список» убирает list_id", async () => {
+    const calls = installFetch({ imp: { ok: true, imported: 5, skipped: 2, errors: [] } });
+    await openIo();
+    fireEvent.click(screen.getByTestId("import-new-list"));
+    const file = new File(["203.0.113.0/24"], "subnets.txt", { type: "text/plain" });
+    fireEvent.change(screen.getByTestId("import-file"), { target: { files: [file] } });
+    fireEvent.click(screen.getByTestId("import-run"));
+
+    const res = await screen.findByTestId("import-result");
+    expect(res).toHaveTextContent("Импортировано 5");
+    expect(res).toHaveTextContent("пропущено 2");
+    const fd = calls.find(c => c.url === "/api/subnets/import")!.init!.body as FormData;
+    expect(fd.get("list_id")).toBeNull();
   });
 });

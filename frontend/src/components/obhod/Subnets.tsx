@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Activity, Check, FolderKanban, GripVertical, Loader2, Pencil, Plus, Table2, Trash2, X,
+  Activity, Check, Download, FolderKanban, GripVertical, Loader2, Pencil, Plus, Table2,
+  Trash2, Upload, X,
 } from "lucide-react";
 import { Page, PageHeader } from "../../theme/ui";
 import { toast } from "../infra/Toast";
@@ -16,6 +17,10 @@ import { toast } from "../infra/Toast";
  * Latency Lab: кнопка «Скан Latency» (видна, если интеграция включена в
  * настройках) открывает панель — выбор строк/оператора, асинхронный job с
  * поллингом статуса и выводом результата.
+ *
+ * Импорт/экспорт: кнопка «Импорт/экспорт» открывает панель — выгрузка списка
+ * в JSON/CSV/TXT (скачивание через fetch→blob, чтобы уехал bearer-токен) и
+ * загрузка файла (merge/replace, опционально в новый список) с показом итога.
  */
 
 interface Col { key: string; title: string }
@@ -31,6 +36,10 @@ interface ScanItem {
 }
 interface ScanResult extends ScanItem { rows?: ScanItem[] }
 type ScanStatus = "pending" | "done" | "cancelled" | "error";
+
+type ExportFormat = "json" | "csv" | "txt";
+type ImportMode = "merge" | "replace";
+interface ImportResult { imported: number; skipped: number; errors: string[] }
 
 const api = (path: string, init?: RequestInit) =>
   fetch(`/api/subnets${path}`, init ? { headers: { "Content-Type": "application/json" }, ...init } : init);
@@ -54,6 +63,16 @@ export function Subnets() {
   const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
+
+  // ── Импорт/экспорт ──
+  const [ioOpen, setIoOpen] = useState(false);
+  const [expFormat, setExpFormat] = useState<ExportFormat>("json");
+  const [impMode, setImpMode] = useState<ImportMode>("merge");
+  const [impNewList, setImpNewList] = useState(false);
+  const [impFile, setImpFile] = useState<File | null>(null);
+  const [impBusy, setImpBusy] = useState(false);
+  const [impResult, setImpResult] = useState<ImportResult | null>(null);
+  const filePick = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(() => {
     api("").then(r => r.json()).then(d => {
@@ -132,6 +151,65 @@ export function Subnets() {
         load();
       }
     } finally { setBusy(false); }
+  };
+
+  // ── Импорт/экспорт ────────────────────────────────────────────
+  // Скачиваем через fetch→blob, а не простой <a href>: запросы к /api
+  // подписываются bearer-токеном в интерцепторе (auth/apiClient.ts),
+  // навигация браузера этот заголовок не несёт и вернула бы 401.
+  const doExport = async () => {
+    if (!sel) return;
+    const qs = new URLSearchParams({ provider_id: sel.pid, list_id: sel.lid, format: expFormat });
+    try {
+      const res = await api(`/export?${qs.toString()}`);
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+        return;
+      }
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename="?([^";]+)"?/);
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = m ? m[1] : `subnets-${current?.name ?? sel.lid}.${expFormat}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
+
+  // list_id не передаём, когда просят новый список — backend создаст его сам.
+  const doImport = async () => {
+    if (!sel || !impFile) return;
+    setImpBusy(true);
+    setImpResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", impFile);
+      fd.append("provider_id", sel.pid);
+      if (!impNewList) fd.append("list_id", sel.lid);
+      fd.append("mode", impMode);
+      const res = await fetch("/api/subnets/import", { method: "POST", body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.ok === false) {
+        toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+        return;
+      }
+      setImpResult({
+        imported: Number(d.imported ?? 0),
+        skipped: Number(d.skipped ?? 0),
+        errors: Array.isArray(d.errors) ? d.errors.map(String) : [],
+      });
+      if (d.errors?.length) toast(`Пропущено: ${d.errors.join("; ")}`, "error");
+      else toast(`Импортировано ${d.imported ?? 0}`, "success");
+      setImpFile(null);
+      if (filePick.current) filePick.current.value = "";
+      load();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally { setImpBusy(false); }
   };
 
   // ── Latency-скан ──────────────────────────────────────────────
@@ -283,22 +361,87 @@ export function Subnets() {
               <Table2 size={13} style={{ color: "var(--t-low)" }} />
               <span className="micro">{current.name}</span>
               <span className="text-[10px]" style={{ color: "var(--t-faint)" }}>{current.rows.length} строк</span>
+              <button className={`btn btn-sm ${ioOpen ? "btn-primary" : "btn-soft"}`}
+                style={{ marginLeft: "auto", fontSize: 11 }}
+                data-testid="subnets-io-toggle"
+                onClick={() => { setIoOpen(o => !o); setImpResult(null); }}>
+                <Download size={11} /> Импорт/экспорт
+              </button>
               {latEnabled && (
                 <button className={`btn btn-sm ${scanOpen ? "btn-primary" : "btn-soft"}`}
-                  style={{ marginLeft: "auto", fontSize: 11 }}
+                  style={{ fontSize: 11 }}
                   data-testid="latency-scan-toggle"
                   onClick={() => (scanOpen ? closeScan() : void openScan())}>
                   <Activity size={11} /> Скан Latency
                 </button>
               )}
               <button className={`btn btn-sm ${editMode ? "btn-primary" : "btn-soft"}`}
-                style={{ marginLeft: latEnabled ? undefined : "auto", fontSize: 11 }}
+                style={{ fontSize: 11 }}
                 data-testid="table-edit-toggle"
                 onClick={() => setEditMode(m => !m)}>
                 {editMode ? <Check size={11} /> : <Pencil size={11} />}
                 {editMode ? "Готово" : "Редактировать таблицу"}
               </button>
             </div>
+
+            {ioOpen && (
+              <div className="flex flex-col gap-2 px-3 py-2.5" data-testid="subnets-io-panel"
+                style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)" }}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="micro" style={{ margin: 0 }}>Экспорт</span>
+                  <select className="selectbox text-xs" style={{ width: 120 }}
+                    data-testid="export-format" aria-label="Формат экспорта" value={expFormat}
+                    onChange={e => setExpFormat(e.target.value as ExportFormat)}>
+                    <option value="json">JSON</option>
+                    <option value="csv">CSV</option>
+                    <option value="txt">TXT</option>
+                  </select>
+                  <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
+                    data-testid="export-run" onClick={() => void doExport()}>
+                    <Download size={11} /> Скачать
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="micro" style={{ margin: 0 }}>Импорт</span>
+                  <input ref={filePick} type="file" className="input text-xs" style={{ width: 220 }}
+                    data-testid="import-file" aria-label="Файл импорта"
+                    accept=".json,.csv,.txt"
+                    onChange={e => { setImpFile(e.target.files?.[0] ?? null); setImpResult(null); }} />
+                  <select className="selectbox text-xs" style={{ width: 150 }}
+                    data-testid="import-mode" aria-label="Режим импорта" value={impMode}
+                    onChange={e => setImpMode(e.target.value as ImportMode)}>
+                    <option value="merge">Дополнить</option>
+                    <option value="replace">Заменить</option>
+                  </select>
+                  <label className="flex items-center gap-1 text-xs" style={{ color: "var(--t-mid)", cursor: "pointer" }}>
+                    <input type="checkbox" data-testid="import-new-list"
+                      checked={impNewList} onChange={e => setImpNewList(e.target.checked)} />
+                    в новый список
+                  </label>
+                  <button className="btn btn-primary btn-sm" style={{ fontSize: 11 }}
+                    data-testid="import-run" onClick={() => void doImport()}
+                    disabled={impBusy || !impFile}>
+                    {impBusy ? <Loader2 size={11} className="spin" /> : <Upload size={11} />} Импортировать
+                  </button>
+                </div>
+
+                {impResult && (
+                  <div className="flex items-center gap-2 flex-wrap text-xs" data-testid="import-result"
+                    style={{ color: "var(--t-mid)" }}>
+                    <span className="chip ok" style={{ fontSize: 10 }}>
+                      Импортировано {impResult.imported}, пропущено {impResult.skipped}
+                    </span>
+                    {!!impResult.errors.length && (
+                      <span className="trunc" style={{ color: "var(--t-faint)", maxWidth: 420 }}
+                        title={impResult.errors.join("; ")}>
+                        {impResult.errors.join("; ")}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {editMode && (
               <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)" }}>
