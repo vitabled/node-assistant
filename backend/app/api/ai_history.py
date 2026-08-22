@@ -93,7 +93,12 @@ async def save_history(body: HistoryBody) -> dict:
     aid = _account()
     msgs = [m.model_dump() for m in body.messages]
     if body.append:
-        return ai_chat_store.append_messages(aid, body.session_id, msgs)
+        # ⚠️ `dedup=True`: ту же реплику сервер УЖЕ мог сохранить сам, по
+        # завершении ответа (`ai_chat_persist`) — ради сценария с закрытой
+        # вкладкой. Клиент об этом не знает и пишет как писал; повтор на стыке
+        # снимается здесь, а не переговорами между ними.
+        return ai_chat_store.append_messages(aid, body.session_id, msgs,
+                                             dedup=True)
     return ai_chat_store.replace_session(aid, body.session_id, msgs)
 
 

@@ -225,7 +225,14 @@ def append_message(account_id: str, session_id: str, role: str,
 
 
 def append_messages(account_id: str, session_id: str,
-                    messages: list[dict]) -> dict:
+                    messages: list[dict], dedup: bool = False) -> dict:
+    """Дописать реплики. `dedup=True` — снять ПОВТОР на стыке (см. `_dedup`).
+
+    По умолчанию `False`: дозапись — примитив, и молча терять реплику он не
+    вправе (на этом стоит `test_concurrent_appends_lose_nothing`). Снятие
+    повтора нужно ровно там, где одну и ту же реплику пишут двое: браузер и
+    сервер.
+    """
     sid = _clean_id(session_id)
     incoming = [m for m in (_norm_msg(x) for x in messages) if m]
     with _LOCK:
@@ -235,11 +242,79 @@ def append_messages(account_id: str, session_id: str,
         if cur is None:
             cur = {"session_id": sid, "messages": [], "updated_at": 0}
             sessions.append(cur)
-        cur["messages"] = (cur["messages"] + incoming)[-MAX_MESSAGES:]
+        merged = _dedup(cur["messages"], incoming) if dedup \
+            else cur["messages"] + incoming
+        cur["messages"] = merged[-MAX_MESSAGES:]
         cur["updated_at"] = int(time.time())
         sessions = _trim_sessions(sessions, keep=sid)
         _write(account_id, {"sessions": sessions})
         return dict(cur, messages=list(cur["messages"]))
+
+
+def _same_or_prefix(a: str, b: str) -> bool:
+    """Одна реплика — продолжение другой (или ровно та же).
+
+    Так выглядит ДВОЙНАЯ запись одного и того же ответа: сервер сохраняет его
+    целиком по завершении, а браузер — то, что успел прочитать из потока. Если
+    поток оборвался, у клиента ровно НАЧАЛО серверного текста, а не другой
+    текст.
+    """
+    return bool(a) and bool(b) and (a.startswith(b) or b.startswith(a))
+
+
+def _dedup(stored: list[dict], incoming: list[dict]) -> list[dict]:
+    """Склеить хвост сохранённого с началом дописываемого.
+
+    ⚠️ Ключевое место всей схемы. Одну и ту же реплику пишут ДВОЕ:
+
+      * сервер — сам, по завершении ответа (`services/ai_chat_persist`), чтобы
+        результат сохранился даже при закрытой вкладке;
+      * браузер — из `aiRunner.ts`, как и раньше.
+
+    Кто успеет первым, не определено, и договариваться им негде: общего
+    идентификатора реплики между ними нет. Зато есть свойство, которого
+    достаточно: подряд идущие реплики ОДНОЙ роли, где текст одной является
+    началом другой, — это всегда одна реплика, записанная дважды. Настоящий
+    повтор («Продолжи» два раза) разделён ответом ассистента, то есть последней
+    в списке оказывается реплика ДРУГОЙ роли.
+
+    Смотрим ТОЛЬКО на стык (последняя сохранённая против первой входящей), а не
+    на всю переписку: иначе законный повтор вопроса в длинном разговоре молча
+    пропадал бы. Внутрь пачки тоже не лезем — там «q1» и «q10» соседи по
+    смыслу, а не дубли.
+
+    Огрызок ПОДНИМАЕМ до полного текста, а не добавляем вторым сообщением:
+    браузер мог сохранить оборванный ответ раньше, чем сервер дописал его.
+    """
+    if not stored or not incoming:
+        return stored + incoming
+    last, first = stored[-1], incoming[0]
+    if last["role"] != first["role"] or not _same_or_prefix(last["content"],
+                                                            first["content"]):
+        return stored + incoming
+    if len(first["content"]) > len(last["content"]):
+        # ts оставляем прежний: это та же реплика, просто дочитанная.
+        merged = {**last, **first, "ts": last["ts"]}
+    else:
+        merged = last
+    return stored[:-1] + [merged] + incoming[1:]
+
+
+def append_once(account_id: str, session_id: str, role: str,
+                content: str, **extra: Any) -> bool:
+    """Дописать реплику ИДЕМПОТЕНТНО. `True` — переписка изменилась.
+
+    Этим сервер сохраняет свой результат, не боясь, что то же самое запишет
+    браузер. Правило склейки — в `_dedup`.
+    """
+    if not (content or "").strip():
+        # Пустая реплика ничего не сообщает, а место под лимитом занимает.
+        return False
+    before = get_session(account_id, session_id)["messages"]
+    after = append_messages(account_id, session_id,
+                            [{"role": role, "content": content, **extra}],
+                            dedup=True)["messages"]
+    return after != before
 
 
 def replace_session(account_id: str, session_id: str,

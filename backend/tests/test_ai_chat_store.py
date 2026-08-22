@@ -148,6 +148,24 @@ def test_replace_session_overwrites_and_obeys_the_cap():
     assert all(m["content"] != "старое" for m in msgs)
 
 
+def test_append_keeps_duplicates_by_default_and_folds_them_on_demand():
+    # Дозапись — примитив: молча терять реплику она не вправе. Снятие повтора
+    # включается явно и нужно ровно там, где одну реплику пишут двое (сервер по
+    # завершении ответа и браузер) — см. `ai_chat_persist`.
+    aid = _acc()
+    ai_chat_store.append_message(aid, "default", "assistant", "ответ")
+    ai_chat_store.append_message(aid, "default", "assistant", "ответ")
+    assert len(ai_chat_store.get_session(aid, "default")["messages"]) == 2
+
+    aid2 = _acc()
+    ai_chat_store.append_messages(aid2, "default",
+                                  [{"role": "assistant", "content": "ответ"}])
+    ai_chat_store.append_messages(aid2, "default",
+                                  [{"role": "assistant", "content": "ответ"}],
+                                  dedup=True)
+    assert len(ai_chat_store.get_session(aid2, "default")["messages"]) == 1
+
+
 def test_accounts_are_isolated():
     a, b = _acc(), _acc()
     ai_chat_store.append_message(a, "default", "user", "секрет аккаунта A")

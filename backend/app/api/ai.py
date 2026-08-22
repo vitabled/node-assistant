@@ -19,8 +19,8 @@ from pydantic import BaseModel, Field, field_validator
 import json
 
 from app.models.settings import PROVIDER_BASE_URLS
-from app.services import (accounts, ai_agent, ai_runs, ai_tools, ai_web,
-                          net_guard, storage)
+from app.services import (accounts, ai_agent, ai_chat_persist, ai_runs,
+                          ai_tools, ai_web, net_guard, storage)
 
 router = APIRouter(prefix="/api/ai")
 
@@ -244,6 +244,11 @@ async def chat(body: ChatBody) -> StreamingResponse:
     ⚠️ Цикл агента крутится ФОНОВОЙ задачей (`ai_runs`), а этот поток лишь читает
     её буфер: обрыв соединения — перезагрузка страницы, потеря сети — работу не
     прекращает. Раньше запрос жил внутри HTTP-ответа и умирал вместе с ним.
+
+    ⚠️ И вопрос, и ответ сервер сохраняет САМ (`ai_chat_persist`), не полагаясь
+    на браузер: иначе сценарий «отправил → закрыл вкладку → вернулся через
+    сутки» терял результат уже проделанной работы. Клиент пишет то же самое,
+    дубли снимает `ai_chat_store.append_once`.
     """
     account_id = accounts.current_account.get() or ""
     user_id = ai_agent.users_current_id() or account_id
@@ -263,7 +268,20 @@ async def chat(body: ChatBody) -> StreamingResponse:
             session_id=session_id,
         )
 
-    run = ai_runs.start(user_id, session_id, make_events)
+    # Вопрос — СРАЗУ, до запуска: именно долгий ответ и есть тот момент, когда
+    # вкладку закрывают.
+    ai_chat_persist.save_question(
+        account_id, session_id, body.prompt,
+        files=[a.name for a in body.attachments if a.name],
+    )
+
+    # `account_id` берём из ЗАМЫКАНИЯ, а не из ContextVar внутри колбэка:
+    # `finish()` может позвать и `POST /chat/stop` — то есть другой запрос,
+    # чей контекст к этому разговору отношения не имеет.
+    def _persist(events: list[dict]) -> None:
+        ai_chat_persist.save_answer(account_id, session_id, events)
+
+    run = ai_runs.start(user_id, session_id, make_events, _persist)
 
     async def gen():
         async for event in ai_runs.follow(run):
