@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   load, save, sessionsKey, listSessions, getActive, setActive, newSession,
   clearActive, replaceMessages, appendMessages, renameActive, removeSession,
+  fetchAll, pushAppend, pushReplace, pushDelete, syncFromServer,
   type Msg, type SessionsState,
 } from "./aiSessions";
 
@@ -126,5 +127,150 @@ describe("aiSessions", () => {
   it("swallows a quota error instead of throwing", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("QuotaExceededError"); });
     expect(() => save("u1", load("u1"))).not.toThrow();
+  });
+});
+
+// ── сервер как источник истины ─────────────────────────────────
+
+/** Мок сети: `sessions` = что «лежит на сервере», `fail` = сервер недоступен. */
+function mockNet(sessions: any[] | null, fail = false) {
+  const fn = vi.fn(async (url: string, opts?: any) => {
+    if (fail) throw new Error("network down");
+    if (opts?.method === "POST" || opts?.method === "DELETE")
+      return { ok: true, json: async () => ({ ok: true }) } as any;
+    return { ok: true, json: async () => ({ sessions: sessions ?? [] }) } as any;
+  });
+  (globalThis as any).fetch = fn;
+  return fn;
+}
+
+const wire = (fn: any) =>
+  fn.mock.calls.filter(([, o]: any[]) => o?.method === "POST").map(([, o]: any[]) => JSON.parse(o.body));
+
+describe("aiSessions ↔ сервер", () => {
+  it("reads conversations back from the server", async () => {
+    mockNet([{
+      session_id: "s1", updated_at: 1_700_000_000,
+      messages: [{ role: "user", content: "привет" },
+                 { role: "assistant", content: "здравствуйте",
+                   tools: [{ name: "panel_get", ok: true }] }],
+    }]);
+    const got = await fetchAll();
+    expect(got).toHaveLength(1);
+    expect(got![0].id).toBe("s1");
+    expect(got![0].messages).toEqual([
+      { role: "user", text: "привет" },
+      { role: "assistant", text: "здравствуйте", tools: [{ id: undefined, name: "panel_get", ok: true }] },
+    ]);
+    // Заголовок восстанавливается из первой реплики пользователя — сервер его
+    // не хранит, и без этого список разговоров стал бы безымянным.
+    expect(got![0].title).toBe("привет");
+  });
+
+  // ⚠️ Главное различие политики: «сервер молчит» и «на сервере пусто» — РАЗНЫЕ
+  // вещи. На первом кэш надо сохранить, на втором — подчиниться серверу.
+  it("returns null when the server is unreachable, not an empty list", async () => {
+    mockNet(null, true);
+    expect(await fetchAll()).toBeNull();
+    mockNet([]);
+    expect(await fetchAll()).toEqual([]);
+  });
+
+  it("keeps the local cache when the server does not answer", async () => {
+    mockNet(null, true);
+    const local = appendMessages(load(null), [user("офлайн-вопрос")]);
+    const synced = await syncFromServer(local);
+    expect(synced).toBe(local); // ровно тот же объект — ничего не подменили
+  });
+
+  it("migrates a browser-only conversation to the server", async () => {
+    // Первый заход после обновления: локально есть, на сервере пусто.
+    const fn = mockNet([]);
+    const local = appendMessages(load(null), [user("из localStorage")]);
+    const synced = await syncFromServer(local);
+
+    expect(synced).toBe(local); // показываем локальное — оно и есть актуальное
+    const sent = wire(fn);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].append).toBeFalsy();     // перезапись, а не дописывание
+    expect(sent[0].messages[0].content).toBe("из localStorage");
+  });
+
+  it("does not migrate an empty local store", async () => {
+    const fn = mockNet([]);
+    await syncFromServer(load(null));
+    expect(wire(fn)).toHaveLength(0);
+  });
+
+  it("lets the server win when both sides have data", async () => {
+    // Иначе чистка браузера была бы неотличима от «разговора не было», и
+    // серверная копия затиралась бы пустотой.
+    mockNet([{ session_id: "s-serv", updated_at: 2,
+               messages: [{ role: "user", content: "с сервера" }] }]);
+    const local = appendMessages(load(null), [user("из кэша")]);
+    const synced = await syncFromServer(local);
+
+    expect(synced.sessions).toHaveLength(1);
+    expect(synced.activeId).toBe("s-serv");
+    expect(getActive(synced).messages).toEqual([user("с сервера")]);
+  });
+
+  it("keeps the open conversation selected if the server still has it", async () => {
+    const local = appendMessages(load(null), [user("мой")]);
+    mockNet([
+      { session_id: "другой", updated_at: 9, messages: [{ role: "user", content: "чужой" }] },
+      { session_id: local.activeId, updated_at: 5, messages: [{ role: "user", content: "мой" }] },
+    ]);
+    const synced = await syncFromServer(local);
+    expect(synced.activeId).toBe(local.activeId);
+  });
+
+  it("obeys the session cap on what the server returns", async () => {
+    mockNet(Array.from({ length: 30 }, (_, i) => ({
+      session_id: `s${i}`, updated_at: i,
+      messages: [{ role: "user", content: `q${i}` }],
+    })));
+    const synced = await syncFromServer(load(null));
+    expect(synced.sessions).toHaveLength(20);
+  });
+
+  it("sends append, replace and delete in the shape the API expects", async () => {
+    const fn = mockNet([]);
+    await pushAppend("s1", [user("вопрос")]);
+    await pushReplace("s1", [bot("выжимка")]);
+    await pushDelete("s1");
+
+    const [appended, replaced] = wire(fn);
+    expect(appended).toEqual({ session_id: "s1", append: true,
+                               messages: [{ role: "user", content: "вопрос" }] });
+    expect(replaced).toEqual({ session_id: "s1",
+                               messages: [{ role: "assistant", content: "выжимка" }] });
+    const del = fn.mock.calls.find(([, o]: any[]) => o?.method === "DELETE");
+    expect(String(del![0])).toContain("session_id=s1");
+  });
+
+  it("never throws when the network is down", async () => {
+    mockNet(null, true);
+    // Переписка ценна, но её недоступность не должна запирать чат.
+    await expect(pushAppend("s1", [user("q")])).resolves.toBeUndefined();
+    await expect(pushReplace("s1", [user("q")])).resolves.toBeUndefined();
+    await expect(pushDelete("s1")).resolves.toBeUndefined();
+  });
+
+  it("skips the request entirely for an empty append", async () => {
+    const fn = mockNet([]);
+    await pushAppend("s1", []);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("drops malformed messages coming from the server", async () => {
+    mockNet([{ session_id: "s1", updated_at: 1, messages: [
+      { role: "user", content: "ок" },
+      { role: "system", content: "не наша роль" },
+      { role: "user" },
+      null,
+    ] }]);
+    const got = await fetchAll();
+    expect(got![0].messages).toEqual([user("ок")]);
   });
 });

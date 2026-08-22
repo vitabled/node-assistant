@@ -1,6 +1,6 @@
 // Исполнитель запроса к ассистенту — ВНЕ компонента.
 //
-// Две потери прогресса лечатся здесь и на сервере:
+// Три потери прогресса лечатся здесь и на сервере:
 //
 // 1. Уход в другой раздел панели размонтировал чат и обрывал поток. Поэтому
 //    запрос ведёт модуль-синглтон: компонент при возврате просто ПОДКЛЮЧАЕТСЯ
@@ -9,6 +9,10 @@
 //    цикл агента крутится ФОНОВОЙ задачей на сервере (`services/ai_runs.py`), а
 //    здешний поток — только читатель её буфера. После F5 `resume()` спрашивает
 //    сервер, не осталось ли незаконченного ответа, и дочитывает его.
+// 3. Браузер чистил localStorage (Safari ITP, приватное окно, «очистить данные»)
+//    — и переписка пропадала целиком, хотя ни одна из машин не падала. Поэтому
+//    каждая реплика уезжает на сервер (`services/ai_chat_store.py`), а
+//    localStorage остаётся кэшем. См. `aiSessions.ts`.
 //
 // ⚠️ Хранилище сессий тоже живёт здесь, а не в компоненте: иначе задача решалась
 // бы наполовину — работа продолжается, а писать ответ некуда, `setState`
@@ -18,8 +22,8 @@
 // просит остановиться СЕРВЕР — обрыв нашего чтения работу не прекращает.
 
 import {
-  appendMessages, getActive, load, replaceMessages, save,
-  type Msg, type SessionsState,
+  appendMessages, getActive, load, pushAppend, pushReplace, replaceMessages,
+  save, syncFromServer, type Msg, type SessionsState,
 } from "./aiSessions";
 
 export interface AgentStatus {
@@ -49,6 +53,9 @@ const listeners = new Set<() => void>();
 
 let sessions: SessionsState | null = null;
 let sessionsUid: string | null = null;
+/** Для кого уже сходили на сервер. Синхронизация одноразовая на личность:
+ *  повторный заход в раздел не должен затирать начатый разговор. */
+let syncedUid: string | null | undefined = undefined;
 
 /** Версия — снимок для `useSyncExternalStore`. Число сравнивается по значению,
  *  поэтому не нужно собирать стабильный объект на каждый рендер. */
@@ -92,6 +99,29 @@ export function getSessions(): SessionsState {
   return sessions ?? load(null);
 }
 
+/** Подтянуть переписку с СЕРВЕРА и, если надо, перенести туда локальную.
+ *
+ *  ⚠️ Отдельно от `ensureSessions`, а не внутри неё: та обязана быть
+ *  синхронной — её зовут прямо из рендера, чтобы показать разговор мгновенно, до
+ *  всякой сети. Сеть догоняет здесь, с монтирования компонента.
+ *
+ *  Один раз на личность: повторный вызов (перемонтирование при переходах между
+ *  разделами) затирал бы уже начатый разговор ответом сервера. */
+export async function syncSessions(uid: string | null): Promise<void> {
+  ensureSessions(uid);
+  if (syncedUid === uid) return;
+  syncedUid = uid;
+  // Пока идёт ответ, синхронизацию не трогаем: она заменила бы состоянием с
+  // сервера ту самую реплику, которая прямо сейчас дописывается.
+  if (state.busy) return;
+  const next = await syncFromServer(getSessions());
+  if (next !== sessions) {
+    sessions = next;
+    save(sessionsUid, next);
+    bump();
+  }
+}
+
 /** Изменить сессии и сохранить. Единственная точка записи — и из компонента,
  *  и из идущего ответа. */
 export function updateSessions(fn: (s: SessionsState) => SessionsState): void {
@@ -109,6 +139,7 @@ export function reset(): void {
   ac = null;
   sessions = null;
   sessionsUid = null;
+  syncedUid = undefined;
   state = IDLE;
   bump();
 }
@@ -136,13 +167,20 @@ export async function send(args: SendArgs): Promise<void> {
   if (state.busy) return;
   const sessionId = getActive(getSessions()).id;
 
+  const asked: Msg = {
+    role: "user", text: args.prompt,
+    files: args.attachments.length
+      ? args.attachments.map(a => (a as { name: string }).name) : undefined,
+  };
   updateSessions(s => appendMessages(s, [
-    { role: "user", text: args.prompt,
-      files: args.attachments.length
-        ? args.attachments.map(a => (a as { name: string }).name) : undefined },
+    asked,
     { role: "assistant", text: "", tools: [] },
   ]));
   emit({ busy: true, status: null, startedAt: Date.now(), sessionId });
+
+  // Вопрос сохраняем СРАЗУ, не дожидаясь ответа: именно долгий ответ и есть тот
+  // момент, когда вкладку закрывают, — и вопрос пропал бы вместе с ней.
+  void pushAppend(sessionId, [asked]);
 
   await consume("/api/ai/chat", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -150,7 +188,7 @@ export async function send(args: SendArgs): Promise<void> {
     // сервер узнаёт свой идущий ответ при переподключении.
     body: JSON.stringify({ prompt: args.prompt, attachments: args.attachments,
                            history: args.history, session_id: sessionId }),
-  });
+  }, sessionId);
 }
 
 /** Подключиться к ответу, который идёт на сервере.
@@ -181,13 +219,23 @@ export async function resume(uid: string | null): Promise<void> {
   emit({ busy: true, status: null, startedAt: Date.now(), sessionId });
 
   await consume(
-    `/api/ai/chat/resume?session_id=${encodeURIComponent(sessionId)}`, {});
+    `/api/ai/chat/resume?session_id=${encodeURIComponent(sessionId)}`, {},
+    // ⚠️ Переподключение собирает реплику ЗАНОВО (события приходят с начала),
+    // поэтому дописывать её нельзя — на сервере получилась бы вторая копия.
+    // Перезаписываем разговор целиком: это ещё и самолечение, если вкладки
+    // разошлись.
+    sessionId, "replace");
 }
 
 /** Читать ndjson-поток событий и раскладывать его по хранилищу и прогрессу.
  *  ОДИН код на отправку и на переподключение: разойдись они — восстановленный
- *  ответ отличался бы от живого. */
-async function consume(url: string, init: RequestInit): Promise<void> {
+ *  ответ отличался бы от живого.
+ *
+ *  `sessionId` нужен, чтобы сохранить готовый ответ на сервер: в `state` его
+ *  брать нельзя — к моменту записи он уже сброшен в IDLE. */
+async function consume(url: string, init: RequestInit,
+                       sessionId: string,
+                       persist: "append" | "replace" = "append"): Promise<void> {
   // Чистое обновление: последняя реплика заменяется НОВЫМ объектом (без мутации
   // на месте — безопасно под двойным вызовом React StrictMode).
   const patchLast = (fn: (m: Extract<Msg, { role: "assistant" }>) => void) =>
@@ -246,6 +294,20 @@ async function consume(url: string, init: RequestInit): Promise<void> {
     }
   } finally {
     if (ac === controller) ac = null;
+    // Готовый ответ — на сервер. Именно здесь, в `finally`, а не по событию
+    // `done`: ответ бывает и оборванным (ошибка сети, «Остановить»), и его
+    // огрызок всё равно надо сохранить — он уже показан человеку, и после
+    // перезагрузки переписка обязана выглядеть так же.
+    //
+    // ⚠️ Пустую реплику не пишем: она ничего не сообщает, а в истории
+    // следующего хода занимала бы место под лимитом.
+    const cur = getActive(getSessions()).messages;
+    const last = cur[cur.length - 1];
+    if (persist === "replace") {
+      void pushReplace(sessionId, cur);
+    } else if (last && last.role === "assistant" && last.text.trim()) {
+      void pushAppend(sessionId, [last]);
+    }
     emit({ ...IDLE });
   }
 }

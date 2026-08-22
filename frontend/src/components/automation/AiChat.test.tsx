@@ -31,17 +31,46 @@ function streamResponse(events: any[]) {
   } as any;
 }
 
+/** История с сервера. Начинается пустой: тест, которому нужна восстановленная
+ *  переписка, подменяет её через `serverHistory`. */
+let serverHistory: any[] = [];
+
+/** Что реально уехало на сервер: массив тел POST /api/ai/chat/history. Проверять
+ *  надо именно это — durable-история и есть «сообщение доехало до сервера», а не
+ *  «нарисовалось в DOM». */
+interface HistoryPost {
+  session_id: string;
+  append?: boolean;
+  messages: { role: string; content: string }[];
+}
+
+function historyPosts(fn: any): HistoryPost[] {
+  return fn.mock.calls
+    .filter(([u, o]: any[]) => String(u).startsWith("/api/ai/chat/history") && o?.method === "POST")
+    .map(([, o]: any[]) => JSON.parse(o.body));
+}
+
 /** `tools` = null → ручка возможностей отвечает 500 (проверка «не рисуем ничего»). */
 function installFetch(chatEvents: any[], tools: any = TOOLS) {
   const fn = vi.fn(async (url: string, opts?: any) => {
-    if (url === "/api/ai/config" && (!opts || opts.method !== "POST"))
+    const u = String(url);
+    if (u === "/api/ai/config" && (!opts || opts.method !== "POST"))
       return { ok: true, json: async () => CONFIG } as any;
-    if (url === "/api/ai/config") return { ok: true, json: async () => CONFIG } as any;
-    if (url === "/api/ai/tools")
+    if (u === "/api/ai/config") return { ok: true, json: async () => CONFIG } as any;
+    if (u === "/api/ai/tools")
       return tools ? { ok: true, json: async () => tools } as any : { ok: false } as any;
-    if (url === "/api/ai/chat") return streamResponse(chatEvents);
-    if (url === "/api/ai/compact") return { ok: true, json: async () => ({ summary: SUMMARY }) } as any;
-    throw new Error(`unmocked ${url}`);
+    // Durable-история: GET отдаёт то, что «лежит на сервере», POST/DELETE просто
+    // подтверждают — их тела проверяются через `historyPosts`.
+    if (u.startsWith("/api/ai/chat/history")) {
+      if (opts?.method === "POST" || opts?.method === "DELETE")
+        return { ok: true, json: async () => ({ ok: true }) } as any;
+      return { ok: true, json: async () => ({ sessions: serverHistory }) } as any;
+    }
+    if (u.startsWith("/api/ai/chat/state"))
+      return { ok: true, json: async () => ({ active: false, events: 0 }) } as any;
+    if (u === "/api/ai/chat") return streamResponse(chatEvents);
+    if (u === "/api/ai/compact") return { ok: true, json: async () => ({ summary: SUMMARY }) } as any;
+    throw new Error(`unmocked ${u}`);
   });
   (globalThis as any).fetch = fn;
   return fn;
@@ -83,6 +112,9 @@ const settled = () => waitFor(() => expect(screen.getByTitle(/Очистить/)
 // тест, если не убрать её руками.
 beforeEach(() => {
   localStorage.clear();
+  // Сервер по умолчанию пуст: каждый тест начинает с чистой историей, иначе
+  // синхронизация на монтировании затаскивала бы переписку прошлого теста.
+  serverHistory = [];
   // Исполнитель — синглтон и намеренно переживает размонтирование компонента
   // (в этом весь смысл: ответ не должен обрываться при уходе со страницы).
   // Значит его память надо сбрасывать вместе с хранилищем, иначе разговор
@@ -396,7 +428,10 @@ describe("AiChat", () => {
       if (u.includes("/api/ai/tools"))
         return Promise.resolve(new Response(JSON.stringify({ builtin: 1, writes: false, web: false, web_provider: "duckduckgo" }), { status: 200 }));
       // ⚠️ Отдельно от потока: `resume` на монтировании спрашивает, не остался
-      // ли незаконченный ответ, и общий `body` был бы им же и вычитан.
+      // ли незаконченный ответ, и общий `body` был бы им же и вычитан. То же и
+      // с durable-историей — её GET/POST обязаны иметь свои ответы.
+      if (u.includes("/api/ai/chat/history"))
+        return Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200 }));
       if (u.includes("/api/ai/chat/state"))
         return Promise.resolve(new Response(JSON.stringify({ active: false, events: 0 }),
                                             { status: 200 }));
@@ -436,6 +471,8 @@ describe("AiChat", () => {
         return Promise.resolve(new Response(JSON.stringify({ enabled: true, has_key: true }), { status: 200 }));
       if (u.includes("/api/ai/tools"))
         return Promise.resolve(new Response(JSON.stringify(TOOLS), { status: 200 }));
+      if (u.includes("/api/ai/chat/history"))
+        return Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200 }));
       if (u.includes("/api/ai/chat/state"))
         return Promise.resolve(new Response(JSON.stringify({ active: false }), { status: 200 }));
       if (u.includes("/api/ai/chat/stop"))
@@ -455,5 +492,127 @@ describe("AiChat", () => {
     // А явная остановка — отменяет.
     runner.stop();
     expect(runner.getRunState().busy).toBe(false);
+  });
+
+  // ── durable-история: переписка переживает чистку браузера ─────
+  //
+  // Ровно то, ради чего фича и делалась. Раньше разговор жил только в
+  // localStorage, и Safari/приватное окно/«очистить данные» уносили его молча.
+
+  it("restores the conversation from the server when localStorage is empty", async () => {
+    // Браузер вычистил хранилище: локально пусто, а на сервере переписка есть.
+    serverHistory = [{
+      session_id: "s-old", updated_at: 1_700_000_000,
+      messages: [
+        { role: "user", content: "сколько нод?", ts: 1 },
+        { role: "assistant", content: "12 нод.", ts: 2 },
+      ],
+    }];
+    installFetch([]);
+    render(<AiChat />);
+    await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await waitFor(() => expect(log().getByText(/12 нод\./)).toBeInTheDocument());
+    expect(log().getByText("сколько нод?")).toBeInTheDocument();
+    expect(getActive(runner.getSessions()).id).toBe("s-old");
+  });
+
+  it("saves the question and the answer to the server", async () => {
+    const fn = installFetch([{ type: "text", delta: "12 нод." }, { type: "done" }]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await ask(input, "сколько нод?");
+    await settled();
+
+    await waitFor(() => {
+      const bodies = historyPosts(fn).filter(b => b.append);
+      // Вопрос уходит СРАЗУ (вкладку закрывают именно во время долгого ответа),
+      // ответ — по завершении стрима.
+      expect(bodies.flatMap(b => b.messages.map((m: any) => m.content)))
+        .toEqual(["сколько нод?", "12 нод."]);
+      expect(bodies.every(b => b.session_id)).toBe(true);
+    });
+  });
+
+  it("keeps a browser-only conversation by migrating it to the server", async () => {
+    // Первый заход после обновления: локально переписка есть, на сервере пусто.
+    // Клиент обязан залить её туда, иначе она пропадёт при следующей чистке.
+    const fn = installFetch([{ type: "text", delta: "готово" }, { type: "done" }]);
+    const first = render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "старый вопрос");
+    await settled();
+    await waitFor(() => expect(stored()).toHaveLength(2));
+    first.unmount();
+
+    // Перемонтирование с чистой памятью исполнителя = новая загрузка страницы.
+    runner.reset();
+    const fn2 = installFetch([]);
+    render(<AiChat />);
+    await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await waitFor(() => {
+      const migrated = historyPosts(fn2).filter(b => !b.append);
+      expect(migrated.length).toBeGreaterThan(0);
+      expect(JSON.stringify(migrated)).toContain("старый вопрос");
+    });
+    expect(fn).toBeDefined();
+  });
+
+  it("propagates a clear to the server so it survives a reload", async () => {
+    // Не отправь мы очистку — синхронизация вернула бы стёртое с сервера, и
+    // кнопка «Очистить» переставала бы работать после перезагрузки.
+    const fn = installFetch([{ type: "text", delta: "готово" }, { type: "done" }]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+
+    await ask(input, "первый вопрос");
+    await settled();
+    fireEvent.click(screen.getByTitle(/Очистить/));
+
+    await waitFor(() => {
+      const wipes = historyPosts(fn).filter(b => !b.append && b.messages.length === 0);
+      expect(wipes.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("deletes a conversation on the server too", async () => {
+    const fn = installFetch([{ type: "text", delta: "готово" }, { type: "done" }]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "первый вопрос");
+    await settled();
+
+    const row = screen.getAllByTestId("ai-session-row")[0];
+    fireEvent.click(row.parentElement!.querySelector("button[title='Удалить разговор']")!);
+
+    await waitFor(() => {
+      const dels = fn.mock.calls.filter(([u, o]: any[]) =>
+        String(u).startsWith("/api/ai/chat/history") && o?.method === "DELETE");
+      expect(dels.length).toBe(1);
+    });
+  });
+
+  it("still works when the history endpoint is down", async () => {
+    // История ценна, но её недоступность не должна запирать чат: без этого
+    // отказ ручки выглядел бы как поломка ассистента целиком.
+    const fn = vi.fn(async (url: string, opts?: any) => {
+      const u = String(url);
+      if (u === "/api/ai/config") return { ok: true, json: async () => CONFIG } as any;
+      if (u === "/api/ai/tools") return { ok: true, json: async () => TOOLS } as any;
+      if (u.startsWith("/api/ai/chat/history")) throw new Error("network down");
+      if (u.startsWith("/api/ai/chat/state"))
+        return { ok: true, json: async () => ({ active: false }) } as any;
+      if (u === "/api/ai/chat")
+        return streamResponse([{ type: "text", delta: "всё равно ответил" }, { type: "done" }]);
+      throw new Error(`unmocked ${u}`);
+    });
+    (globalThis as any).fetch = fn;
+
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "вопрос");
+    await waitFor(() => expect(log().getByText(/всё равно ответил/)).toBeInTheDocument());
   });
 });

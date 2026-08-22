@@ -3,7 +3,8 @@ import { Loader2, Send, Square, Bot, PanelLeft, Wrench, AlertCircle, Paperclip, 
 import { usePermissions } from "../../auth/usePermissions";
 import {
   listSessions, getActive, setActive, newSession, clearActive,
-  replaceMessages, removeSession, type Msg, type SessionsState,
+  replaceMessages, removeSession, pushReplace, pushDelete,
+  type Msg, type SessionsState,
 } from "./aiSessions";
 import * as runner from "./aiRunner";
 
@@ -171,6 +172,10 @@ export function AiChat() {
     // перезагружали. Без него F5 выглядел бы как потеря работы, хотя работа
     // никуда не девалась.
     void runner.resume(uid);
+    // Переписка с СЕРВЕРА. До ответа сети на экране уже лежит локальный кэш,
+    // поэтому подмена происходит без «пустого чата»: сервер только уточняет
+    // (или восстанавливает — если localStorage вычистил браузер).
+    void runner.syncSessions(uid);
   }, []);
 
   // Часы тикают ТОЛЬКО во время ответа: интервал, живущий всегда, перерисовывал
@@ -192,6 +197,20 @@ export function AiChat() {
   // писать обязан тот, кто владеет состоянием, иначе ответ, пришедший при
   // закрытой странице, оседать было бы некуда.
   const commit = (next: SessionsState) => runner.updateSessions(() => next);
+
+  /** Изменение, которое обязано доехать до СЕРВЕРА. Очистка, сжатие и удаление
+   *  разговора — не косметика: не отправь мы их, следующая синхронизация
+   *  вернула бы стёртое с сервера, и кнопка «Очистить» перестала бы работать
+   *  после перезагрузки. */
+  const commitSynced = (next: SessionsState, sessionId: string, messages: Msg[]) => {
+    commit(next);
+    void pushReplace(sessionId, messages);
+  };
+
+  const dropSession = (id: string) => {
+    commit(removeSession(store, id));
+    void pushDelete(id);
+  };
 
   const addFiles = async (files: FileList | File[]) => {
     const list = Array.from(files);
@@ -235,9 +254,10 @@ export function AiChat() {
       // его молча.
       if (typeof data?.summary !== "string" || !data.summary.trim())
         throw new Error("Модель вернула пустую выжимку — переписка не тронута.");
-      commit(replaceMessages(store, [
+      const summary: Msg[] = [
         { role: "assistant", text: `${COMPACT_PREFIX} ${data.summary}`, tools: [] },
-      ]));
+      ];
+      commitSynced(replaceMessages(store, summary), getActive(store).id, summary);
     } catch (e: any) {
       setCmdErr(String(e?.message || "Не удалось сжать переписку."));
     } finally { setCompacting(false); }
@@ -253,7 +273,7 @@ export function AiChat() {
     if (cmd) {
       setInput("");
       if (cmd === "/newsession") commit(newSession(store));
-      else if (cmd === "/clear") commit(clearActive(store));
+      else if (cmd === "/clear") commitSynced(clearActive(store), getActive(store).id, []);
       else await runCompact();
       return;
     }
@@ -313,7 +333,7 @@ export function AiChat() {
                     {s2.title || "Новый разговор"}
                   </button>
                   <button title="Удалить разговор" disabled={busy}
-                    onClick={() => commit(removeSession(store, s2.id))}
+                    onClick={() => dropSession(s2.id)}
                     className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded
                                text-[var(--t-faint)] opacity-0 group-hover:opacity-100
                                hover:text-[var(--err)] disabled:opacity-0">
@@ -484,7 +504,7 @@ export function AiChat() {
           {/* Обрыв разговора: чистит и лог, и историю — они одно и то же.
               Сессия остаётся, как и у команды `/clear`. */}
           <button title="Очистить переписку" disabled={busy || msgs.length === 0}
-            onClick={() => commit(clearActive(store))}
+            onClick={() => commitSynced(clearActive(store), getActive(store).id, [])}
             className="p-2.5 rounded-lg text-[var(--t-low)] hover:text-[var(--err)] disabled:opacity-40">
             <Trash2 size={16} />
           </button>

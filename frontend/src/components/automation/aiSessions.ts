@@ -1,13 +1,25 @@
-// Сессии чата ассистента: переписка в localStorage, ПЕР-ПОЛЬЗОВАТЕЛЬСКИ.
+// Сессии чата ассистента: источник истины — СЕРВЕР, localStorage — кэш.
 //
-// Сервер переписку не хранит принципиально (историю ведёт клиент и присылает в
-// теле каждого запроса — см. §20f в CLAUDE.md), поэтому единственное место, где
-// разговор может пережить F5, — браузер. Ключ по ЛИЧНОСТИ, а не по устройству:
-// за одним браузером работают разные пользователи панели, и чужая переписка в
-// чужом чате — утечка (в ней и содержимое заметок, и ответы ручек).
+// Как было и почему сломалось. Переписка жила только в localStorage, потому что
+// сервер её принципиально не хранил (историю вёл клиент и присылал в теле
+// каждого запроса). Это работало, пока хранилище браузера считалось надёжным —
+// а оно не надёжно ни в одном из трёх частых случаев: Safari стирает данные
+// сайтов, куда не заходили 7 дней (ITP); приватное окно не переживает закрытия
+// вкладки; «очистить данные сайта» уносит переписку вместе с кэшем. Отсюда и
+// «долго не заходил — история пропала»: теряли её НЕ мы, но выглядело как наш
+// баг, и контекст длинной работы с панелью пропадал целиком.
 //
-// Модуль намеренно без React: всё, кроме `load`/`save`, — чистые преобразования
-// состояния, поэтому лимиты и вытеснение проверяются юнит-тестом без рендера.
+// Как стало. Разговор пишется на сервер (`/api/ai/chat/history`, per-account
+// JSON в каталоге аккаунта). localStorage остался, но сменил роль: теперь это
+// КЭШ — мгновенная отрисовка до ответа сети и запасной вариант, когда сеть не
+// ответила. При расхождении побеждает сервер.
+//
+// Ключ кэша по-прежнему по ЛИЧНОСТИ, а не по устройству: за одним браузером
+// работают разные пользователи панели, и чужая переписка в чужом чате — утечка.
+//
+// Модуль намеренно без React: всё, кроме `load`/`save` и сетевых функций, —
+// чистые преобразования состояния, поэтому лимиты и вытеснение проверяются
+// юнит-тестом без рендера.
 
 /** `text` — ровно то, что уходит в историю. Имена вложений держим ОТДЕЛЬНЫМ
  *  полем, а не приписываем к тексту: вложения эфемерны, и в истории следующего
@@ -33,7 +45,11 @@ export interface SessionsState {
  *  а её делят карточки деплоя (там SSH-креды), профили Xray и раскладки
  *  виджетов. Переполнение выбрасывает исключение на КАЖДУЮ запись, и без
  *  потолка чат утащил бы за собой чужие данные. Числа выбраны так, чтобы
- *  типичная переписка (сообщение ≈ 1 КБ) укладывалась в сотни килобайт. */
+ *  типичная переписка (сообщение ≈ 1 КБ) укладывалась в сотни килобайт.
+ *
+ *  ⚠️ ТЕ ЖЕ числа стоят на сервере (`services/ai_chat_store.py`) намеренно:
+ *  разойдись они — сервер молча резал бы то, что клиент считает сохранённым, и
+ *  пропажа хвоста выглядела бы как баг синхронизации. */
 const MAX_SESSIONS = 20;
 const MAX_MESSAGES = 200;
 const TITLE_LEN = 40;
@@ -109,8 +125,9 @@ export function save(userId: string | null | undefined, state: SessionsState): v
     localStorage.setItem(sessionsKey(userId), JSON.stringify(state));
   } catch {
     // Квота кончилась (или приватный режим запрещает запись). Ронять чат из-за
-    // этого нельзя: переписка не настолько ценна, чтобы ради неё терять
-    // работоспособность страницы. Разговор просто не переживёт перезагрузку.
+    // этого нельзя: это ВСЕГО ЛИШЬ кэш — переписка уже уехала (или уедет) на
+    // сервер, и после перезагрузки она придёт оттуда. Раньше на этом месте
+    // разговор терялся навсегда.
   }
 }
 
@@ -194,4 +211,131 @@ function trim(state: SessionsState): SessionsState {
       .map(s => s.id),
   );
   return { ...state, sessions: state.sessions.filter(s => !doomed.has(s.id)) };
+}
+
+// ── сервер: источник истины ────────────────────────────────────
+//
+// Ниже — единственная часть модуля, которая ходит в сеть. Правило одно: НИ ОДНА
+// из этих функций не бросает. Переписка ценна, но не настолько, чтобы её
+// недоступность запирала чат: не ответил сервер — работаем на кэше, как раньше,
+// и следующая же удачная запись всё догонит.
+
+const HISTORY_URL = "/api/ai/chat/history";
+
+/** Форма реплики на проводе. Отличается от `Msg` тем, что текст называется
+ *  `content` (как у модели и у ручки `/api/ai/chat`), а роль — плоская строка. */
+interface WireMsg {
+  role: string;
+  content: string;
+  ts?: number;
+  files?: string[];
+  tools?: { id?: string; name: string; ok?: boolean }[];
+}
+
+const toWire = (m: Msg): WireMsg =>
+  m.role === "user"
+    ? { role: "user", content: m.text, ...(m.files?.length ? { files: m.files } : {}) }
+    : { role: "assistant", content: m.text, ...(m.tools.length ? { tools: m.tools } : {}) };
+
+function fromWire(raw: any): Msg | null {
+  if (!raw || typeof raw !== "object" || typeof raw.content !== "string") return null;
+  if (raw.role === "user")
+    return { role: "user", text: raw.content,
+             ...(Array.isArray(raw.files) && raw.files.length ? { files: raw.files.map(String) } : {}) };
+  if (raw.role === "assistant")
+    return {
+      role: "assistant", text: raw.content,
+      tools: Array.isArray(raw.tools)
+        ? raw.tools.filter((t: any) => t && typeof t.name === "string")
+            .map((t: any) => ({ id: t.id, name: t.name, ok: t.ok }))
+        : [],
+    };
+  return null;
+}
+
+/** Все разговоры с сервера. `null` — «сервер не ответил», и это НЕ то же самое,
+ *  что пустой список: на пустом списке кэш надо стереть (историю удалили с
+ *  другого устройства), а на отказе — сохранить. */
+export async function fetchAll(): Promise<Session[] | null> {
+  try {
+    const res = await fetch(`${HISTORY_URL}?all_sessions=true`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data?.sessions)) return null;
+    return data.sessions.map((s: any): Session => {
+      const messages = (Array.isArray(s.messages) ? s.messages : [])
+        .map(fromWire).filter(Boolean) as Msg[];
+      const ts = (Number(s.updated_at) || 0) * 1000 || Date.now();
+      return { id: String(s.session_id), title: titleOf(messages),
+               created_at: ts, updated_at: ts, messages: cap(messages) };
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Дописать реплики в разговор. Именно этим ходом переписка становится
+ *  durable: вызывается на КАЖДОЕ сообщение, а не по таймеру — таймер потерял бы
+ *  последний ход при закрытии вкладки. */
+export async function pushAppend(sessionId: string, messages: Msg[]): Promise<void> {
+  if (!messages.length) return;
+  try {
+    await fetch(HISTORY_URL, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, append: true,
+                             messages: messages.map(toWire) }),
+    });
+  } catch { /* офлайн: реплика осталась в кэше, сервер догонит следующей записью */ }
+}
+
+/** Перезаписать разговор целиком: миграция из localStorage, `/compact`
+ *  (переписка заменяется выжимкой) и `/clear` (пустым списком). */
+export async function pushReplace(sessionId: string, messages: Msg[]): Promise<void> {
+  try {
+    await fetch(HISTORY_URL, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, messages: messages.map(toWire) }),
+    });
+  } catch { /* см. pushAppend */ }
+}
+
+export async function pushDelete(sessionId: string): Promise<void> {
+  try {
+    await fetch(`${HISTORY_URL}?session_id=${encodeURIComponent(sessionId)}`,
+                { method: "DELETE" });
+  } catch { /* см. pushAppend */ }
+}
+
+/** Свести кэш браузера с сервером. Возвращает состояние, которое надо показать.
+ *
+ *  ⚠️ Здесь живёт вся политика «кто прав», и она НЕ симметрична:
+ *
+ *  1. Сервер не ответил → отдаём кэш как есть. Чат обязан работать офлайн.
+ *  2. На сервере пусто, а в кэше что-то есть → МИГРАЦИЯ: заливаем локальное
+ *     туда. Это единственный случай, когда клиент диктует серверу, и он
+ *     одноразовый — ровно переход со старой схемы хранения.
+ *  3. Иначе побеждает сервер. Разговоры, которых на нём нет, НЕ подмешиваем:
+ *     их отсутствие — это чаще всего осознанное удаление с другого устройства,
+ *     и воскрешать их значило бы делать удаление невозможным.
+ */
+export async function syncFromServer(local: SessionsState): Promise<SessionsState> {
+  const remote = await fetchAll();
+  if (remote === null) return local;
+
+  const localHas = local.sessions.some(s => s.messages.length > 0);
+  if (!remote.length) {
+    if (!localHas) return local;
+    // Миграция: заливаем каждый непустой разговор из кэша.
+    await Promise.all(local.sessions.filter(s => s.messages.length)
+      .map(s => pushReplace(s.id, s.messages)));
+    return local;
+  }
+
+  // Порядок с сервера — свежие первыми, а храним мы в порядке создания.
+  const sessions = [...remote].reverse().slice(-MAX_SESSIONS);
+  // Открытый разговор сохраняем, если он уцелел; иначе показываем самый свежий.
+  const activeId = sessions.some(s => s.id === local.activeId)
+    ? local.activeId
+    : sessions[sessions.length - 1].id;
+  return { sessions, activeId };
 }

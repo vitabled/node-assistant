@@ -46,6 +46,7 @@ from app.api import (
     api_tokens,
     config_templates,
     ai_prompts,
+    ai_history,
     export_io,
     library,
     haproxy,
@@ -195,6 +196,9 @@ app.include_router(netbird.router, dependencies=_auth)
 app.include_router(api_tokens.router, dependencies=_auth)
 app.include_router(config_templates.router, dependencies=_auth)
 app.include_router(ai_prompts.router, dependencies=_auth)
+# Durable-переписка ассистента. Отдельный роутер с тем же префиксом: у истории
+# своя модель данных, а api/ai.py — про конфигурацию агента и запуск ответа.
+app.include_router(ai_history.router, dependencies=_auth)
 app.include_router(export_io.router, dependencies=_auth)
 app.include_router(library.router, dependencies=_auth)
 app.include_router(haproxy.router, dependencies=_auth)
