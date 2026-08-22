@@ -7,6 +7,7 @@ import {
   type Msg, type SessionsState,
 } from "./aiSessions";
 import * as runner from "./aiRunner";
+import { RichText } from "./chatMarkdown";
 
 /** Только то, что нужно чату: гейт композера. Форма настроек живёт в
  *  «Настройки → Ассистент» (`settings/AiSettingsTab.tsx`) — эта страница НИЧЕГО
@@ -449,7 +450,14 @@ export function AiChat() {
                     {t.ok === undefined && <Loader2 size={10} className="animate-spin" />}
                   </div>
                 ))}
-                {m.text && <div className="px-3 py-2 rounded-lg bg-[var(--bg1)] border border-[var(--line-soft)] text-[var(--t-hi)] text-sm whitespace-pre-wrap">{m.text}</div>}
+                {/* Ответ модели — markdown/HTML, а не plain text: списки,
+                    таблицы и код-блоки иначе приезжали сплошной простынёй.
+                    Рендер идёт через санитайзер с белым списком тегов и БЕЗ
+                    dangerouslySetInnerHTML (chatMarkdown.tsx). */}
+                {m.text && (
+                  <RichText text={m.text}
+                    className="px-3 py-2 rounded-lg bg-[var(--bg1)] border border-[var(--line-soft)] text-[var(--t-hi)] text-sm" />
+                )}
               </div>
             )}
           </div>

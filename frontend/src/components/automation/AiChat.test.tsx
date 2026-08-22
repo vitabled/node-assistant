@@ -683,3 +683,93 @@ describe("readFile: архивы", () => {
     expect(await readFile(f)).toBe("empty.txt: пустой или нечитаемый файл");
   });
 });
+
+/** Разметка в ответе ассистента.
+ *
+ *  Ответ модели — НЕДОВЕРЕННЫЙ ввод, поэтому здесь проверяется не только «стало
+ *  красиво», но и «нельзя выполнить»: рендер идёт через белый список тегов
+ *  (`chatMarkdown.tsx`), без `dangerouslySetInnerHTML` с сырой строкой. */
+describe("AiChat: markdown и безопасный HTML", () => {
+  /** Прогоняем текст через настоящий чат — так проверяется именно то, что
+   *  увидит пользователь, вместе с пузырём и его классами. */
+  async function reply(text: string) {
+    installFetch([{ type: "text", delta: text }, { type: "done" }]);
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "вопрос");
+    await settled();
+    return screen.getByTestId("ai-chat-log");
+  }
+
+  it("**жирный**, *курсив* и `код` становятся тегами, а не звёздочками", async () => {
+    const box = await reply("Это **жирный**, *курсив* и `код`.");
+    expect(box.querySelector("strong")?.textContent).toBe("жирный");
+    expect(box.querySelector("em")?.textContent).toBe("курсив");
+    expect(box.querySelector("code")?.textContent).toBe("код");
+    expect(box.textContent).not.toContain("**");
+  });
+
+  it("```блок``` рендерится в <pre><code> с моноширинным шрифтом", async () => {
+    const box = await reply("Пример:\n\n```js\nconst nodes = 12;\n```");
+    const pre = box.querySelector("pre");
+    expect(pre).toBeTruthy();
+    const code = pre!.querySelector("code");
+    expect(code?.textContent).toContain("const nodes = 12;");
+    expect(code?.className).toContain("font-mono");
+  });
+
+  it("[ссылка](url) — это <a href>, а javascript: href теряет", async () => {
+    const box = await reply(
+      "См. [панель](https://example.com/nodes) и [зло](javascript:alert(1)).");
+    const links = Array.from(box.querySelectorAll("a"));
+    expect(links).toHaveLength(2);
+
+    const ok = links.find(a => a.textContent === "панель")!;
+    expect(ok.getAttribute("href")).toBe("https://example.com/nodes");
+    // Внешняя ссылка не должна уводить SPA и отдавать window.opener.
+    expect(ok.getAttribute("target")).toBe("_blank");
+    expect(ok.getAttribute("rel")).toContain("noopener");
+
+    // Схема не из белого списка — ссылка остаётся текстом.
+    const bad = links.find(a => a.textContent === "зло")!;
+    expect(bad.hasAttribute("href")).toBe(false);
+  });
+
+  it("gfm-таблица рендерится настоящей таблицей", async () => {
+    const box = await reply("| Нода | Статус |\n|---|---|\n| n1 | online |");
+    const table = box.querySelector("table");
+    expect(table).toBeTruthy();
+    expect(Array.from(table!.querySelectorAll("th")).map(c => c.textContent))
+      .toEqual(["Нода", "Статус"]);
+    expect(Array.from(table!.querySelectorAll("td")).map(c => c.textContent))
+      .toEqual(["n1", "online"]);
+  });
+
+  // ⚠️ XSS. Модель может вернуть что угодно, в том числе <script> и обработчик
+  // события в атрибуте. Ни то, ни другое не должно доехать до DOM — иначе это
+  // хранимая XSS против собственного origin, где лежит токен сессии.
+  it("не выполняет <script> и снимает обработчики событий", async () => {
+    delete (window as any).__pwned;
+    const box = await reply(
+      'Вот: <script>window.__pwned = 1;</script>' +
+      ' <img src=x onerror="window.__pwned = 1">' +
+      ' <b>жирный html</b> <span onclick="window.__pwned = 1">клик</span>');
+
+    // Ничего не выполнилось и опасных узлов в DOM нет.
+    expect((window as any).__pwned).toBeUndefined();
+    expect(box.querySelector("script")).toBeNull();
+    expect(box.querySelector("img")).toBeNull();
+    expect(box.innerHTML).not.toContain("onerror");
+    expect(box.innerHTML).not.toContain("onclick");
+
+    // При этом разрешённый HTML остался разметкой, а не текстом.
+    expect(box.querySelector("b")?.textContent).toBe("жирный html");
+    expect(box.querySelector("span")?.textContent).toBe("клик");
+  });
+
+  it("<script> внутри код-блока показывается как текст, а не как тег", async () => {
+    const box = await reply("Нельзя так:\n\n```html\n<script>alert(1)</script>\n```");
+    expect(box.querySelector("script")).toBeNull();
+    expect(box.querySelector("pre code")?.textContent).toContain("<script>alert(1)</script>");
+  });
+});
