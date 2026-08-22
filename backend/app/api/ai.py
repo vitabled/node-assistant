@@ -47,6 +47,7 @@ class AiConfigBody(BaseModel):
     # даже короткое тело запроса, и агент упирался бы в обрыв на каждом шаге.
     # 0 = АВТО: агент сам поднимает потолок ×1.5 на обрыве по длине.
     max_tokens: int = Field(8192, ge=0, le=64000)
+    auto_token_budget: int = Field(0, ge=0, le=10_000_000)
     readonly: bool = True
     active_preset_id: str = Field("", max_length=64)  # Plan I; "" = default preset
     gateway: str = "none"  # Plan J; none | cliproxy
@@ -163,7 +164,7 @@ def _public(account_id: str | None = None) -> dict:
         "auto_steps": cfg.max_steps <= 0,
         "auto_tokens": cfg.max_tokens <= 0,
         "auto_max_steps": ai_agent.AUTO_MAX_STEPS,
-        "auto_token_budget": ai_agent.AUTO_TOKEN_BUDGET,
+        "auto_token_budget": getattr(cfg, "auto_token_budget", 0) or ai_agent.AUTO_TOKEN_BUDGET,
         "readonly": cfg.readonly,
         "active_preset_id": cfg.active_preset_id,
         "gateway": cfg.gateway,
@@ -200,6 +201,7 @@ async def save_config(body: AiConfigBody) -> dict:
         "model": body.model.strip(),
         "max_steps": body.max_steps,
         "max_tokens": body.max_tokens,
+        "auto_token_budget": body.auto_token_budget,
         "readonly": body.readonly,
         "active_preset_id": body.active_preset_id.strip(),
         "gateway": body.gateway,

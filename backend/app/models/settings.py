@@ -130,6 +130,10 @@ class AiConfig(BaseModel):
     # ⚠️ 0 = АВТО: стартуем с `ai_agent.AUTO_TOKENS_START` и на каждом обрыве по
     # длине поднимаем потолок ×1.5 сами, вместо просьбы «поднимите в настройках».
     max_tokens: int = 8192
+    #: Суммарный бюджет токенов на ОДИН ответ агента (авто-режим). 0 = использовать
+    #: `ai_agent.AUTO_TOKEN_BUDGET` (1M). Ниже — большие задачи (импорт архива,
+    #: перенос каталога) обрываются на середине; выше — дорого при разгоне.
+    auto_token_budget: int = 0
     readonly: bool = True  # only read-only tools exposed to the agent
     active_preset_id: str = ""  # active system-prompt preset (Plan I; "" = default)
     gateway: str = "none"  # Plan J: none | cliproxy (route via CLIProxyAPI gateway)

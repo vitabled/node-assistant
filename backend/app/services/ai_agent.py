@@ -89,7 +89,8 @@ AUTO_TOKENS_GROWTH = 1.5
 AUTO_TOKENS_CEILING = 64_000
 #: Суммарный бюджет токенов на один ответ агента. Без него авто-режим по обоим
 #: осям превращается в неограниченный счёт у провайдера.
-AUTO_TOKEN_BUDGET = 200_000
+#: Значение по умолчанию для `config.auto_token_budget` (0 = использовать это).
+AUTO_TOKEN_BUDGET = 1_000_000
 
 # Потолок на СУММУ результатов инструментов в истории. Без него длинный перенос
 # упирается не в наши лимиты, а в окно модели: 25 кусков по 30k — это ~200 тысяч
@@ -1101,7 +1102,7 @@ async def run_agent(
                 grown = min(int(token_cap * AUTO_TOKENS_GROWTH),
                             AUTO_TOKENS_CEILING)
                 if auto_tokens and grown > token_cap and step + 1 < limit \
-                        and tokens < AUTO_TOKEN_BUDGET:
+                        and tokens < (getattr(config, "auto_token_budget", 0) or AUTO_TOKEN_BUDGET):
                     token_cap = grown
                     yield {"type": "status", "phase": "thinking",
                            "step": step + 2, "steps": steps, "tokens": tokens,
@@ -1199,9 +1200,10 @@ async def run_agent(
 
         # Суммарный расход за один ответ. Защита от разгона в авто-режиме: без
         # неё «пока есть прогресс» может означать неограниченный счёт.
-        if (auto or auto_tokens) and tokens >= AUTO_TOKEN_BUDGET:
+        budget = getattr(config, "auto_token_budget", 0) or AUTO_TOKEN_BUDGET
+        if (auto or auto_tokens) and tokens >= budget:
             stop_note = (
-                f"(израсходован суммарный бюджет в {AUTO_TOKEN_BUDGET} токенов "
+                f"(израсходован суммарный бюджет в {budget} токенов "
                 f"за один ответ. Работа остановлена — напишите «Продолжи», "
                 f"контекст сохранён)")
             break
