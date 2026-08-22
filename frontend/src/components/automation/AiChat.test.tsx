@@ -684,6 +684,190 @@ describe("AiChat", () => {
   });
 });
 
+/** Автопереподключение при обрыве соединения.
+ *
+ *  ⚠️ Регрессия на настоящий баг: у клиента моргала сеть (упал VPN — в логах
+ *  nginx `SSL_read() failed: decryption failed or bad record mac`, браузер рвал
+ *  HTTP/2), и чат сразу писал «⚠️ Ошибка соединения с ИИ», хотя сервер был жив и
+ *  ответ продолжал считаться фоновой задачей. Теперь обрыв не отменяет ответ:
+ *  клиент до трёх раз подхватывает его тем же `resume`, что и после F5. */
+describe("AiChat: автопереподключение при обрыве", () => {
+  /** Стрим, который отдаёт события, а потом рвётся, как настоящее соединение. */
+  function droppingStream(events: any[]) {
+    const chunks = events.map(e => new TextEncoder().encode(JSON.stringify(e) + "\n"));
+    let i = 0;
+    return {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (i < chunks.length) return { done: false, value: chunks[i++] };
+            // Не AbortError: пользователь ничего не нажимал, порвалась сеть.
+            throw new TypeError("Failed to fetch");
+          },
+        }),
+      },
+    } as any;
+  }
+
+  interface Opts {
+    /** Что отдаёт `/api/ai/chat`. */
+    chat: () => any;
+    /** Что отдаёт `/api/ai/chat/resume` на N-й (с единицы) попытке. */
+    resume?: (attempt: number) => any;
+    /** Идёт ли ответ на сервере, когда мы про это спрашиваем после обрыва. */
+    activeOnDrop?: boolean;
+  }
+
+  function installDropFetch(o: Opts) {
+    let chatStarted = false;
+    let resumes = 0;
+    const fn = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u === "/api/ai/config") return { ok: true, json: async () => CONFIG } as any;
+      if (u === "/api/ai/tools") return { ok: true, json: async () => TOOLS } as any;
+      if (u.startsWith("/api/ai/chat/history"))
+        return { ok: true, json: async () => ({ sessions: [] }) } as any;
+      if (u.startsWith("/api/ai/chat/stop"))
+        return { ok: true, json: async () => ({ stopped: true }) } as any;
+      if (u.startsWith("/api/ai/chat/state"))
+        // До первого вопроса ответа заведомо нет: иначе `resume` на
+        // монтировании подцепился бы к пустоте вместо нашего сценария.
+        return { ok: true, json: async () =>
+          ({ active: chatStarted ? (o.activeOnDrop ?? true) : false, events: 0 }) } as any;
+      if (u.startsWith("/api/ai/chat/resume")) return o.resume!(++resumes);
+      if (u === "/api/ai/chat") { chatStarted = true; return o.chat(); }
+      throw new Error(`unmocked ${u}`);
+    });
+    (globalThis as any).fetch = fn;
+    return fn;
+  }
+
+  const answer = () => stored()[stored().length - 1]?.text ?? "";
+  const countOf = (fn: any, prefix: string) =>
+    fn.mock.calls.filter(([u]: any[]) => String(u).startsWith(prefix)).length;
+
+  beforeEach(() => runner.setReconnectDelayForTests(5));
+  afterEach(() => runner.setReconnectDelayForTests(1800));
+
+  it("обрыв стрима → молча переподключается и дочитывает ответ", async () => {
+    const fn = installDropFetch({
+      chat: () => droppingStream([{ type: "text", delta: "начал отвеч" }]),
+      // Буфер отдаётся С НАЧАЛА — поэтому реплика собирается заново.
+      resume: () => streamResponse([
+        { type: "text", delta: "начал отвечать и договорил." },
+        { type: "done" },
+      ]),
+    });
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "долгий вопрос");
+
+    await waitFor(() => expect(answer()).toBe("начал отвечать и договорил."));
+    // Главное: человек не увидел «всё сломалось» там, где ничего не сломалось.
+    expect(answer()).not.toContain("⚠️");
+    expect(countOf(fn, "/api/ai/chat/resume")).toBe(1);
+    await waitFor(() => expect(runner.getRunState().busy).toBe(false));
+  });
+
+  it("во время переподключения busy не сбрасывается и виден статус", async () => {
+    // Пауза побольше, чтобы успеть заглянуть в состояние между попытками.
+    runner.setReconnectDelayForTests(80);
+    installDropFetch({
+      chat: () => droppingStream([{ type: "text", delta: "начал" }]),
+      resume: () => streamResponse([{ type: "text", delta: "дочитал" }, { type: "done" }]),
+    });
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "вопрос");
+
+    await waitFor(() =>
+      expect(runner.getRunState().status?.tool).toMatch(/переподключение/));
+    // Сбросься busy — чат выглядел бы законченным, а композер отпёрся бы на
+    // середине ответа.
+    expect(runner.getRunState().busy).toBe(true);
+    await waitFor(() => expect(answer()).toBe("дочитал"));
+  });
+
+  it("три обрыва подряд → ошибка с числом попыток", async () => {
+    const fn = installDropFetch({
+      chat: () => droppingStream([{ type: "text", delta: "огрызок" }]),
+      resume: () => droppingStream([]),
+    });
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "вопрос");
+
+    await waitFor(() => expect(answer()).toContain("Ошибка соединения с ИИ"));
+    expect(answer()).toContain("3 попытки");
+    // Ровно три, а не бесконечный цикл переподключений.
+    expect(countOf(fn, "/api/ai/chat/resume")).toBe(3);
+    // Огрызок остался: он уже был показан человеку, стирать его нельзя.
+    expect(answer()).toContain("огрызок");
+    await waitFor(() => expect(runner.getRunState().busy).toBe(false));
+  });
+
+  it("ответ уже завершился на сервере (active:false) → тихо, без ошибки", async () => {
+    const fn = installDropFetch({
+      chat: () => droppingStream([{ type: "text", delta: "полный ответ" }]),
+      activeOnDrop: false,
+    });
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "вопрос");
+
+    await waitFor(() => expect(runner.getRunState().busy).toBe(false));
+    expect(answer()).toBe("полный ответ");
+    expect(answer()).not.toContain("⚠️");
+    expect(countOf(fn, "/api/ai/chat/resume")).toBe(0);
+  });
+
+  it("пользователь нажал «Остановить» → переподключения нет", async () => {
+    // Рвём поток ТОЛЬКО по команде: так обрыв гарантированно случается уже
+    // после отмены — ровно как в жизни, где abort и рвёт соединение.
+    let drop!: () => void;
+    const gate = new Promise((_, rej) => { drop = () => rej(new TypeError("aborted")); });
+    let i = 0;
+    const chunk = new TextEncoder().encode(JSON.stringify({ type: "text", delta: "начал" }) + "\n");
+    const fn = installDropFetch({
+      chat: () => ({
+        ok: true,
+        body: { getReader: () => ({ read: () => (i++ === 0 ? Promise.resolve({ done: false, value: chunk }) : gate) }) },
+      }) as any,
+    });
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "вопрос");
+    await waitFor(() => expect(answer()).toBe("начал"));
+
+    const statesBefore = countOf(fn, "/api/ai/chat/state");
+    runner.stop();
+    drop();
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(runner.getRunState().busy).toBe(false);
+    expect(answer()).toBe("начал");              // ошибки нет
+    expect(countOf(fn, "/api/ai/chat/resume")).toBe(0);
+    expect(countOf(fn, "/api/ai/chat/state")).toBe(statesBefore); // не ходили спрашивать
+  });
+
+  it("отказ сервера (413) показывается сразу, без попыток переподключения", async () => {
+    // Регрессия на прошлый фикс: HTTP-ошибка — не обрыв связи, повтор дал бы
+    // тот же 413, а человек всё это время смотрел бы на «переподключение…».
+    const fn = installDropFetch({
+      chat: () => ({ ok: false, status: 413,
+                     text: async () => JSON.stringify({ detail: "Файл больше 64 МБ" }) }) as any,
+    });
+    render(<AiChat />);
+    const input = await screen.findByPlaceholderText(/Сообщение агенту/);
+    await ask(input, "вопрос");
+
+    await waitFor(() => expect(answer()).toContain("Сервер ответил 413"));
+    expect(answer()).toContain("Файл больше 64 МБ");
+    expect(countOf(fn, "/api/ai/chat/resume")).toBe(0);
+  });
+});
+
 /** Архив во вложении.
  *
  *  ⚠️ Регрессия на настоящий баг: `.tar.gz` читался как текст (`f.text()` на

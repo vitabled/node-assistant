@@ -233,7 +233,150 @@ export async function resume(uid: string | null, targetSessionId?: string): Prom
     sessionId, "replace");
 }
 
-/** Читать ndjson-поток событий и раскладывать его по хранилищу и прогрессу.
+/** Сервер ответил, но отказал (413, 422, 503). Отдельно от обрыва связи:
+ *  переподключаться тут бессмысленно — ответ придёт тот же. */
+class HttpError extends Error {}
+
+/** Сколько раз пробуем подхватить оборванный ответ, прежде чем сдаться. */
+const AUTO_RECONNECT_ATTEMPTS = 3;
+
+/** Пауза между попытками. Не константа, чтобы тесты не ждали живые секунды. */
+let reconnectDelayMs = 1800;
+
+/** Только для тестов: обрыв и три попытки иначе стоят суите ~6 секунд. */
+export function setReconnectDelayForTests(ms: number): void {
+  reconnectDelayMs = ms;
+}
+
+type PatchLast = (fn: (m: Extract<Msg, { role: "assistant" }>) => void) => void;
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+/** Прочитать ndjson-поток событий и разложить его по хранилищу и прогрессу.
+ *  Бросает: HttpError — сервер отказал, любое другое — связь оборвалась. */
+async function readStream(url: string, init: RequestInit,
+                          controller: AbortController,
+                          patchLast: PatchLast): Promise<void> {
+  const res = await fetch(url, { ...init, signal: controller.signal });
+  if (!res.ok) {
+    // Не «Ошибка соединения» — сервер ответил, но отказал (413 файл велик,
+    // 422 валидация, 503 провайдер). Читаем реальную причину из тела.
+    let detail = "";
+    try {
+      const t = await res.text();
+      try { detail = JSON.parse(t)?.detail || t; } catch { detail = t; }
+    } catch { /* тело не читается — ниже фолбэк */ }
+    throw new HttpError(detail ? `Сервер ответил ${res.status}: ${detail}`
+                               : `Сервер ответил ${res.status}`);
+  }
+  if (!res.body) throw new Error("stream failed");
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const ln of lines) {
+      if (!ln.trim()) continue;
+      let ev: any;
+      try { ev = JSON.parse(ln); } catch { continue; }
+      if (ev.type === "text") patchLast(a => { a.text += ev.delta; });
+      else if (ev.type === "tool_call") {
+        patchLast(a => { a.tools.push({ id: ev.id, name: ev.name }); });
+        emit({ ...state, status: state.status
+          ? { ...state.status, tool: ev.name } : state.status });
+      } else if (ev.type === "tool_result") {
+        patchLast(a => {
+          const t = a.tools.find(x => (ev.id ? x.id === ev.id
+            : x.name === ev.name && x.ok === undefined));
+          if (t) t.ok = ev.ok;
+        });
+      } else if (ev.type === "status") {
+        emit({ ...state, status: {
+          phase: ev.phase, step: ev.step, steps: ev.steps, tokens: ev.tokens,
+          // Инструмент сбрасываем на новом «думает»: он уже отработал.
+          tool: ev.phase === "thinking" ? undefined : state.status?.tool,
+        } });
+      } else if (ev.type === "error") {
+        patchLast(a => { a.text += `\n⚠️ ${ev.message}`; });
+      }
+    }
+  }
+}
+
+/** Подхватить оборванный ответ. Обрыв на клиенте (упал VPN, сеть моргнула,
+ *  браузер порвал HTTP/2) НЕ останавливает работу: она идёт фоновой задачей на
+ *  сервере, и её буфер можно дочитать с начала — ровно тем же `resume`, что и
+ *  после F5.
+ *
+ *  Возвращает `true`, если показывать ошибку не нужно: ответ дочитан, ответ уже
+ *  завершился на сервере, или пользователь нажал «Остановить».
+ *
+ *  ⚠️ Зовётся ВНУТРИ `consume`, до его `finally`: иначе тот сбросил бы `busy` в
+ *  IDLE, и на время переподключения чат выглядел бы завершённым. */
+async function attemptAutoReconnect(sessionId: string, controller: AbortController,
+                                    patchLast: PatchLast): Promise<boolean> {
+  const q = encodeURIComponent(sessionId);
+  for (let attempt = 1; attempt <= AUTO_RECONNECT_ATTEMPTS; attempt++) {
+    // Не сбрасываем busy: работа не прервана, прервалось только наше чтение.
+    emit({ ...state, status: {
+      phase: state.status?.phase ?? "thinking",
+      step: state.status?.step ?? 1,
+      steps: state.status?.steps ?? 0,
+      tokens: state.status?.tokens ?? 0,
+      tool: `переподключение… (${attempt} из ${AUTO_RECONNECT_ATTEMPTS})`,
+    } });
+    await sleep(reconnectDelayMs);
+    if (controller.signal.aborted) return true;
+
+    try {
+      const res = await fetch(`/api/ai/chat/state?session_id=${q}`,
+                              { signal: controller.signal });
+      const st = res.ok ? await res.json() : null;
+      // Ответ на сервере уже завершён — это не ошибка. То, что успело дойти,
+      // и есть весь ответ; молча заканчиваем.
+      if (!st?.active) return true;
+    } catch {
+      if (controller.signal.aborted) return true;
+      continue; // сеть всё ещё лежит — следующая попытка
+    }
+
+    try {
+      // Буфер отдаётся С НАЧАЛА, поэтому реплику собираем заново, а не
+      // дописываем: иначе к огрызку приклеился бы весь ответ целиком.
+      //
+      // ⚠️ Чистим ЛЕНИВО, перед первой пришедшей правкой: попытка может опять
+      // умереть на самом `fetch`, и очистка наперёд стёрла бы уже показанный
+      // человеку огрызок — а он единственное, что осталось бы после трёх
+      // неудач.
+      let wiped = false;
+      const patchFresh: PatchLast = fn => {
+        if (!wiped) {
+          wiped = true;
+          updateSessions(s => {
+            const cur = getActive(s).messages;
+            const last = cur[cur.length - 1];
+            if (!last || last.role !== "assistant") return s;
+            return replaceMessages(s,
+              [...cur.slice(0, -1), { role: "assistant", text: "", tools: [] }]);
+          });
+        }
+        patchLast(fn);
+      };
+      await readStream(`/api/ai/chat/resume?session_id=${q}`, {}, controller, patchFresh);
+      return true;
+    } catch (e) {
+      if (controller.signal.aborted) return true;
+      if (e instanceof HttpError) return false; // сервер отказал — не сеть
+    }
+  }
+  return false;
+}
+
+/** Провести запрос к ассистенту от начала до записи ответа.
  *  ОДИН код на отправку и на переподключение: разойдись они — восстановленный
  *  ответ отличался бы от живого.
  *
@@ -244,7 +387,7 @@ async function consume(url: string, init: RequestInit,
                        persist: "append" | "replace" = "append"): Promise<void> {
   // Чистое обновление: последняя реплика заменяется НОВЫМ объектом (без мутации
   // на месте — безопасно под двойным вызовом React StrictMode).
-  const patchLast = (fn: (m: Extract<Msg, { role: "assistant" }>) => void) =>
+  const patchLast: PatchLast = fn =>
     updateSessions(s => {
       const cur = getActive(s).messages;
       const last = cur[cur.length - 1];
@@ -257,62 +400,18 @@ async function consume(url: string, init: RequestInit,
   const controller = new AbortController();
   ac = controller;
   try {
-    const res = await fetch(url, { ...init, signal: controller.signal });
-    if (!res.ok) {
-      // Не «Ошибка соединения» — сервер ответил, но отказал (413 файл велик,
-      // 422 валидация, 503 провайдер). Читаем реальную причину из тела.
-      let detail = "";
-      try {
-        const t = await res.text();
-        try { detail = JSON.parse(t)?.detail || t; } catch { detail = t; }
-      } catch { /* тело не читается — ниже фолбэк */ }
-      throw new Error(detail ? `Сервер ответил ${res.status}: ${detail}`
-                             : `Сервер ответил ${res.status}`);
-    }
-    if (!res.body) throw new Error("stream failed");
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const ln of lines) {
-        if (!ln.trim()) continue;
-        let ev: any;
-        try { ev = JSON.parse(ln); } catch { continue; }
-        if (ev.type === "text") patchLast(a => { a.text += ev.delta; });
-        else if (ev.type === "tool_call") {
-          patchLast(a => { a.tools.push({ id: ev.id, name: ev.name }); });
-          emit({ ...state, status: state.status
-            ? { ...state.status, tool: ev.name } : state.status });
-        } else if (ev.type === "tool_result") {
-          patchLast(a => {
-            const t = a.tools.find(x => (ev.id ? x.id === ev.id
-              : x.name === ev.name && x.ok === undefined));
-            if (t) t.ok = ev.ok;
-          });
-        } else if (ev.type === "status") {
-          emit({ ...state, status: {
-            phase: ev.phase, step: ev.step, steps: ev.steps, tokens: ev.tokens,
-            // Инструмент сбрасываем на новом «думает»: он уже отработал.
-            tool: ev.phase === "thinking" ? undefined : state.status?.tool,
-          } });
-        } else if (ev.type === "error") {
-          patchLast(a => { a.text += `\n⚠️ ${ev.message}`; });
-        }
-      }
-    }
+    await readStream(url, init, controller, patchLast);
   } catch (e) {
+    // Остановил пользователь — молчим: он и так знает, что прервал ответ.
     if (!controller.signal.aborted) {
-      const msg = e instanceof Error ? e.message : "";
-      patchLast(a => {
-        a.text += msg
-          ? `\n⚠️ ${msg}`
-          : "\n⚠️ Ошибка соединения с ИИ.";
-      });
+      if (e instanceof HttpError) {
+        patchLast(a => { a.text += `\n⚠️ ${e.message}`; });
+      } else if (!await attemptAutoReconnect(sessionId, controller, patchLast)) {
+        patchLast(a => {
+          a.text += "\n⚠️ Ошибка соединения с ИИ: не удалось переподключиться" +
+                    ` (${AUTO_RECONNECT_ATTEMPTS} попытки).`;
+        });
+      }
     }
   } finally {
     if (ac === controller) ac = null;
