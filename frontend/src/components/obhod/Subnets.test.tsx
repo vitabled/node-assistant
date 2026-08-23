@@ -915,39 +915,49 @@ describe("Subnets", () => {
     expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
   });
 
-  // ── Справочник ASN (рамка под деревом) ──────────────────────
+  // ── Справочник ASN (кнопка-тумблер в шапке, выпадающая панель) ──
 
-  it("справочник ASN: GET /asns отрисован; добавление — prompt'ы + POST /asns, список обновляется", async () => {
+  it("ASN: кнопка-тумблер в шапке со счётчиком открывает панель; добавление через форму", async () => {
     const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс" }] });
     await openList();
+    // панель закрыта; кнопка в шапке карточки со счётчиком записей
+    const toggle = await screen.findByTestId("asn-toggle");
+    expect(toggle).toHaveTextContent("ASN (1)");
+    expect(screen.queryByTestId("asn-panel")).toBeNull();
+    // клик открывает панель с плоским списком записей (не дерево)
+    fireEvent.click(toggle);
     expect(await screen.findByTestId("asn-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("asn-list")).toBeInTheDocument();
     expect(screen.getByTestId("asn-item-AS12345")).toHaveTextContent("AS12345");
     expect(screen.getByTestId("asn-item-AS12345")).toHaveTextContent("Яндекс");
-    // добавление: ASN → название → примечание, POST с нормализацией
-    const promptSpy = vi.spyOn(window, "prompt")
-      .mockReturnValueOnce("99999")
-      .mockReturnValueOnce("Новый")
-      .mockReturnValueOnce("");
+    // добавление: форма (input asn + название) → POST /asns, список обновляется
+    fireEvent.change(screen.getByTestId("asn-new-asn"), { target: { value: "99999" } });
+    fireEvent.change(screen.getByTestId("asn-new-name"), { target: { value: "Новый" } });
     fireEvent.click(screen.getByTestId("asn-add"));
     await waitFor(() => {
       const post = calls.find(c => c.url === "/api/subnets/asns" && c.init?.method === "POST");
       expect(post).toBeTruthy();
-      expect(JSON.parse(String(post!.init!.body))).toEqual({ asn: "99999", name: "Новый", note: "" });
+      expect(JSON.parse(String(post!.init!.body))).toEqual({ asn: "99999", name: "Новый" });
     });
-    // после мутации — loadAsns() перезагрузил список, новая запись видна
+    // после мутации — loadAsns() перезагрузил список, новая запись видна, счётчик обновился
     expect(await screen.findByTestId("asn-item-AS99999")).toHaveTextContent("Новый");
-    promptSpy.mockRestore();
+    expect(screen.getByTestId("asn-toggle")).toHaveTextContent("ASN (2)");
+    // повторный клик закрывает панель
+    fireEvent.click(screen.getByTestId("asn-toggle"));
+    expect(screen.queryByTestId("asn-panel")).toBeNull();
   });
 
-  it("справочник ASN: Pencil редактирует (POST upsert), Trash2 удаляет (DELETE /asns/{asn})", async () => {
+  it("ASN: Pencil редактирует (POST upsert), Trash2 удаляет (DELETE /asns/{asn})", async () => {
     const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс", note: "" }] });
     await openList();
-    await screen.findByTestId("asn-item-AS12345");
+    fireEvent.click(await screen.findByTestId("asn-toggle"));
+    await screen.findByTestId("asn-panel");
+    const item = await screen.findByTestId("asn-item-AS12345");
     // редактирование: prompt'ы с текущими значениями → POST
     const promptSpy = vi.spyOn(window, "prompt")
       .mockReturnValueOnce("Яндекс Облако")
       .mockReturnValueOnce("новое примечание");
-    fireEvent.click(screen.getByTestId("asn-item-AS12345").querySelector('button[title="Изменить"]')!);
+    fireEvent.click(item.querySelector('button[title="Изменить"]')!);
     await waitFor(() => {
       const post = calls.filter(c => c.url === "/api/subnets/asns" && c.init?.method === "POST");
       expect(post.length).toBe(1);

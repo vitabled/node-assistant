@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, ImageUp, Loader2, Pencil, Plus, Sparkles, Table2,
+  Activity, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, ImageUp, Loader2, Pencil, Plus, Sparkles, Table2,
   Trash2, Upload, X,
 } from "lucide-react";
 import { Page, PageHeader } from "../../theme/ui";
@@ -230,8 +230,12 @@ export function Subnets() {
   const [colorMode, setColorMode] = useState<ColorMode>("groups");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Справочник ASN (per-account): asn → название, синхронизируется с asnname
-  // в строках подсетей на сервере при upsert.
+  // в строках подсетей на сервере при upsert. Свёрнут в кнопку шапки карточки;
+  // панель — выпадающая под шапкой (как ioOpen), один плоский список (не дерево).
   const [asns, setAsns] = useState<AsnRec[]>([]);
+  const [asnOpen, setAsnOpen] = useState(false);
+  const [asnNewAsn, setAsnNewAsn] = useState("");
+  const [asnNewName, setAsnNewName] = useState("");
 
   // ── Latency Lab ──
   const [latEnabled, setLatEnabled] = useState(false);
@@ -488,12 +492,10 @@ export function Subnets() {
     return true;
   };
   const addAsn = () => {
-    const asn = window.prompt("ASN (номер, например 12345 или AS12345)");
+    const asn = asnNewAsn.trim();
     if (!asn) return;
-    const name = window.prompt("Название (например Яндекс)") ?? "";
-    const note = window.prompt("Примечание (необязательно)") ?? "";
-    void mutateAsn("/asns", "POST",
-      { asn: asn.trim(), name: name.trim(), note: note.trim() }, "ASN добавлен");
+    void mutateAsn("/asns", "POST", { asn, name: asnNewName.trim() }, "ASN добавлен")
+      .then(ok => { if (ok) { setAsnNewAsn(""); setAsnNewName(""); } });
   };
   const editAsn = (a: AsnRec) => {
     const name = window.prompt("Название", a.name) ?? a.name;
@@ -946,43 +948,6 @@ export function Subnets() {
               onClick={() => setTreeOpen(true)}><ChevronRight size={13} /></button>
           )}
         </div>
-
-        {/* ── справочник ASN (под деревом) ── */}
-        {treeOpen && (
-          <div className="card card-p" data-testid="asn-panel"
-            style={{
-              display: "flex", flexDirection: "column", gap: 6,
-              maxHeight: "max(140px, calc(100vh - 620px))", minHeight: 96,
-              overflowY: "auto",
-            }}>
-            <div className="flex items-center gap-2">
-              <span className="micro">Справочник ASN</span>
-              <button className="iconbtn" style={{ marginLeft: "auto", width: 22, height: 22 }}
-                title="Добавить ASN" data-testid="asn-add" onClick={addAsn}><Plus size={13} /></button>
-            </div>
-            {asns.length === 0 && (
-              <p className="hint">Пусто — добавьте ASN (например 12345 → Яндекс).</p>
-            )}
-            <div className="flex flex-col gap-1" data-testid="asn-list">
-              {asns.map(a => (
-                <div key={a.asn} data-testid={`asn-item-${a.asn}`}
-                  className="flex items-center gap-1 group rounded-md"
-                  style={{ padding: "2px 4px" }}>
-                  <span className="text-xs font-mono trunc" title={a.asn}
-                    style={{ color: "var(--t-hi)", flex: "none", minWidth: 56 }}>{a.asn}</span>
-                  <span className="text-xs trunc" title={a.note || a.name}
-                    style={{ color: a.name ? "var(--t-mid)" : "var(--t-faint)", flex: 1 }}>
-                    {a.name || "—"}
-                  </span>
-                  <button className="iconbtn" style={{ width: 20, height: 20 }} title="Изменить"
-                    onClick={() => editAsn(a)}><Pencil size={10} /></button>
-                  <button className="iconbtn danger" style={{ width: 20, height: 20 }} title="Удалить"
-                    onClick={() => removeAsn(a)}><Trash2 size={10} /></button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
         </div>
 
         {/* ── таблица ── */}
@@ -1007,6 +972,13 @@ export function Subnets() {
                 data-testid="subnets-io-toggle"
                 onClick={() => { setIoOpen(o => !o); setImpResult(null); }}>
                 <Download size={11} /> Импорт/экспорт
+              </button>
+              <button className={`btn btn-sm ${asnOpen ? "btn-primary" : "btn-soft"}`}
+                style={{ fontSize: 11 }}
+                data-testid="asn-toggle"
+                title="Справочник ASN — один плоский список (без дерева)"
+                onClick={() => setAsnOpen(o => !o)}>
+                <BookOpen size={11} /> ASN ({asns.length})
               </button>
               {latEnabled && (
                 <button className={`btn btn-sm ${scanOpen ? "btn-primary" : "btn-soft"}`}
@@ -1049,6 +1021,48 @@ export function Subnets() {
                 {editMode ? "Готово" : "Редактировать таблицу"}
               </button>
             </div>
+
+            {asnOpen && (
+              <div className="flex flex-col gap-2 px-3 py-2.5" data-testid="asn-panel"
+                style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)", flex: "none" }}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="micro" style={{ margin: 0 }}>Справочник ASN</span>
+                  <input className="input font-mono text-xs" style={{ width: 110 }}
+                    data-testid="asn-new-asn" aria-label="Номер ASN" placeholder="AS12345"
+                    value={asnNewAsn} onChange={e => setAsnNewAsn(e.target.value)} />
+                  <input className="input text-xs" style={{ width: 200 }}
+                    data-testid="asn-new-name" aria-label="Название ASN"
+                    placeholder="Название (например Яндекс)"
+                    value={asnNewName} onChange={e => setAsnNewName(e.target.value)} />
+                  <button className="btn btn-primary btn-sm" style={{ fontSize: 11 }}
+                    data-testid="asn-add" onClick={addAsn} disabled={!asnNewAsn.trim()}>
+                    <Plus size={11} /> Добавить
+                  </button>
+                </div>
+                {asns.length === 0 && (
+                  <p className="hint" style={{ margin: 0 }}>Пусто — добавьте ASN (например 12345 → Яндекс).</p>
+                )}
+                <div className="flex flex-col gap-1" data-testid="asn-list"
+                  style={{ maxHeight: "max(140px, calc(100vh - 620px))", overflowY: "auto" }}>
+                  {asns.map(a => (
+                    <div key={a.asn} data-testid={`asn-item-${a.asn}`}
+                      className="flex items-center gap-1 group rounded-md"
+                      style={{ padding: "2px 4px" }}>
+                      <span className="text-xs font-mono trunc" title={a.asn}
+                        style={{ color: "var(--t-hi)", flex: "none", minWidth: 56 }}>{a.asn}</span>
+                      <span className="text-xs trunc" title={a.note || a.name}
+                        style={{ color: a.name ? "var(--t-mid)" : "var(--t-faint)", flex: 1 }}>
+                        {a.name || "—"}
+                      </span>
+                      <button className="iconbtn" style={{ width: 20, height: 20 }} title="Изменить"
+                        onClick={() => editAsn(a)}><Pencil size={10} /></button>
+                      <button className="iconbtn danger" style={{ width: 20, height: 20 }} title="Удалить"
+                        onClick={() => removeAsn(a)}><Trash2 size={10} /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {ioOpen && (
               <div className="flex flex-col gap-2 px-3 py-2.5" data-testid="subnets-io-panel"
