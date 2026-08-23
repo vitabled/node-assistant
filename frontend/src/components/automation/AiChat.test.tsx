@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { AiChat, fmtTokens, fmtElapsed, readFile } from "./AiChat";
 import * as runner from "./aiRunner";
 import { load, getActive } from "./aiSessions";
+import { addAccount, forget } from "../../auth/store";
 
 const SUMMARY = "Обсудили ноды: их 12, все онлайн.";
 
@@ -874,7 +875,12 @@ describe("AiChat: автопереподключение при обрыве", (
  *  gzip даёт мусор или пустоту), вложение отбрасывалось с «пустой или
  *  нечитаемый файл», и агент уходил искать данные в вебе — до него не доезжало
  *  НИЧЕГО. Архив обязан уехать на сервер сырым: распаковывает его бэкенд
- *  (`ai_archives.unpack`). */
+ *  (`ai_archives.unpack`).
+ *
+ *  ⚠️ Вторая регрессия: base64 архива (50 МБ → 67 МБ строкой) ехал в теле
+ *  `POST /api/ai/chat` и рвался на середине у клиентов за VPN. Теперь `readFile`
+ *  НЕ кодирует архив вовсе — отдаёт сам `File`, а тот уезжает отдельным
+ *  запросом с прогрессом (`aiRunner.uploadFile`). */
 describe("readFile: архивы", () => {
   /** Минимальный File-подобный объект: `readFile` берёт только эти поля, а
    *  настоящий File с arrayBuffer() в jsdom собирать незачем. */
@@ -888,12 +894,16 @@ describe("readFile: архивы", () => {
   // Заголовок gzip: как раз тот случай, где f.text() возвращает мусор.
   const GZIP = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00];
 
-  it("шлёт .tar.gz как base64, а не отбрасывает", async () => {
-    const r = await readFile(fakeFile("as-ip-blocks-ipv4-only.tar.gz", "application/gzip", GZIP));
+  it("отдаёт .tar.gz сырым файлом (без base64), а не отбрасывает", async () => {
+    const f = fakeFile("as-ip-blocks-ipv4-only.tar.gz", "application/gzip", GZIP);
+    const r = await readFile(f);
     expect(typeof r).not.toBe("string");
     const a = r as Exclude<typeof r, string>;
     expect(a.name).toBe("as-ip-blocks-ipv4-only.tar.gz");
-    expect(a.data_b64).toBe(btoa(String.fromCharCode(...GZIP)));
+    // Ровно то, ради чего затевалась двухфазная отправка: тело чата больше не
+    // раздувается base64'ом.
+    expect(a.data_b64).toBe("");
+    expect(a.file).toBe(f);
     expect(a.text).toBe("");
   });
 
@@ -908,7 +918,7 @@ describe("readFile: архивы", () => {
   ])("узнаёт архив %s (mime %s)", async (name, mime) => {
     const r = await readFile(fakeFile(name, mime, GZIP));
     expect(typeof r).not.toBe("string");
-    expect((r as any).data_b64.length).toBeGreaterThan(0);
+    expect((r as any).file).toBeTruthy();
   });
 
   it("отказывает архиву больше 50 МБ понятной строкой", async () => {
@@ -932,6 +942,224 @@ describe("readFile: архивы", () => {
     const f = { name: "empty.txt", type: "text/plain", size: 0,
                 text: async () => "   " } as unknown as File;
     expect(await readFile(f)).toBe("empty.txt: пустой или нечитаемый файл");
+  });
+});
+
+/** Двухфазная отправка вложений с прогрессом.
+ *
+ *  ⚠️ Регрессия на настоящую поломку в проде: 50-мегабайтный архив ехал base64'ом
+ *  в теле `POST /api/ai/chat` (~67 МБ JSON), у клиента за VPN запрос рвался на
+ *  середине (`nginx: SSL_read() failed: bad record mac`), и человек полчаса
+ *  смотрел на «Отправка — 57м» без единого процента.
+ *
+ *  Проверяем то, что чинит именно это: файл уходит ОТДЕЛЬНЫМ XHR-запросом,
+ *  прогресс виден, а тело чата остаётся лёгким — с `upload_id` вместо мегабайт. */
+describe("AiChat: двухфазная загрузка вложений", () => {
+  /** Фейковый XHR: `fetch` мокать нельзя — у него нет прогресса отправки, ради
+   *  которого всё и делалось. Здесь мы сами дёргаем `upload.onprogress`. */
+  class FakeXhr {
+    static instances: FakeXhr[] = [];
+    static uploadId = "abc123";
+    static failStatus = 0;
+    static failNetwork = false;
+    static autoFinish = true;
+    status = 200;
+    responseText = "";
+    headers: Record<string, string> = {};
+    method = "";
+    url = "";
+    sent: any = null;
+    upload = { onprogress: null as null | ((e: any) => void) };
+    onload: null | (() => void) = null;
+    onerror: null | (() => void) = null;
+    onabort: null | (() => void) = null;
+
+    constructor() { FakeXhr.instances.push(this); }
+    open(m: string, u: string) { this.method = m; this.url = u; }
+    setRequestHeader(k: string, v: string) { this.headers[k] = v; }
+    send(body: any) {
+      this.sent = body;
+      if (!FakeXhr.autoFinish) return;
+      // Прогресс и завершение — асинхронно, как у настоящего XHR.
+      setTimeout(() => this.finish(), 0);
+    }
+    /** Сымитировать ход отправки и ответ сервера. */
+    finish() {
+      this.upload.onprogress?.({ lengthComputable: true, loaded: 45, total: 100 });
+      if (FakeXhr.failNetwork) { this.onerror?.(); return; }
+      this.upload.onprogress?.({ lengthComputable: true, loaded: 100, total: 100 });
+      if (FakeXhr.failStatus) {
+        this.status = FakeXhr.failStatus;
+        this.responseText = JSON.stringify({ detail: "Файл больше 50 МБ." });
+      } else {
+        this.status = 200;
+        this.responseText = JSON.stringify({ upload_id: FakeXhr.uploadId,
+                                             name: "a.tar.gz", mime: "application/gzip",
+                                             size: 100 });
+      }
+      this.onload?.();
+    }
+  }
+
+  /** Архив так, как его отдаёт `readFile` после перехода на двухфазность. */
+  const archive = (name = "as-ip-blocks.tar.gz") => ({
+    name, mime: "application/gzip", text: "", data_b64: "",
+    file: new Blob([new Uint8Array([0x1f, 0x8b, 0x08])],
+                   { type: "application/gzip" }) as unknown as File,
+  });
+
+  beforeEach(() => {
+    FakeXhr.instances = [];
+    FakeXhr.failStatus = 0;
+    FakeXhr.failNetwork = false;
+    FakeXhr.autoFinish = true;
+    FakeXhr.uploadId = "abc123";
+    runner.setXhrFactoryForTests(() => new FakeXhr() as unknown as XMLHttpRequest);
+    // Токен — чтобы проверить, что XHR ставит Authorization РУКАМИ: перехватчик
+    // `window.fetch` (auth/apiClient.ts) на XHR не распространяется.
+    // ⚠️ Через `addAccount`, а не записью в localStorage: стор читает хранилище
+    // ОДИН раз при загрузке модуля, и подложенная строка до него не доедет.
+    addAccount({ id: "u1", login: "u", token: "tok-42" });
+  });
+  afterEach(() => {
+    runner.setXhrFactoryForTests(null);
+    forget("u1");   // токен — глобальное состояние модуля, за собой убираем
+  });
+
+  const chatPosts = (fn: any) =>
+    fn.mock.calls.filter(([u]: any[]) => String(u) === "/api/ai/chat").length;
+  const answer = () => stored()[stored().length - 1]?.text ?? "";
+
+  it("сначала грузит архив отдельным XHR, потом шлёт чат с upload_id", async () => {
+    const fn = installFetch([{ type: "text", delta: "готово" }, { type: "done" }]);
+    await runner.send({ prompt: "разбери архив", attachments: [archive()],
+                        history: [] });
+
+    // Фаза 1: файл ушёл своим запросом.
+    expect(FakeXhr.instances).toHaveLength(1);
+    const xhr = FakeXhr.instances[0];
+    expect(xhr.method).toBe("POST");
+    expect(xhr.url).toBe("/api/ai/chat/upload");
+    expect(xhr.sent).toBeInstanceOf(FormData);
+
+    // Фаза 2: тело чата ЛЁГКОЕ — ссылка вместо мегабайт base64.
+    const body = lastChatBody(fn);
+    expect(body.upload_ids).toEqual(["abc123"]);
+    expect(body.attachments).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain("data_b64");
+    expect(body.prompt).toBe("разбери архив");
+  });
+
+  it("ставит Authorization вручную: XHR мимо fetch-перехватчика", async () => {
+    installFetch([{ type: "done" }]);
+    await runner.send({ prompt: "п", attachments: [archive()], history: [] });
+    expect(FakeXhr.instances[0].headers["Authorization"]).toBe("Bearer tok-42");
+    // Content-Type НЕ ставим руками: границу multipart считает браузер.
+    expect(FakeXhr.instances[0].headers["Content-Type"]).toBeUndefined();
+  });
+
+  it("шлёт прогресс отправки в состояние (phase=upload, проценты)", async () => {
+    installFetch([{ type: "done" }]);
+    FakeXhr.autoFinish = false;
+    const seen: any[] = [];
+    const un = runner.subscribe(() => {
+      const st = runner.getRunState().status;
+      if (st?.phase === "upload") seen.push({ ...st });
+    });
+    const p = runner.send({ prompt: "п", attachments: [archive()], history: [] });
+    await waitFor(() => expect(FakeXhr.instances).toHaveLength(1));
+    FakeXhr.instances[0].finish();
+    await p;
+    un();
+
+    expect(seen.length).toBeGreaterThan(0);
+    // Ровно то, чего не хватало пользователю: проценты в строке состояния.
+    const mid = seen.find(s => s.upload?.loaded === 45);
+    expect(mid).toBeTruthy();
+    expect(mid.tool).toContain("45%");
+    expect(mid.tool).toContain("as-ip-blocks.tar.gz");
+    expect(mid.upload).toEqual({ name: "as-ip-blocks.tar.gz", loaded: 45, total: 100 });
+  });
+
+  it("рисует строку и полосу прогресса во время загрузки", async () => {
+    installFetch([{ type: "done" }]);
+    FakeXhr.autoFinish = false;
+    render(<AiChat />);
+    await screen.findByPlaceholderText(/Сообщение агенту/);
+    void runner.send({ prompt: "п", attachments: [archive()], history: [] });
+
+    await waitFor(() => expect(FakeXhr.instances).toHaveLength(1));
+    FakeXhr.instances[0].upload.onprogress?.({ lengthComputable: true,
+                                              loaded: 45, total: 100 });
+    const status = await screen.findByTestId("ai-status");
+    await waitFor(() => expect(status.textContent).toContain("Загрузка файла"));
+    expect(status.textContent).toContain("45%");
+    const bar = screen.getByTestId("ai-upload-bar");
+    expect(bar.getAttribute("aria-valuenow")).toBe("45");
+    // Пока файл едет, шагов ещё нет — врать «шаг 1 из 0» нельзя.
+    expect(status.textContent).not.toContain("шаг");
+    FakeXhr.instances[0].finish();
+    await settled();
+  });
+
+  it("ошибка загрузки показывается и чат НЕ отправляется", async () => {
+    const fn = installFetch([{ type: "done" }]);
+    FakeXhr.failStatus = 400;
+    await runner.send({ prompt: "п", attachments: [archive()], history: [] });
+
+    await waitFor(() => expect(answer()).toContain("Файл больше 50 МБ"));
+    expect(chatPosts(fn)).toBe(0);
+    expect(runner.getRunState().busy).toBe(false);
+  });
+
+  it("обрыв связи при загрузке — понятная ошибка, а не молчание", async () => {
+    const fn = installFetch([{ type: "done" }]);
+    FakeXhr.failNetwork = true;
+    await runner.send({ prompt: "п", attachments: [archive()], history: [] });
+    await waitFor(() => expect(answer()).toContain("обрыв связи при загрузке"));
+    expect(chatPosts(fn)).toBe(0);
+  });
+
+  it("текст без файлов ходит как раньше: ни одного XHR, тело без upload_ids", async () => {
+    const fn = installFetch([{ type: "text", delta: "ок" }, { type: "done" }]);
+    await runner.send({ prompt: "просто вопрос", attachments: [], history: [] });
+    expect(FakeXhr.instances).toHaveLength(0);
+    const body = lastChatBody(fn);
+    expect(body.upload_ids).toEqual([]);
+    expect(body.attachments).toEqual([]);
+    expect(body.prompt).toBe("просто вопрос");
+  });
+
+  it("текстовое вложение остаётся в теле: агенту нужен сам текст", async () => {
+    const fn = installFetch([{ type: "done" }]);
+    await runner.send({
+      prompt: "разбери лог", history: [],
+      attachments: [{ name: "n.log", mime: "text/plain",
+                      text: "node-1 online", data_b64: "" }],
+    });
+    // Гонять лёгкий текст через диск сервера незачем — лишний круг.
+    expect(FakeXhr.instances).toHaveLength(0);
+    const body = lastChatBody(fn);
+    expect(body.upload_ids).toEqual([]);
+    expect(body.attachments[0].text).toBe("node-1 online");
+  });
+
+  it("несколько файлов грузятся по очереди и все попадают в upload_ids", async () => {
+    const fn = installFetch([{ type: "done" }]);
+    let n = 0;
+    runner.setXhrFactoryForTests(() => {
+      const x = new FakeXhr();
+      const orig = x.send.bind(x);
+      x.send = (b: any) => {
+        FakeXhr.uploadId = `id-${++n}`;
+        orig(b);
+      };
+      return x as unknown as XMLHttpRequest;
+    });
+    await runner.send({ prompt: "п", history: [],
+                        attachments: [archive("a.tar.gz"), archive("b.zip")] });
+    expect(FakeXhr.instances).toHaveLength(2);
+    expect(lastChatBody(fn).upload_ids).toEqual(["id-1", "id-2"]);
   });
 });
 

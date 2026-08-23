@@ -39,6 +39,11 @@ interface Attachment {
   /** Картинки, вынесенные из текста. В промпт не попадают — ассистент сохраняет
    *  их в медиатеку инструментом save_attachment_image по номеру маркера. */
   images?: AttachmentImage[];
+  /** Сам файл, если он есть. Тяжёлые вложения уезжают ОТДЕЛЬНЫМ запросом
+   *  (`aiRunner.uploadFile`), и отправлять там исходный `File` дешевле, чем
+   *  разворачивать обратно 67 МБ base64. В тело чата это поле не попадает:
+   *  файлы туда больше не едут вовсе. */
+  file?: File;
 }
 
 const MAX_FILES = 5;
@@ -105,9 +110,13 @@ export async function readFile(f: File): Promise<Attachment | string> {
   }
   if (isArchive(f)) {
     if (f.size > MAX_ARCHIVE_BYTES) return `${f.name}: архив больше 50 МБ`;
+    // ⚠️ base64 здесь БОЛЬШЕ НЕ СЧИТАЕМ. Архив уезжает отдельным запросом
+    // (`aiRunner.uploadFile`) сырыми байтами, а base64 раздувал 50 МБ до 67 МБ
+    // строкой в памяти вкладки — и ровно эти 67 МБ рвались на середине POST у
+    // клиентов за VPN. Сам `File` браузер читает потоком при отправке.
     return {
       name: f.name, mime: mime || "application/octet-stream", text: "",
-      data_b64: toBase64(new Uint8Array(await f.arrayBuffer())),
+      data_b64: "", file: f,
     };
   }
   // Всё остальное считаем текстом: логи, конфиги, куски кода. Бинарь тоже
@@ -132,14 +141,17 @@ type Command = (typeof COMMANDS)[number];
 const asCommand = (s: string): Command | null =>
   (COMMANDS as readonly string[]).includes(s) ? (s as Command) : null;
 
-/** Событие состояния из стрима (`ai_agent.run_agent`). */
+/** Событие состояния из стрима (`ai_agent.run_agent`). Фаза `upload` приходит
+ *  не из стрима, а из `aiRunner`: файлы уезжают ДО запроса к агенту. */
 interface AgentStatus {
-  phase: "thinking" | "tools" | "done";
+  phase: "upload" | "thinking" | "tools" | "done";
   step: number;
   steps: number;
   tokens: number;
   /** Инструмент, который выполняется прямо сейчас. Ставит клиент по tool_call. */
   tool?: string;
+  /** Прогресс отправки файла (только в фазе `upload`). */
+  upload?: { name: string; loaded: number; total: number };
 }
 
 /** «6.4k» вместо «6432»: точное число здесь не нужно, а короткое не прыгает
@@ -151,6 +163,7 @@ export const fmtElapsed = (sec: number) =>
   sec < 60 ? `${sec}с` : `${Math.floor(sec / 60)}м ${String(sec % 60).padStart(2, "0")}с`;
 
 const PHASE_LABEL: Record<AgentStatus["phase"], string> = {
+  upload: "Загрузка файла",
   thinking: "Думает",
   tools: "Работает с панелью",
   done: "Готово",
@@ -476,21 +489,24 @@ export function AiChat() {
             вниз, поэтому она всегда на виду, и её видно рядом с тем, что агент
             уже успел сделать. */}
         {busy && (
-          <div className="self-start flex items-center gap-2 text-[11px] text-[var(--t-low)]"
+          <div className="self-start flex flex-col gap-1 text-[11px] text-[var(--t-low)]"
             data-testid="ai-status" aria-live="polite">
+            <div className="flex items-center gap-2">
             <Loader2 size={12} className="animate-spin text-[var(--accent-hi)]" />
             <span className="text-[var(--t-mid)]">
               {status ? PHASE_LABEL[status.phase] : "Отправка"}
             </span>
             <span>·</span>
             <span>{fmtElapsed(elapsed)}</span>
-            {status && (
+            {/* Во время отправки файла шаги и токены ещё не существуют: агент
+                не запущен. Показывать «шаг 1 из 0» значило бы врать. */}
+            {status && status.phase !== "upload" && (
               <>
                 <span>·</span>
                 <span>шаг {status.step}{status.steps > 0 ? ` из ${status.steps}` : ""}</span>
               </>
             )}
-            {status && status.tokens > 0 && (
+            {status && status.phase !== "upload" && status.tokens > 0 && (
               <>
                 <span>·</span>
                 <span>{fmtTokens(status.tokens)} токенов</span>
@@ -499,8 +515,25 @@ export function AiChat() {
             {status?.tool && (
               <>
                 <span>·</span>
-                <span className="font-mono truncate max-w-[160px]">{status.tool}</span>
+                <span className={status.phase === "upload"
+                  ? "truncate max-w-[280px]" : "font-mono truncate max-w-[160px]"}>
+                  {status.tool}
+                </span>
               </>
+            )}
+            </div>
+            {/* Полоса прогресса — ОТДЕЛЬНОЙ строкой: 50 МБ по медленному VPN
+                уходят минутами, и проценты в общем ряду терялись бы среди
+                прочего. Без неё человек видел только «Отправка — 57м». */}
+            {status?.phase === "upload" && !!status.upload?.total && (
+              <div className="h-1 w-56 rounded-full overflow-hidden"
+                style={{ background: "var(--bg3)" }} data-testid="ai-upload-bar"
+                role="progressbar" aria-valuemin={0} aria-valuemax={100}
+                aria-valuenow={Math.round((status.upload.loaded / status.upload.total) * 100)}>
+                <div className="h-full rounded-full transition-all"
+                  style={{ background: "var(--accent)",
+                           width: `${Math.min(100, Math.round((status.upload.loaded / status.upload.total) * 100))}%` }} />
+              </div>
             )}
           </div>
         )}
@@ -538,11 +571,12 @@ export function AiChat() {
               <span key={i} title={a.name}
                 className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg max-w-[220px]"
                 style={{ background: "var(--bg3)", border: "1px solid var(--line-soft)", color: "var(--t-mid)" }}>
-                {/* ⚠️ Иконку выбираем по mime, а не по наличию `data_b64`:
-                    после появления архивов base64 есть и у них, и картиночная
-                    иконка врала бы про содержимое. */}
+                {/* ⚠️ Иконку выбираем по mime и наличию `file`, а не по
+                    `data_b64`: после перехода на двухфазную отправку у архива
+                    base64 больше нет — он едет сырым файлом, и старое условие
+                    рисовало бы ему иконку текста. */}
                 {IMAGE_MIME.includes(a.mime) ? <ImageIcon size={11} />
-                  : a.data_b64 ? <FileArchive size={11} /> : <FileText size={11} />}
+                  : (a.file || a.data_b64) ? <FileArchive size={11} /> : <FileText size={11} />}
                 <span className="truncate">{a.name}</span>
                 <button onClick={() => setAttach(list => list.filter((_, j) => j !== i))}
                   className="text-[var(--t-low)] hover:text-[var(--err)]"><X size={11} /></button>

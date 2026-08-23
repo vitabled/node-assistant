@@ -25,14 +25,17 @@ import {
   appendMessages, getActive, load, pushAppend, pushReplace, replaceMessages,
   save, syncFromServer, type Msg, type SessionsState,
 } from "./aiSessions";
+import { getActiveToken, getActiveInstanceId } from "../../auth/store";
 
 export interface AgentStatus {
-  phase: "thinking" | "tools" | "done";
+  phase: "upload" | "thinking" | "tools" | "done";
   step: number;
   steps: number;
   tokens: number;
   /** Инструмент, который выполняется прямо сейчас. */
   tool?: string;
+  /** Прогресс отправки файла (только в фазе "upload"). */
+  upload?: { name: string; loaded: number; total: number };
 }
 
 export interface RunState {
@@ -163,6 +166,133 @@ export interface SendArgs {
   history: { role: string; content: string }[];
 }
 
+/** Вложение так, как его собрал `AiChat.readFile`. Для отправки важны только
+ *  эти поля: имя, тип и есть ли у него сырое тело (архив/картинка). */
+interface FileAttachment {
+  name: string;
+  mime: string;
+  text?: string;
+  data_b64?: string;
+  file?: File;
+  images?: unknown[];
+}
+
+/** Сколько байт из base64. Нужно только для процентов, поэтому округления
+ *  padding'а хватает с запасом. */
+const b64Bytes = (b64: string) => Math.floor((b64.length * 3) / 4);
+
+/** Подменяемая в тестах фабрика XHR: в jsdom настоящего `XMLHttpRequest` с
+ *  рабочим `upload.onprogress` нет, а проверять надо именно прогресс. */
+let makeXhr: () => XMLHttpRequest = () => new XMLHttpRequest();
+
+/** Только для тестов: подсунуть фейковый XHR. */
+export function setXhrFactoryForTests(f: (() => XMLHttpRequest) | null): void {
+  makeXhr = f ?? (() => new XMLHttpRequest());
+}
+
+/** Отправить ОДИН файл на `/api/ai/chat/upload` и вернуть его `upload_id`.
+ *
+ *  ⚠️ Именно XHR, а не `fetch`: у fetch НЕТ прогресса отправки (у Request нет
+ *  события upload вовсе), а 50 МБ по медленному VPN уходят минутами — без
+ *  процентов человек видит только «Отправка…» и считает, что всё зависло.
+ *
+ *  ⚠️ Заголовок `Authorization` ставим РУКАМИ: токен добавляет перехватчик
+ *  `window.fetch` (auth/apiClient.ts), а XHR мимо него проходит — без этого
+ *  каждая загрузка получала бы 401. */
+export function uploadFile(
+  file: Blob, name: string, sessionId: string,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = makeXhr();
+    xhr.open("POST", "/api/ai/chat/upload");
+    const token = getActiveToken();
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+      xhr.setRequestHeader("X-Instance-Id", getActiveInstanceId());
+    }
+    // ⚠️ Content-Type НЕ ставим: границу multipart браузер вычисляет сам, а
+    // заданный вручную заголовок её затрёт и тело станет неразбираемым.
+    xhr.upload.onprogress = (e: ProgressEvent) => {
+      // `lengthComputable === false` бывает у прокси — тогда процентов нет, и
+      // врать про них нельзя: показываем хотя бы отправленные байты.
+      onProgress(e.loaded, e.lengthComputable ? e.total : 0);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const id = JSON.parse(xhr.responseText)?.upload_id;
+          if (typeof id === "string" && id) return resolve(id);
+        } catch { /* ниже — общая ошибка */ }
+        return reject(new Error(`Сервер не вернул идентификатор файла «${name}».`));
+      }
+      let detail = "";
+      try { detail = JSON.parse(xhr.responseText)?.detail || ""; } catch { /* нет тела */ }
+      reject(new Error(detail
+        ? `${name}: ${detail}`
+        : `${name}: сервер ответил ${xhr.status} при загрузке.`));
+    };
+    xhr.onerror = () => reject(new Error(`${name}: обрыв связи при загрузке файла.`));
+    xhr.onabort = () => reject(new Error(`${name}: загрузка отменена.`));
+    const form = new FormData();
+    form.append("file", file, name);
+    form.append("session_id", sessionId);
+    xhr.send(form);
+  });
+}
+
+/** Из base64 обратно в Blob. Файл читается в `readFile` ещё до отправки (там же
+ *  считаются лимиты), а на диск браузера мы его не сохраняем — поэтому
+ *  восстанавливаем тело из того, что уже в памяти. */
+function b64ToBlob(b64: string, mime: string): Blob {
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return new Blob([buf], { type: mime || "application/octet-stream" });
+}
+
+/** «12.3 МБ» — читаемый размер для строки состояния. */
+export const fmtBytes = (n: number) =>
+  n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} МБ`
+                   : `${Math.max(1, Math.round(n / 1024))} КБ`;
+
+/** Развести вложения на два потока: тяжёлые (есть сырое тело) уезжают
+ *  отдельными запросами, лёгкие текстовые — как раньше, телом чата.
+ *
+ *  Текст остаётся в теле осознанно: он и так лёгкий, а агенту нужен ИМЕННО
+ *  текст — гонять его через диск сервера значило бы добавить круг на ровном
+ *  месте. Архив же в теле — это те самые 67 МБ, из-за которых всё и рвалось. */
+async function uploadHeavy(attachments: unknown[], sessionId: string):
+    Promise<{ inline: unknown[]; uploadIds: string[] }> {
+  const inline: unknown[] = [];
+  const uploadIds: string[] = [];
+  const heavy = (attachments as FileAttachment[])
+    .filter(a => !!(a?.data_b64 || a?.file));
+  for (const a of attachments as FileAttachment[]) {
+    if (!(a?.data_b64 || a?.file)) inline.push(a);
+  }
+
+  let done = 0;
+  for (const a of heavy) {
+    const blob = a.file ?? b64ToBlob(a.data_b64 || "", a.mime);
+    const total = a.file ? a.file.size : b64Bytes(a.data_b64 || "");
+    const label = heavy.length > 1 ? ` (${done + 1} из ${heavy.length})` : "";
+    const show = (loaded: number, tot: number) => {
+      const size = tot || total;
+      const pct = size > 0 ? Math.min(100, Math.round((loaded / size) * 100)) : 0;
+      emit({ ...state, status: {
+        phase: "upload", step: 1, steps: 0, tokens: 0,
+        tool: `Загрузка ${a.name}${label} — ${fmtBytes(loaded)} из ${fmtBytes(size)} · ${pct}%`,
+        upload: { name: a.name, loaded, total: size },
+      } });
+    };
+    show(0, total);
+    uploadIds.push(await uploadFile(blob, a.name, sessionId, show));
+    done += 1;
+  }
+  return { inline, uploadIds };
+}
+
 export async function send(args: SendArgs): Promise<void> {
   const sessionId = getActive(getSessions()).id;
   // Отправка в ЭТУ сессию невозможна, пока в ней идёт ответ. Ответ в другой
@@ -185,11 +315,35 @@ export async function send(args: SendArgs): Promise<void> {
   // момент, когда вкладку закрывают, — и вопрос пропал бы вместе с ней.
   void pushAppend(sessionId, [asked]);
 
+  // ФАЗА 1 — файлы. Отдельными запросами и с прогрессом: одним куском на 67 МБ
+  // запрос рвался у клиентов за VPN, а браузер молчал об этом до самого конца.
+  let inline: unknown[] = args.attachments;
+  let uploadIds: string[] = [];
+  if (args.attachments.length) {
+    try {
+      ({ inline, uploadIds } = await uploadHeavy(args.attachments, sessionId));
+    } catch (e: any) {
+      // Ошибку дописываем в ответную реплику — туда же, куда пишутся все
+      // остальные отказы, и оставляем разговор в согласованном виде.
+      updateSessions(s => {
+        const cur = getActive(s).messages;
+        const last = cur[cur.length - 1];
+        if (!last || last.role !== "assistant") return s;
+        return replaceMessages(s, [...cur.slice(0, -1),
+          { ...last, text: `${last.text}\n⚠️ ${e?.message || "Не удалось загрузить файл."}` }]);
+      });
+      emit({ ...IDLE });
+      return;
+    }
+  }
+
+  // ФАЗА 2 — сам вопрос. Тело лёгкое: вместо мегабайт base64 едут ссылки.
   await consume("/api/ai/chat", {
     method: "POST", headers: { "Content-Type": "application/json" },
     // session_id: по нему и вложение доживает до следующего сообщения, и
     // сервер узнаёт свой идущий ответ при переподключении.
-    body: JSON.stringify({ prompt: args.prompt, attachments: args.attachments,
+    body: JSON.stringify({ prompt: args.prompt, attachments: inline,
+                           upload_ids: uploadIds,
                            history: args.history, session_id: sessionId }),
   }, sessionId);
 }

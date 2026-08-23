@@ -12,7 +12,7 @@ AI agent config + chat API (Ф4). Account-gated.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -20,7 +20,7 @@ import json
 
 from app.models.settings import PROVIDER_BASE_URLS
 from app.services import (accounts, ai_agent, ai_chat_persist, ai_runs,
-                          ai_tools, ai_web, net_guard, storage)
+                          ai_tools, ai_uploads, ai_web, net_guard, storage)
 
 router = APIRouter(prefix="/api/ai")
 
@@ -140,6 +140,11 @@ class ChatBody(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8000)
     attachments: list[Attachment] = Field(default_factory=list,
                                           max_length=ai_agent.MAX_ATTACHMENTS)
+    # Файлы, уже уехавшие отдельным `POST /chat/upload`. Тело чата остаётся
+    # лёгким: раньше 50-мегабайтный архив ехал здесь же base64'ом (~67 МБ JSON)
+    # и рвался на середине у любого, кто сидит за VPN. См. `ai_uploads`.
+    upload_ids: list[str] = Field(default_factory=list,
+                                  max_length=ai_agent.MAX_ATTACHMENTS)
     history: list[HistoryMsg] = Field(
         default_factory=list, max_length=ai_agent.MAX_HISTORY_MESSAGES * 2)
     # Идентификатор разговора: по нему вложение доживает до следующего
@@ -237,6 +242,31 @@ async def list_models() -> dict:
     return {"models": await ai_agent.list_models(cfg, key)}
 
 
+@router.post("/chat/upload")
+async def chat_upload(file: UploadFile = File(...),
+                      session_id: str = Form("")) -> dict:
+    """Принять ОДИН файл вложения отдельным запросом (фаза 1 из двух).
+
+    ⚠️ Ради этой ручки всё и делалось. Раньше архив ехал base64'ом в теле
+    `POST /chat`, тело раздувалось до ~67 МБ, и у клиента за VPN запрос рвался на
+    середине (`SSL_read() failed: bad record mac`) — без ответа, без ошибки и,
+    главное, без прогресса: браузер не умеет показывать процент отправки для
+    `fetch`. Здесь тело запроса — сам файл, и XHR на фронте показывает
+    `upload.onprogress` честными процентами.
+
+    `session_id` пока только для диагностики: файл принадлежит АККАУНТУ, и
+    привязывать его к разговору незачем — чат уже умеет держать вложение весь
+    разговор (`ai_attachments`).
+    """
+    content = await file.read()
+    try:
+        return ai_uploads.save(file.filename or "файл",
+                               file.content_type or "application/octet-stream",
+                               content)
+    except ai_uploads.UploadError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @router.post("/chat")
 async def chat(body: ChatBody) -> StreamingResponse:
     """Запустить ответ и стримить его.
@@ -255,6 +285,21 @@ async def chat(body: ChatBody) -> StreamingResponse:
     session_id = body.session_id or "default"
     cfg = ai_agent._cfg(account_id)
 
+    # Файлы, уехавшие отдельным запросом, разворачиваем в обычные вложения:
+    # дальше по коду про двухфазную отправку никто знать не должен. Пропавшая
+    # загрузка (TTL, чужой аккаунт, опечатка) — отказ ДО запуска: молча
+    # ответить без файла значит заставить агента выдумывать его содержимое.
+    attachments = [a.model_dump() for a in body.attachments]
+    for uid in body.upload_ids:
+        item = ai_uploads.to_attachment(uid)
+        if item is None:
+            raise HTTPException(
+                400, "Загруженный файл не найден — возможно, истёк срок хранения "
+                     "(24 часа). Приложите его заново.")
+        attachments.append(item)
+    if len(attachments) > ai_agent.MAX_ATTACHMENTS:
+        raise HTTPException(400, f"Не больше {ai_agent.MAX_ATTACHMENTS} файлов.")
+
     if not cfg.enabled:
         async def off():
             yield json.dumps({"type": "error", "message": "ИИ-агент выключен."}) + "\n"
@@ -263,7 +308,7 @@ async def chat(body: ChatBody) -> StreamingResponse:
     def make_events():
         return ai_agent.run_agent(
             body.prompt, cfg, account_id,
-            attachments=[a.model_dump() for a in body.attachments],
+            attachments=attachments,
             history=[m.model_dump() for m in body.history],
             session_id=session_id,
         )
@@ -272,7 +317,7 @@ async def chat(body: ChatBody) -> StreamingResponse:
     # вкладку закрывают.
     ai_chat_persist.save_question(
         account_id, session_id, body.prompt,
-        files=[a.name for a in body.attachments if a.name],
+        files=[str(a.get("name")) for a in attachments if a.get("name")],
     )
 
     # `account_id` берём из ЗАМЫКАНИЯ, а не из ContextVar внутри колбэка:
