@@ -69,10 +69,12 @@ const SCAN_RESULT = {
 };
 
 /** `latency` — конфиг интеграции; `job` — очередь ответов GET /latency-scan/{id};
- *  `store` — ответ GET /api/subnets (по умолчанию STORE). */
-function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown }) {
+ *  `store` — ответ GET /api/subnets (по умолчанию STORE);
+ *  `reqIds` — очередь req_id из POST /latency-scan (по умолчанию ["req-1"]). */
+function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[] }) {
   const calls: { url: string; init?: RequestInit }[] = [];
   const jobQueue = [...(opts?.job ?? [])];
+  const reqIdQueue = [...(opts?.reqIds ?? ["req-1"])];
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
     calls.push({ url, init });
@@ -80,7 +82,10 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
     if (url === "/api/subnets") return json(opts?.store ?? STORE);
     if (url === "/api/latency/config") return json(opts?.latency ?? { enabled: false, has_key: false });
     if (url === "/api/latency/operators") return json(LAT_OPS);
-    if (url === "/api/subnets/latency-scan") return json({ ok: true, req_id: "req-1", status: "pending" });
+    if (url === "/api/subnets/latency-scan") {
+      const id = reqIdQueue.length > 1 ? reqIdQueue.shift() : reqIdQueue[0];
+      return json({ ok: true, req_id: id ?? "req-1", status: "pending" });
+    }
     if (url.startsWith("/api/subnets/latency-scan/") && !url.endsWith("/cancel"))
       return json(jobQueue.length > 1 ? jobQueue.shift() : jobQueue[0] ?? { status: "pending" });
     if (url.startsWith("/api/subnets/export")) {
@@ -100,6 +105,19 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
 }
 
 const enabled = { enabled: true, has_key: true, base_url: "", node_id: "orel", default_operator: "" };
+
+/** Список из N строк с уникальными подсетями 10.x.y.0/24 — для порций. */
+function mkBigStore(n: number) {
+  const rows = Array.from({ length: n }, (_, i) => ({
+    id: `r${i + 1}`,
+    values: { subnet: `10.${Math.floor(i / 256)}.${i % 256}.0/24` },
+    operators: {},
+  }));
+  return {
+    providers: [{ id: "p1", name: "МТС", lists: [{ id: "l1", name: "Основной", columns: [{ key: "subnet", title: "Подсеть" }], rows }] }],
+    operators: [],
+  };
+}
 
 async function openList() {
   render(<Subnets />);
@@ -236,6 +254,98 @@ describe("Subnets", () => {
       expect(JSON.parse(String(c!.init!.body))).toEqual({ req_id: "req-1" });
     });
     expect(screen.getByText("Отменено")).toBeInTheDocument();
+  });
+
+  it(">750 строк: порции по 750, индикатор «Порция N/M», результат объединяется", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const big = mkBigStore(1500);
+    const calls = installFetch({
+      latency: enabled,
+      store: big,
+      reqIds: ["req-1", "req-2"],
+      job: [
+        { status: "pending" }, { status: "pending" },
+        { status: "done", result: { rows: [{ row_id: "r1", subnet: big.providers[0].lists[0].rows[0].values.subnet, available: true, alive_count: 2 }] } },
+        { status: "done", result: { rows: [{ row_id: "r1500", subnet: big.providers[0].lists[0].rows[1499].values.subnet, available: false, alive_count: 0 }] } },
+      ],
+    });
+    await openList();
+    fireEvent.click(await screen.findByTestId("latency-scan-toggle"));
+    await screen.findByTestId("latency-scan-panel");
+    fireEvent.click(screen.getByTestId("latency-start"));
+    // 1500 строк → 2 ПОСЛЕДОВАТЕЛЬНЫХ POST'а ровно по 750 row_id, без all:true
+    await waitFor(() => {
+      const posts = calls.filter(c => c.url === "/api/subnets/latency-scan");
+      expect(posts.length).toBe(2);
+      const b1 = JSON.parse(String(posts[0].init!.body));
+      const b2 = JSON.parse(String(posts[1].init!.body));
+      expect(b1.row_ids).toHaveLength(750);
+      expect(b2.row_ids).toHaveLength(750);
+      expect(b1.all).toBeUndefined();
+      // порции не пересекаются и покрывают все строки
+      expect(new Set([...b1.row_ids, ...b2.row_ids]).size).toBe(1500);
+    });
+    // индикатор: «Порция 1/2» (обе ещё бегут, готова 0)
+    expect(screen.getByTestId("latency-progress")).toHaveTextContent("Порция 1/2");
+    await vi.advanceTimersByTimeAsync(3500);
+    // объединённый результат: строки обеих порций в одном списке
+    const panel = await screen.findByTestId("latency-result");
+    expect(panel).toHaveTextContent(big.providers[0].lists[0].rows[0].values.subnet);
+    expect(panel).toHaveTextContent(big.providers[0].lists[0].rows[1499].values.subnet);
+    expect(panel).toHaveTextContent("недоступна");
+    // значки строк: галочка у доступной, крест у недоступной
+    expect(screen.getByTestId("scan-icon-r1-ok")).toBeInTheDocument();
+    expect(screen.getByTestId("scan-icon-r1500-unavailable")).toBeInTheDocument();
+  }, 15000); // рендер 1500 строк — даём тесту больше времени под нагрузкой
+
+  it("750 строк и «все» — один POST с all:true (без порций)", async () => {
+    const calls = installFetch({ latency: enabled, store: mkBigStore(750) });
+    await openList();
+    fireEvent.click(await screen.findByTestId("latency-scan-toggle"));
+    await screen.findByTestId("latency-scan-panel");
+    fireEvent.click(screen.getByTestId("latency-start"));
+    await waitFor(() => {
+      const posts = calls.filter(c => c.url === "/api/subnets/latency-scan");
+      expect(posts.length).toBe(1);
+      expect(JSON.parse(String(posts[0].init!.body))).toEqual({
+        provider_id: "p1", list_id: "l1", all: true, async_: true,
+      });
+    });
+  });
+
+  it("значки статуса строк: спиннер пока идёт, галочка после available:true", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    installFetch({ latency: enabled, job: [{ status: "pending" }, SCAN_RESULT] });
+    await openList();
+    fireEvent.click(await screen.findByTestId("latency-scan-toggle"));
+    await screen.findByTestId("latency-scan-panel");
+    fireEvent.click(screen.getByTestId("latency-start"));
+    // скан идёт — спиннер слева от подсети
+    expect(await screen.findByTestId("scan-icon-r1-running")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3500);
+    // завершён, available: true — зелёная галочка
+    expect(await screen.findByTestId("scan-icon-r1-ok")).toBeInTheDocument();
+    expect(screen.queryByTestId("scan-icon-r1-running")).toBeNull();
+  });
+
+  it("значок недоступной подсети — красный крест; до скана — пусто; клики целы", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    installFetch({
+      latency: enabled,
+      job: [{ status: "done", result: { rows: [{ row_id: "r1", subnet: "203.0.113.0/24", available: false, alive_count: 0 }] } }],
+    });
+    await openList();
+    // до скана — пустой плейсхолдер (без значка)
+    expect(screen.getByTestId("scan-icon-r1-none")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("latency-scan-toggle"));
+    await screen.findByTestId("latency-scan-panel");
+    fireEvent.click(screen.getByTestId("latency-start"));
+    await vi.advanceTimersByTimeAsync(3500);
+    // available: false — красный крест
+    expect(await screen.findByTestId("scan-icon-r1-unavailable")).toBeInTheDocument();
+    // значок не перехватывает клики — чекбокс строки по-прежнему работает
+    fireEvent.click(screen.getByTestId("latency-pick-r1"));
+    expect(screen.getByTestId("latency-pick-r1")).toBeChecked();
   });
 
   // ── Импорт/экспорт ───────────────────────────────────────────

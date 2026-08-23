@@ -215,6 +215,35 @@ def test_scan_with_operator_does_per_subnet_calls(monkeypatch):
     assert _Fake.calls[0]["json"]["operator"] == "t2"
 
 
+def test_scan_limit_750(monkeypatch):
+    """Потолок пачки: 751 подсеть → 400 ещё до внешнего запроса, 750 → ок.
+
+    Фронт сам режет большие выборки на порции по 750, поэтому за один
+    POST /latency-scan можно слать максимум 750 подсетей."""
+    a = _auth()
+    _configure(a)
+    _patch(monkeypatch, {"/api/lab/multiscan":
+                         {"ok": True, "req_id": "req-big", "status": "pending"}})
+    subnets = [f"10.{i // 256}.{i % 256}.0/24" for i in range(751)]
+    pid, lid, rows = _mk_rows(a, subnets)
+    r = client.post("/api/subnets/latency-scan", headers=a,
+                    json={"provider_id": pid, "list_id": lid, "row_ids": rows})
+    assert r.status_code == 400
+    assert "750" in r.json()["detail"]
+    assert _Fake.calls == []  # до внешнего сервиса дело не дошло
+
+    # Свежий аккаунт, чтобы `_mk_rows` не зацепил провайдера из первой части.
+    a = _auth()
+    _configure(a)
+    pid, lid, rows = _mk_rows(a, subnets[:750])
+    r = client.post("/api/subnets/latency-scan", headers=a,
+                    json={"provider_id": pid, "list_id": lid, "row_ids": rows})
+    assert r.status_code == 200
+    assert r.json()["jobs"][0]["req_id"] == "req-big"
+    assert len(_Fake.calls) == 1  # ровно один мультискан на всю пачку
+    assert len(_Fake.calls[0]["json"]["text"].split("\n")) == 750
+
+
 def test_scan_unknown_rows_is_404():
     a = _auth()
     _configure(a)

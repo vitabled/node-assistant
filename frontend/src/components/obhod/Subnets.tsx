@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, Loader2, Pencil, Plus, Table2,
   Trash2, Upload, X,
@@ -37,12 +37,53 @@ interface ScanItem {
 interface ScanResult extends ScanItem { rows?: ScanItem[] }
 type ScanStatus = "pending" | "done" | "cancelled" | "error";
 
+/** Статус скана конкретной строки: значок слева от подсети. */
+type RowScanState = "none" | "running" | "ok" | "unavailable" | "error";
+
+/** Одна порция скана: все req_id, которые вернул один POST /latency-scan.
+ *  Порция готова, когда готовы ВСЕ её req_id. */
+interface ScanPart { reqIds: string[]; status: ScanStatus }
+
 type ExportFormat = "json" | "csv" | "txt" | "xlsx";
 type ImportMode = "merge" | "replace";
 interface ImportResult { imported: number; skipped: number; errors: string[] }
 
 const api = (path: string, init?: RequestInit) =>
   fetch(`/api/subnets${path}`, init ? { headers: { "Content-Type": "application/json" }, ...init } : init);
+
+/** Потолок пачки на бэкенде — фронт режет большие выборки на порции по 750. */
+const SCAN_CHUNK = 750;
+
+/** Порции row_id'ов для скана. «Все строки» до 750 включительно — один пустой
+ *  чанк (= all:true на бэкенде); больше (или выбранные строки) — по 750. */
+function scanChunks(rows: Row[], picked: string[]): string[][] {
+  const all = picked.length === 0;
+  const targets = all ? rows.map(r => r.id) : picked;
+  if (all && targets.length <= SCAN_CHUNK) return [[]];
+  const out: string[][] = [];
+  for (let i = 0; i < targets.length; i += SCAN_CHUNK)
+    out.push(targets.slice(i, i + SCAN_CHUNK));
+  return out;
+}
+
+const ICON_BOX = { width: 12, height: 12, flex: "none" } as const;
+
+/** Значок статуса скана строки. Только визуал: родитель гасит pointer-events,
+ *  чтобы значок не перехватывал клики строки/выделения/редактирования. */
+function ScanRowIcon({ id, state }: { id: string; state: RowScanState }) {
+  const tid = `scan-icon-${id}-${state}`;
+  if (state === "running")
+    return <Loader2 size={11} className="spin" data-testid={tid}
+      style={{ ...ICON_BOX, color: "var(--t-low)" }} />;
+  if (state === "ok")
+    return <Check size={12} data-testid={tid}
+      style={{ ...ICON_BOX, color: "var(--ok)" }} />;
+  if (state === "unavailable" || state === "error")
+    return <X size={12} data-testid={tid}
+      style={{ ...ICON_BOX, color: "var(--err)" }} />;
+  // нет скана — тонкий плейсхолдер, держит ширину колонки
+  return <span data-testid={tid} style={ICON_BOX} />;
+}
 
 const NO_PROVIDER_KEY = "__none__";
 
@@ -87,10 +128,16 @@ export function Subnets() {
   const [scanOpen, setScanOpen] = useState(false);
   const [scanOp, setScanOp] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
-  const [reqId, setReqId] = useState<string | null>(null);
+  const [scanParts, setScanParts] = useState<ScanPart[]>([]);
+  const [scanErrors, setScanErrors] = useState<string[]>([]);
   const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
+  // «Отменено во время отправки порций»: cancelScan ставит, цикл отправки
+  // проверяет между POST'ами (актуальное state в замыкании не прочитать).
+  const cancelRef = useRef(false);
+  // Защита от наложения тиков поллинга (медленная сеть, много req_id).
+  const pollBusy = useRef(false);
 
   // ── Импорт/экспорт ──
   const [ioOpen, setIoOpen] = useState(false);
@@ -135,6 +182,53 @@ export function Subnets() {
       return next;
     });
 
+  // Статус скана для каждой строки: derived из порций + объединённого
+  // результата. Порядок приоритетов: ошибка запуска (errors) → ошибка порции
+  // → спиннер (порция строки ещё идёт) → результат строки (ok/недоступна).
+  // Вне скана или для строк вне порций — «none» (пустой плейсхолдер).
+  const rowScanStatus = useMemo(() => {
+    const map = new Map<string, RowScanState>();
+    if (!current) return map;
+    const rows = current.rows;
+    const chunks = scanChunks(rows, picked);
+    const bySubnet = new Map(rows.map(r => [r.values?.subnet ?? "", r.id]));
+    const resultRows = new Map<string, ScanItem>();
+    const list = Array.isArray(scanResult?.rows) ? scanResult.rows
+      : scanResult ? [scanResult] : [];
+    for (const it of list) {
+      const rid = it?.row_id ?? (it?.subnet ? bySubnet.get(it.subnet) : undefined);
+      if (rid) resultRows.set(rid, it);
+    }
+    const errSubs = new Set(scanErrors.map(e => String(e).split(":")[0].trim()));
+    // Пустой чанк (= all:true на бэкенде) покрывает ВСЕ строки списка.
+    const allChunk = chunks.length === 1 && chunks[0].length === 0;
+    for (const r of rows) {
+      const subnet = r.values?.subnet ?? "";
+      if (errSubs.has(subnet)) { map.set(r.id, "error"); continue; }
+      let ci = allChunk ? 0 : -1;
+      if (!allChunk)
+        for (let i = 0; i < chunks.length; i++)
+          if (chunks[i].includes(r.id)) { ci = i; break; }
+      if (ci === -1) { map.set(r.id, "none"); continue; } // строка не в скане
+      const part = scanParts[ci];
+      if (!part) { map.set(r.id, "none"); continue; }
+      if (part.status === "error" || part.status === "cancelled") {
+        map.set(r.id, "error"); continue;
+      }
+      if (scanStatus === "pending" && part.status !== "done") {
+        map.set(r.id, "running"); continue;
+      }
+      const it = resultRows.get(r.id);
+      if (it) { map.set(r.id, it.available ? "ok" : "unavailable"); continue; }
+      // порция завершилась, но замера строки нет — скан не дал ответа
+      if (scanStatus === "done" || scanStatus === "error" || scanStatus === "cancelled") {
+        map.set(r.id, "error"); continue;
+      }
+      map.set(r.id, "none");
+    }
+    return map;
+  }, [current, picked, scanStatus, scanResult, scanParts, scanErrors]);
+
   // Строка таблицы — общая для плоского списка и групп (группы — только
   // визуальная обёртка: добавление/выделение/редактирование не меняются).
   const renderRow = (r: Row) => (
@@ -168,9 +262,17 @@ export function Subnets() {
                 )
               ))}
             </span>
+          ) : c.key === "subnet" ? (
+            <span className="flex items-center gap-1.5" style={{ pointerEvents: "none" }}>
+              <ScanRowIcon id={r.id} state={rowScanStatus.get(r.id) ?? "none"} />
+              <span className="trunc" title={r.values?.[c.key] || ""}
+                style={{ color: "var(--t-hi)" }}>
+                {r.values?.[c.key] || "—"}
+              </span>
+            </span>
           ) : (
             <span className="trunc" title={r.values?.[c.key] || ""}
-              style={{ color: c.key === "subnet" ? "var(--t-hi)" : "var(--t-mid)" }}>
+              style={{ color: "var(--t-mid)" }}>
               {r.values?.[c.key] || "—"}
             </span>
           )}
@@ -311,6 +413,8 @@ export function Subnets() {
     setScanOpen(true);
     setScanResult(null);
     setScanStatus(null);
+    setScanParts([]);
+    setScanErrors([]);
     try {
       const d = await fetch("/api/latency/operators").then(r => r.json());
       setLatOps(Array.isArray(d?.operators) ? d.operators : []);
@@ -319,7 +423,8 @@ export function Subnets() {
 
   const closeScan = () => {
     setScanOpen(false);
-    setReqId(null);
+    setScanParts([]);
+    setScanErrors([]);
     setScanStatus(null);
     setScanResult(null);
     setPicked([]);
@@ -330,67 +435,137 @@ export function Subnets() {
   const toggleAll = () =>
     setPicked(p => (current && p.length === current.rows.length ? [] : (current?.rows ?? []).map(r => r.id)));
 
-  // Поллинг job'а: единственный источник статуса — GET по req_id.
+  // Поллинг порций: единственный источник статуса — GET по каждому req_id.
+  // Порция готова, когда готовы ВСЕ её req_id; общий статус — по всем порциям
+  // (done — только когда все готовы, error — при любой ошибке). Тики идут
+  // цепочкой (следующий — через 1.5с после предыдущего), без наложения.
   useEffect(() => {
-    if (!reqId || scanStatus !== "pending") return;
+    if (scanParts.length === 0 || scanStatus !== "pending") return;
     let stop = false;
+    let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
+      if (pollBusy.current) return;
+      pollBusy.current = true;
       try {
-        const res = await api(`/latency-scan/${reqId}`);
-        const d = await res.json().catch(() => ({}));
+        const snaps = await Promise.all(scanParts.map(async part => {
+          const results = await Promise.all(part.reqIds.map(async id => {
+            try {
+              const res = await api(`/latency-scan/${id}`);
+              const d = await res.json().catch(() => ({}));
+              return { status: (d?.status ?? "error") as ScanStatus, result: d?.result ?? null, error: d?.error };
+            } catch { return { status: "pending" as ScanStatus, result: null }; }
+          }));
+          // порция без req_id (упала при запуске) — статус уже error/cancelled
+          const st: ScanStatus = part.reqIds.length === 0 ? part.status
+            : results.some(r => r.status === "error") ? "error"
+            : results.some(r => r.status === "cancelled") ? "cancelled"
+            : results.every(r => r.status === "done") ? "done" : "pending";
+          return { part, st, results };
+        }));
         if (stop) return;
-        const st: ScanStatus = d?.status ?? "error";
-        setScanStatus(st);
-        if (st === "done") {
-          setScanResult(d?.result ?? null);
+        // объединяем результат всех порций: по row_id (запас — по subnet), без дублей
+        const rows: ScanItem[] = [];
+        const seen = new Set<string>();
+        for (const s of snaps) {
+          for (const r of s.results) {
+            const list = Array.isArray(r.result?.rows) ? r.result.rows
+              : r.result ? [r.result] : [];
+            for (const it of list) {
+              const key = it?.row_id ?? it?.subnet ?? "";
+              if (key && seen.has(key)) continue;
+              if (key) seen.add(key);
+              rows.push(it);
+            }
+          }
+        }
+        setScanParts(snaps.map(s => ({ reqIds: s.part.reqIds, status: s.st })));
+        setScanResult({ rows });
+        const anyErr = snaps.some(s => s.st === "error");
+        const anyCancelled = snaps.some(s => s.st === "cancelled");
+        const allDone = snaps.every(s => s.st === "done");
+        if (anyErr) {
+          setScanStatus("error");
+          setScanBusy(false);
+          toast("Скан завершился с ошибкой", "error");
+        } else if (anyCancelled) {
+          setScanStatus("cancelled");
+          setScanBusy(false);
+        } else if (allDone) {
+          setScanStatus("done");
           setScanBusy(false);
           toast("Скан завершён", "success");
-        } else if (st === "error") {
-          setScanBusy(false);
-          toast(typeof d?.error === "string" ? d.error : "Скан завершился с ошибкой", "error");
-        } else if (st === "cancelled") {
-          setScanBusy(false);
+        } else {
+          setScanStatus("pending");
         }
-      } catch { /* сеть моргнула — следующий тик повторит */ }
+      } finally {
+        pollBusy.current = false;
+        if (!stop) timer = setTimeout(() => void tick(), 1500);
+      }
     };
-    const t = setInterval(() => void tick(), 1500);
-    return () => { stop = true; clearInterval(t); };
-  }, [reqId, scanStatus]);
+    timer = setTimeout(() => void tick(), 1500);
+    return () => { stop = true; clearTimeout(timer); };
+  }, [scanParts, scanStatus]);
 
   const startScan = async () => {
-    if (!sel) return;
-    const all = picked.length === 0;
+    if (!sel || !current) return;
+    cancelRef.current = false;
     setScanBusy(true);
+    setScanStatus("pending");
+    setScanParts([]);
     setScanResult(null);
+    setScanErrors([]);
+    const chunks = scanChunks(current.rows, picked);
+    const parts: ScanPart[] = [];
     try {
-      const res = await api("/latency-scan", {
-        method: "POST",
-        body: JSON.stringify({
-          provider_id: sel.pid,
-          list_id: sel.lid,
-          ...(all ? { all: true } : { row_ids: picked }),
-          ...(scanOp ? { operator: scanOp } : {}),
-          async_: true,
-        }),
-      });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok || d.ok === false) {
-        toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+      // Порции шлём ПОСЛЕДОВАТЕЛЬНО: параллельные пачки сожгли бы лимит разом.
+      for (const chunk of chunks) {
+        if (cancelRef.current) break; // отмена во время отправки порций
+        const res = await api("/latency-scan", {
+          method: "POST",
+          body: JSON.stringify({
+            provider_id: sel.pid,
+            list_id: sel.lid,
+            ...(chunk.length === 0 ? { all: true } : { row_ids: chunk }),
+            ...(scanOp ? { operator: scanOp } : {}),
+            async_: true,
+          }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (d.errors?.length) setScanErrors(prev => [...prev, ...d.errors]);
+        if (!res.ok || d.ok === false) {
+          const msg = typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`;
+          toast(msg, "error");
+          if (parts.length === 0) { setScanStatus(null); setScanBusy(false); return; }
+          parts.push({ reqIds: [], status: "error" });
+          continue;
+        }
+        const got: string[] = [];
+        if (Array.isArray(d.jobs)) for (const j of d.jobs) if (j?.req_id) got.push(j.req_id);
+        if (!got.length && d.req_id) got.push(d.req_id);
+        parts.push(got.length ? { reqIds: got, status: "pending" }
+                             : { reqIds: [], status: "error" });
+      }
+      if (cancelRef.current) {
+        if (parts.length) setScanParts(parts); // чтобы «Отменить» мог дослать cancel
         setScanBusy(false);
         return;
       }
-      setReqId(d.req_id ?? null);
-      setScanStatus(d.status ?? "pending");
+      if (parts.length === 0) { setScanBusy(false); return; }
+      setScanParts(parts);
+      setScanStatus("pending");
     } catch (e) {
       toast((e as Error).message, "error");
+      setScanStatus(null);
       setScanBusy(false);
     }
   };
 
   const cancelScan = async () => {
-    if (!reqId) return;
-    await api("/latency-scan/cancel", { method: "POST", body: JSON.stringify({ req_id: reqId }) })
-      .catch(() => {});
+    cancelRef.current = true;
+    await Promise.all(scanParts.flatMap(p => p.reqIds).map(id =>
+      api("/latency-scan/cancel", { method: "POST", body: JSON.stringify({ req_id: id }) })
+        .catch(() => {})
+    ));
     setScanStatus("cancelled");
     setScanBusy(false);
   };
@@ -608,7 +783,10 @@ export function Subnets() {
                   )}
                   {scanStatus === "pending" && (
                     <span className="chip accent" style={{ fontSize: 10 }} data-testid="latency-progress">
-                      <Loader2 size={10} className="spin" /> Сканирование…
+                      <Loader2 size={10} className="spin" />
+                      {scanParts.length > 1
+                        ? ` Порция ${Math.min(scanParts.filter(p => p.status === "done").length + 1, scanParts.length)}/${scanParts.length}`
+                        : " Сканирование…"}
                     </span>
                   )}
                   {scanStatus === "cancelled" && (
