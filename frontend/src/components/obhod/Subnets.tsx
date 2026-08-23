@@ -183,9 +183,9 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 /** Заголовки служебных колонок таблицы подсетей: фиксированные, независимо
- *  от title в columns (asnname всегда «Организация» и т.д.). */
+ *  от title в columns (country всегда «Страна» и т.д.). asnname больше НЕ
+ *  переопределяется — он не связан со справочником ASN (name ↔ provider). */
 const COL_TITLES: Record<string, string> = {
-  asnname: "Организация",
   country: "Страна",
   asn_type: "Тип ASN",
 };
@@ -240,7 +240,7 @@ export function Subnets() {
   // Цвет строк: off/groups/all (по умолчанию «groups» — как было раньше).
   const [colorMode, setColorMode] = useState<ColorMode>("groups");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  // Справочник ASN (per-account): asn → название, синхронизируется с asnname
+  // Справочник ASN (per-account): asn → название, синхронизируется с provider
   // в строках подсетей на сервере при upsert. Кнопка «Справочник» под деревом
   // открывает справа полную таблицу (asnView) — как таблица подсетей.
   const [asns, setAsns] = useState<AsnRec[]>([]);
@@ -337,7 +337,7 @@ export function Subnets() {
     return m;
   }, [current]);
 
-  // asn → запись справочника: fallback asnname (когда у строки пустое
+  // asn → запись справочника: fallback provider (когда у строки пустое
   // значение) + иконка ASN для строк таблицы (если у записи она есть).
   const asnMap = useMemo(() => {
     const m = new Map<string, AsnRec>();
@@ -465,8 +465,8 @@ export function Subnets() {
           ) : (
             <span className="trunc" title={r.values?.[c.key] || ""}
               style={{ color: "var(--t-mid)" }}>
-              {/* asnname: пустое значение строки → название из справочника ASN */}
-              {c.key === "asnname"
+              {/* provider: пустое значение строки → название из справочника ASN */}
+              {c.key === "provider"
                 ? (r.values?.[c.key] || asnMap.get(r.values?.asn ?? "")?.name || "—")
                 : (r.values?.[c.key] || "—")}
             </span>
@@ -497,7 +497,7 @@ export function Subnets() {
   };
 
   // ── Справочник ASN ───────────────────────────────────────────
-  // После любого изменения — load() (сервер при upsert переписал asnname
+  // После любого изменения — load() (сервер при upsert переписал provider
   // в строках подсетей) + loadAsns() (сам справочник).
   const mutateAsn = async (path: string, method: string, body?: unknown, msg?: string) => {
     const res = await api(path, { method, body: body !== undefined ? JSON.stringify(body) : undefined });
@@ -526,7 +526,7 @@ export function Subnets() {
   };
   const editAsn = (a: AsnRec) => {
     // Пустые поля сервер не затирает (upsert обновляет только непустое).
-    const name = window.prompt("Организация", a.name) ?? a.name;
+    const name = window.prompt("Провайдер", a.name) ?? a.name;
     const netname = window.prompt("Netname", a.netname ?? "") ?? (a.netname ?? "");
     const country = window.prompt("Страна", a.country ?? "") ?? (a.country ?? "");
     const asnType = window.prompt("Тип ASN (isp/hosting/business)", a.asn_type ?? "") ?? (a.asn_type ?? "");
@@ -539,7 +539,7 @@ export function Subnets() {
   };
   const applyAsns = async () => {
     // Перенести ВЕСЬ справочник в строки подсетей (POST /asns/apply):
-    // name → values.asnname, netname → values.netname у всех строк с этим
+    // name → values.provider, netname → values.netname у всех строк с этим
     // ASN. Справочник авторитетнее — значения перезаписываются.
     setApplyBusy(true);
     try {
@@ -1052,7 +1052,7 @@ export function Subnets() {
               </button>
               <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
                 data-testid="asn-apply"
-                title="Перенести организацию, netname, страну и тип ASN из справочника в строки подсетей"
+                title="Перенести провайдера, netname, страну и тип ASN из справочника в строки подсетей"
                 onClick={() => void applyAsns()} disabled={applyBusy}>
                 {applyBusy ? <Loader2 size={11} className="spin" /> : <ArrowDownToLine size={11} />}
                 Применить из справочника
@@ -1069,8 +1069,8 @@ export function Subnets() {
                 data-testid="asn-new-asn" aria-label="Номер ASN" placeholder="AS12345"
                 value={asnNewAsn} onChange={e => setAsnNewAsn(e.target.value)} />
               <input className="input text-xs" style={{ flex: 1, minWidth: 0 }}
-                data-testid="asn-new-name" aria-label="Организация ASN"
-                placeholder="Организация (например Яндекс)"
+                data-testid="asn-new-name" aria-label="Провайдер ASN"
+                placeholder="Провайдер (например Яндекс)"
                 value={asnNewName} onChange={e => setAsnNewName(e.target.value)} />
               <input className="input font-mono text-xs" style={{ width: 140, flex: "none" }}
                 data-testid="asn-new-netname" aria-label="Netname ASN"
@@ -1096,7 +1096,7 @@ export function Subnets() {
                   <tr>
                     <th className="sticky top-0 z-10" style={{ width: 40, background: "var(--bg2)" }}>Иконка</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>ASN</th>
-                    <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Организация</th>
+                    <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Провайдер</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Netname</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Страна</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Тип ASN</th>

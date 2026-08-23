@@ -32,7 +32,7 @@ DEFAULT_COLUMNS = [
     {"key": "subnet",    "title": "Подсеть"},
     {"key": "ipver",     "title": "Версия IP"},
     {"key": "asn",       "title": "ASN"},
-    {"key": "asnname",   "title": "Организация"},
+    {"key": "asnname",   "title": "Название ASN"},
     {"key": "date",      "title": "Дата"},
     {"key": "operators", "title": "Операторы"},
 ]
@@ -552,11 +552,12 @@ def apply_asn_meta(asn: str, name: Optional[str] = None,
                    account_id: Optional[str] = None) -> int:
     """Справочник ASN → подсети: во ВСЕХ списках всех провайдеров у строк с
     values.asn == asn (нормализованный «AS12345») перезаписать
-    values.asnname = name, values.netname = netname, values.country = country
+    values.provider = name, values.netname = netname, values.country = country
     и values.asn_type = asn_type. Справочник авторитетнее ручной правки
     ячейки. Непустые значения перезаписывают всегда; пустые/None — поле не
-    трогается. Возвращает число обновлённых строк (0, если все значения
-    пусты)."""
+    трогается (asnname из name НЕ обновляется — это поле больше не связано
+    со справочником). Возвращает число обновлённых строк (0, если все
+    значения пусты)."""
     name = (name or "").strip()
     netname = (netname or "").strip()
     country = (country or "").strip()
@@ -571,7 +572,7 @@ def apply_asn_meta(asn: str, name: Optional[str] = None,
                 values = row.get("values") or {}
                 if str(values.get("asn") or "").strip() == asn:
                     if name:
-                        values["asnname"] = name
+                        values["provider"] = name
                     if netname:
                         values["netname"] = netname
                     if country:

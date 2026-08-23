@@ -28,7 +28,7 @@ async def get_all():
     return {**store.get_store(), "operators": store.OPERATORS}
 
 
-# ── справочник ASN (per-account, синхронизация asnname в строках) ──
+# ── справочник ASN (per-account, синхронизация provider в строках) ──
 class AsnBody(BaseModel):
     asn: str
     name: str = ""
@@ -47,7 +47,7 @@ async def list_asns():
 async def upsert_asn(body: AsnBody):
     """Создать/обновить запись справочника (asn нормализуется: «12345» →
     «AS12345»). После upsert у ВСЕХ строк подсетей текущего аккаунта с
-    values.asn == «AS12345» перезаписываются values.asnname = name,
+    values.asn == «AS12345» перезаписываются values.provider = name,
     values.netname = netname, values.country = country и values.asn_type =
     asn_type (непустые значения) — справочник авторитетнее ручной правки
     ячейки. Ответ: {ok, asn, updated_rows}."""
@@ -68,7 +68,7 @@ async def upsert_asn(body: AsnBody):
 async def apply_asns():
     """Перенести ВЕСЬ справочник в строки подсетей: для каждой записи с
     непустым name/netname/country/asn_type перезаписать
-    values.asnname/values.netname/values.country/values.asn_type у всех
+    values.provider/values.netname/values.country/values.asn_type у всех
     строк с этим ASN (во всех списках). Строки с ASN, которого нет в
     справочнике (или у записи пусто), не трогаются. Ответ: {ok,
     updated_rows} — сколько строк подсетей изменено суммарно."""
@@ -91,7 +91,7 @@ async def apply_asns():
 async def sync_asns():
     """Собрать все уникальные значения values.asn из ВСЕХ списков подсетей
     аккаунта и добавить их в справочник ASN (название — первое непустое
-    values.asnname, netname — первое values.netname, страна — первое
+    values.provider, netname — первое values.netname, страна — первое
     values.country, тип — первое values.asn_type; если названия нет —
     запись с пустым name).
 
@@ -102,7 +102,7 @@ async def sync_asns():
     total}."""
     data = store.get_store()
     pairs: dict[str, tuple[str, str, str, str]] = {}
-    # asn → (первое asnname, первое netname, первая country, первый asn_type)
+    # asn → (первый provider, первое netname, первая country, первый asn_type)
     for p in data.get("providers", []):
         for l in p.get("lists", []):
             for row in l.get("rows", []):
@@ -114,7 +114,7 @@ async def sync_asns():
                     key = asn_store.normalize_asn(raw)
                 except ValueError:
                     continue  # мусор в asn — пропускаем
-                name = str(values.get("asnname") or "").strip()
+                name = str(values.get("provider") or "").strip()
                 netname = str(values.get("netname") or "").strip()
                 country = str(values.get("country") or "").strip()
                 asn_type = str(values.get("asn_type") or "").strip()
@@ -152,7 +152,7 @@ async def sync_asns():
 
 @router.delete("/asns/{asn}")
 async def delete_asn(asn: str):
-    """Удалить запись справочника. asnname в строках подсетей НЕ трогается —
+    """Удалить запись справочника. Значения в строках подсетей НЕ трогаются —
     остаётся последнее название из справочника. Файл иконки записи удаляется."""
     try:
         key = asn_store.normalize_asn(asn)
@@ -307,8 +307,10 @@ class BatchCellsBody(BaseModel):
 
 # Строки → справочник (АВТО, без кнопок): правка ячейки подсети с одним из
 # этих ключей обновляет соответствующее поле записи ASN в справочнике.
+# asnname со справочником НЕ синхронизируется (это поле строки больше не
+# связано с name).
 _ASN_SYNC_COLS = {
-    "asnname": "name",
+    "provider": "name",
     "netname": "netname",
     "country": "country",
     "asn_type": "asn_type",
@@ -319,7 +321,7 @@ def _sync_row_to_asn_dict(provider_id: str, list_id: str, row_id: str,
                           col: str, value: str) -> None:
     """Правка ячейки строки подсетей → запись справочника ASN.
 
-    Только для col в {asnname, netname, country, asn_type} и только если у
+    Только для col в {provider, netname, country, asn_type} и только если у
     строки есть values.asn, который ЕСТЬ в справочнике: соответствующее
     поле записи обновляется через upsert (пустое значение НЕ затирает).
     apply обратно НЕ вызывается — строка уже содержит новое значение,
@@ -356,7 +358,7 @@ async def batch_update_cells(provider_id: str, list_id: str, body: BatchCellsBod
     """Пакетное обновление ячеек. Битые апдейты (нет строки/пустой col)
     не убивают batch: считаются в skipped и перечисляются в errors.
 
-    АВТО-синхронизация строки → справочник ASN: правка ячейки asnname/
+    АВТО-синхронизация строки → справочник ASN: правка ячейки provider/
     netname/country/asn_type у строки, чей values.asn есть в справочнике,
     обновляет соответствующее поле записи (см. _sync_row_to_asn_dict);
     apply обратно не вызывается."""

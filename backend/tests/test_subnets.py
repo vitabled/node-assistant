@@ -863,7 +863,7 @@ def test_icon_upload_validation():
     assert client.get(f"/api/subnets/provider-icon/{pid}", headers=a).status_code == 404
 
 
-# ── справочник ASN (per-account, синхронизация asnname в строках) ──
+# ── справочник ASN (per-account, синхронизация provider в строках) ──
 def _mk_rows_with_asn(a, pid, lid, asn1="AS12345", asn2="AS999"):
     r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
                     json={"rows": [
@@ -899,9 +899,10 @@ def test_asns_upsert_normalizes_without_as_prefix():
     assert r.status_code == 422
 
 
-def test_asns_upsert_syncs_asnname_in_all_lists():
-    """Upsert справочника перезаписывает values.asnname у ВСЕХ строк с
-    values.asn == «AS12345» (во всех провайдерах/списках), чужие ASN не
+def test_asns_upsert_syncs_provider_in_all_lists():
+    """Upsert справочника перезаписывает values.provider у ВСЕХ строк с
+    values.asn == «AS12345» (во всех провайдерах/списках); asnname НЕ
+    трогается (это поле больше не связано со справочником); чужие ASN не
     трогаются; ответ содержит updated_rows."""
     a = _auth()
     pid, lid = _mk_list(a)
@@ -921,8 +922,9 @@ def test_asns_upsert_syncs_asnname_in_all_lists():
     for p in data["providers"]:
         for l in p["lists"]:
             by_sub = {x["values"]["subnet"]: x["values"] for x in l["rows"]}
-            assert by_sub["203.0.113.0/24"]["asnname"] == "Яндекс"
-            assert "asnname" not in by_sub["198.51.100.0/24"]  # AS999 не тронут
+            assert by_sub["203.0.113.0/24"]["provider"] == "Яндекс"
+            assert "asnname" not in by_sub["203.0.113.0/24"]  # asnname не тронут
+            assert "provider" not in by_sub["198.51.100.0/24"]  # AS999 не тронут
 
 
 def test_asns_reupsert_updates_name_and_rows():
@@ -930,7 +932,7 @@ def test_asns_reupsert_updates_name_and_rows():
     pid, lid = _mk_list(a)
     _mk_rows_with_asn(a, pid, lid)
     client.post("/api/subnets/asns", headers=a, json={"asn": "12345", "name": "Яндекс"})
-    # повторный upsert с другим названием → запись и asnname в строках обновлены
+    # повторный upsert с другим названием → запись и provider в строках обновлены
     r = client.post("/api/subnets/asns", headers=a,
                     json={"asn": "AS12345", "name": "Яндекс Облако"})
     assert r.status_code == 200
@@ -939,7 +941,7 @@ def test_asns_reupsert_updates_name_and_rows():
     rec = next(x for x in asns if x["asn"] == "AS12345")
     assert rec["name"] == "Яндекс Облако"
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
-    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс Облако"
+    assert fresh["203.0.113.0/24"]["provider"] == "Яндекс Облако"
     # пустое name при апдейте не затирает название
     client.post("/api/subnets/asns", headers=a, json={"asn": "12345", "name": ""})
     rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
@@ -947,9 +949,9 @@ def test_asns_reupsert_updates_name_and_rows():
     assert rec["name"] == "Яндекс Облако"
 
 
-def test_asns_delete_removes_record_keeps_row_asnname():
-    """DELETE /asns/{asn}: запись уходит из справочника, asnname в строках
-    подсетей НЕ трогается (остаётся последнее название)."""
+def test_asns_delete_removes_record_keeps_row_values():
+    """DELETE /asns/{asn}: запись уходит из справочника, значения в строках
+    подсетей НЕ трогаются (provider остаётся последним названием)."""
     a = _auth()
     pid, lid = _mk_list(a)
     _mk_rows_with_asn(a, pid, lid)
@@ -959,9 +961,9 @@ def test_asns_delete_removes_record_keeps_row_asnname():
     assert r.status_code == 200 and r.json()["ok"] is True
     asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
     assert all(x["asn"] != "AS12345" for x in asns)
-    # строки не тронуты: asnname остался
+    # строки не тронуты: provider остался
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
-    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс"
+    assert fresh["203.0.113.0/24"]["provider"] == "Яндекс"
     # удаление без префикса тоже работает; повторное удаление — идемпотентно
     assert client.delete("/api/subnets/asns/12345", headers=a).status_code == 200
     assert client.delete("/api/subnets/asns/12345", headers=a).status_code == 200
@@ -979,19 +981,19 @@ def test_asns_isolated_per_account():
     _mk_rows_with_asn(a2, pid, lid)
     client.post("/api/subnets/asns", headers=a2, json={"asn": "12345", "name": "Другой"})
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a2)}
-    assert fresh["203.0.113.0/24"]["asnname"] == "Другой"
+    assert fresh["203.0.113.0/24"]["provider"] == "Другой"
     assert client.get("/api/subnets/asns", headers=a1).json()["asns"][0]["name"] == "Яндекс"
 
 
 # ── синхронизация справочника из списков подсетей (POST /asns/sync) ──
-def _mk_rows_with_asnname(a, pid, lid):
-    """Строки для sync: валидная пара (asn+asnname), asn без названия,
+def _mk_rows_with_provider(a, pid, lid):
+    """Строки для sync: валидная пара (asn+provider), asn без названия,
     мусорный asn, строка без asn вовсе."""
     r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
                     json={"rows": [
-                        {"subnet": "203.0.113.0/24", "asn": "AS12345", "asnname": "Яндекс"},
+                        {"subnet": "203.0.113.0/24", "asn": "AS12345", "provider": "Яндекс"},
                         {"subnet": "198.51.100.0/24", "asn": "AS3261"},
-                        {"subnet": "192.0.2.0/24", "asn": "мусор", "asnname": "Мусор"},
+                        {"subnet": "192.0.2.0/24", "asn": "мусор", "provider": "Мусор"},
                         {"subnet": "10.0.0.0/8"},
                     ]})
     assert r.status_code == 201, r.text
@@ -999,19 +1001,19 @@ def _mk_rows_with_asnname(a, pid, lid):
 
 def test_asns_sync_collects_from_lists_adds_missing():
     """POST /asns/sync: ВСЕ уникальные values.asn из ВСЕХ списков попадают в
-    справочник — даже без asnname (запись с пустым name); мусорный asn и
+    справочник — даже без provider (запись с пустым name); мусорный asn и
     строка без asn пропускаются; повторный sync не дублирует записи
     (added=0); строки подсетей не меняются."""
     a = _auth()
     pid, lid = _mk_list(a)
-    _mk_rows_with_asnname(a, pid, lid)
+    _mk_rows_with_provider(a, pid, lid)
     # вторая пара провайдер/список — sync идёт по всем спискам
     p2 = client.post("/api/subnets/providers", headers=a, json={"name": "Билайн"}).json()
     l2 = client.post(f"/api/subnets/providers/{p2['id']}/lists", headers=a,
                      json={"name": "Второй"}).json()
     client.post(f"/api/subnets/providers/{p2['id']}/lists/{l2['id']}/rows", headers=a,
                 json={"rows": [{"subnet": "2001:db8::/32", "asn": "as999",
-                                "asnname": "Другой"}]})  # нижний регистр тоже норм
+                                "provider": "Другой"}]})  # нижний регистр тоже норм
 
     r = client.post("/api/subnets/asns/sync", headers=a)
     assert r.status_code == 200
@@ -1025,9 +1027,9 @@ def test_asns_sync_collects_from_lists_adds_missing():
     rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
                if x["asn"] == "AS3261")
     assert rec["name"] == "" and rec["note"] == ""
-    # строки подсетей не тронуты: asnname в них остался как был
+    # строки подсетей не тронуты: provider в них остался как был
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
-    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс"
+    assert fresh["203.0.113.0/24"]["provider"] == "Яндекс"
 
     # повторный sync — дубликатов нет (и пустое name не перезаполняется)
     r2 = client.post("/api/subnets/asns/sync", headers=a)
@@ -1041,8 +1043,8 @@ def test_asns_sync_keeps_dictionary_name_over_rows():
     pid, lid = _mk_list(a)
     client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
                 json={"rows": [
-                    {"subnet": "203.0.113.0/24", "asn": "AS3261", "asnname": "Новое"},
-                    {"subnet": "198.51.100.0/24", "asn": "AS12345", "asnname": "Яндекс"},
+                    {"subnet": "203.0.113.0/24", "asn": "AS3261", "provider": "Новое"},
+                    {"subnet": "198.51.100.0/24", "asn": "AS12345", "provider": "Яндекс"},
                 ]})
     # в справочнике AS3261 уже есть с другим названием
     client.post("/api/subnets/asns", headers=a, json={"asn": "AS3261", "name": "Старое"})
@@ -1063,7 +1065,7 @@ def test_asns_sync_fills_empty_name_in_dictionary():
     pid, lid = _mk_list(a)
     client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
                 json={"rows": [{"subnet": "203.0.113.0/24", "asn": "12345",
-                                "asnname": "Яндекс"}]})
+                                "provider": "Яндекс"}]})
     # запись есть, но без названия (и с примечанием)
     client.post("/api/subnets/asns", headers=a,
                 json={"asn": "12345", "name": "", "note": "важно"})
@@ -1085,9 +1087,9 @@ def test_asns_sync_respects_max(monkeypatch):
     pid, lid = _mk_list(a)
     client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
                 json={"rows": [
-                    {"subnet": "203.0.113.0/24", "asn": "AS1", "asnname": "Один"},
-                    {"subnet": "198.51.100.0/24", "asn": "AS2", "asnname": "Два"},
-                    {"subnet": "192.0.2.0/24", "asn": "AS3", "asnname": "Три"},
+                    {"subnet": "203.0.113.0/24", "asn": "AS1", "provider": "Один"},
+                    {"subnet": "198.51.100.0/24", "asn": "AS2", "provider": "Два"},
+                    {"subnet": "192.0.2.0/24", "asn": "AS3", "provider": "Три"},
                 ]})
     monkeypatch.setattr(asn_store, "MAX_ASNS", 2)
     r = client.post("/api/subnets/asns/sync", headers=a)
@@ -1098,7 +1100,7 @@ def test_asns_sync_respects_max(monkeypatch):
 
 def test_asns_upsert_netname_saved_and_not_cleared():
     """Upsert с netname: запись получает поле netname; апдейт с пустым
-    netname НЕ затирает текущее; строки подсетей получают asnname И netname
+    netname НЕ затирает текущее; строки подсетей получают provider И netname
     (apply_asn_meta), updated_rows > 0."""
     a = _auth()
     pid, lid = _mk_list(a)
@@ -1116,9 +1118,9 @@ def test_asns_upsert_netname_saved_and_not_cleared():
                if x["asn"] == "AS12345")
     assert rec["netname"] == "RU-YANDEX"
     assert rec["name"] == "Яндекс"
-    # из справочника в строки перенесены и asnname, и netname
+    # из справочника в строки перенесены и provider, и netname
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
-    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс"
+    assert fresh["203.0.113.0/24"]["provider"] == "Яндекс"
     assert fresh["203.0.113.0/24"]["netname"] == "RU-YANDEX"
     # чужой ASN не тронут
     assert "netname" not in fresh["198.51.100.0/24"]
@@ -1141,11 +1143,11 @@ def test_asns_apply_applies_whole_dictionary_idempotent():
     body = r.json()
     assert body["ok"] is True and body["updated_rows"] == 2
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
-    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс"
+    assert fresh["203.0.113.0/24"]["provider"] == "Яндекс"
     assert fresh["203.0.113.0/24"]["netname"] == "RU-YANDEX"
     assert fresh["198.51.100.0/24"]["netname"] == "RU-OTHER"
-    # у записи без name asnname в строках не появляется
-    assert "asnname" not in fresh["198.51.100.0/24"]
+    # у записи без name provider в строках не появляется
+    assert "provider" not in fresh["198.51.100.0/24"]
 
     # повторный apply — снова перезаписывает те же строки (идемпотентно)
     r2 = client.post("/api/subnets/asns/apply", headers=a)
@@ -1162,10 +1164,10 @@ def test_asns_apply_skips_rows_not_in_dictionary():
     r = client.post("/api/subnets/asns/apply", headers=a)
     assert r.json()["updated_rows"] == 1
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
-    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс"
+    assert fresh["203.0.113.0/24"]["provider"] == "Яндекс"
     # AS999 в справочнике нет — строка не тронута
     assert "netname" not in fresh["198.51.100.0/24"]
-    assert "asnname" not in fresh["198.51.100.0/24"]
+    assert "provider" not in fresh["198.51.100.0/24"]
 
 
 def test_asns_sync_collects_netname():
@@ -1176,7 +1178,7 @@ def test_asns_sync_collects_netname():
     client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
                 json={"rows": [
                     {"subnet": "203.0.113.0/24", "asn": "AS12345",
-                     "asnname": "Яндекс", "netname": "RU-YANDEX"},
+                     "provider": "Яндекс", "netname": "RU-YANDEX"},
                     {"subnet": "198.51.100.0/24", "asn": "AS3261"},
                 ]})
     r = client.post("/api/subnets/asns/sync", headers=a)
@@ -1302,7 +1304,7 @@ def test_asns_sync_collects_country_and_asn_type():
     client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
                 json={"rows": [
                     {"subnet": "203.0.113.0/24", "asn": "AS12345",
-                     "asnname": "Яндекс", "country": "RU", "asn_type": "hosting"},
+                     "provider": "Яндекс", "country": "RU", "asn_type": "hosting"},
                     {"subnet": "198.51.100.0/24", "asn": "AS3261",
                      "country": "DE", "asn_type": "isp"},
                 ]})
@@ -1350,7 +1352,7 @@ def test_asns_apply_transfers_country_and_asn_type():
 
 
 def test_batch_cell_edit_syncs_row_to_dictionary():
-    """Правка ячейки asnname/netname/country/asn_type строки с ASN из
+    """Правка ячейки provider/netname/country/asn_type строки с ASN из
     справочника АВТОМАТИЧЕСКИ обновляет запись справочника (строки →
     справочник, без apply обратно)."""
     a = _auth()
@@ -1366,7 +1368,7 @@ def test_batch_cell_edit_syncs_row_to_dictionary():
     rid1 = next(x["id"] for x in rows if x["values"]["subnet"] == "203.0.113.0/24")
     r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch",
                      headers=a, json={"updates": [
-                         {"row_id": rid1, "col": "asnname", "value": "Яндекс Облако"},
+                         {"row_id": rid1, "col": "provider", "value": "Яндекс Облако"},
                          {"row_id": rid1, "col": "netname", "value": "RU-YANDEX"},
                          {"row_id": rid1, "col": "country", "value": "RU"},
                          {"row_id": rid1, "col": "asn_type", "value": "hosting"},
@@ -1382,8 +1384,33 @@ def test_batch_cell_edit_syncs_row_to_dictionary():
     assert rec["asn_type"] == "hosting"
     # строка тоже получила новое значение (ячейка изменена как обычно)
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
-    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс Облако"
+    assert fresh["203.0.113.0/24"]["provider"] == "Яндекс Облако"
     assert fresh["203.0.113.0/24"]["country"] == "RU"
+
+
+def test_batch_cell_edit_asnname_does_not_touch_dictionary():
+    """Правка ячейки asnname у строки с ASN из справочника НЕ трогает запись
+    справочника (asnname больше не синхронизируется с name)."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [{"subnet": "203.0.113.0/24", "asn": "AS12345"}]})
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "Яндекс"})
+    rid = _rows(a)[0]["id"]
+    r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch",
+                     headers=a, json={"updates": [
+                         {"row_id": rid, "col": "asnname", "value": "Яндекс Облако"},
+                     ]})
+    assert r.status_code == 200, r.text
+    assert r.json()["updated"] == 1
+    # запись справочника НЕ изменена (name остался «Яндекс»)
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert len(asns) == 1
+    assert asns[0]["name"] == "Яндекс"
+    # ячейка строки при этом изменилась как обычно
+    fresh = _rows(a)[0]["values"]
+    assert fresh["asnname"] == "Яндекс Облако"
 
 
 def test_batch_cell_edit_does_not_touch_dictionary():

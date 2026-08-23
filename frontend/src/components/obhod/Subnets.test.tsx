@@ -146,7 +146,8 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
             const asn = String(r.values?.asn ?? "").trim();
             const m = /(\d+)/.exec(asn);
             if (!m) continue;
-            const name = String(r.values?.asnname ?? "").trim();
+            // как backend: name собирается из values.provider (не asnname)
+            const name = String(r.values?.provider ?? "").trim();
             const key = "AS" + m[1];
             if (!pairs.has(key)) pairs.set(key, name);
           }
@@ -160,7 +161,7 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
     }
     if (url === "/api/subnets/asns/apply") {
       // как backend: каждая запись справочника с name/netname перезаписывает
-      // asnname/netname у строк store с этим ASN (справочник авторитетнее)
+      // provider/netname у строк store с этим ASN (справочник авторитетнее)
       const st = (opts?.store ?? STORE) as {
         providers?: { lists?: { rows?: { values?: Record<string, string> }[] }[] }[];
       };
@@ -174,7 +175,7 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
             const name = String(rec.name ?? "").trim();
             const netname = String(rec.netname ?? "").trim();
             if (!name && !netname) continue;
-            if (name && r.values) r.values.asnname = name;
+            if (name && r.values) r.values.provider = name;
             if (netname && r.values) r.values.netname = netname;
             updated++;
           }
@@ -994,11 +995,11 @@ describe("Subnets", () => {
       providers: [{ id: "p1", name: "МТС", lists: [{ id: "l1", name: "Основной",
         columns: [
           { key: "subnet", title: "Подсеть" }, { key: "asn", title: "ASN" },
-          { key: "asnname", title: "Название ASN" },
+          { key: "provider", title: "Провайдер" },
         ],
         rows: [
-          { id: "r1", values: { subnet: "10.0.0.0/8", asn: "AS3261", asnname: "Ростелеком" }, operators: {} },
-          { id: "r2", values: { subnet: "11.0.0.0/8", asn: "мусор", asnname: "Мусор" }, operators: {} },
+          { id: "r1", values: { subnet: "10.0.0.0/8", asn: "AS3261", provider: "Ростелеком" }, operators: {} },
+          { id: "r2", values: { subnet: "11.0.0.0/8", asn: "мусор", provider: "Мусор" }, operators: {} },
         ] }] }],
       operators: [],
     };
@@ -1022,11 +1023,11 @@ describe("Subnets", () => {
       providers: [{ id: "p1", name: "МТС", lists: [{ id: "l1", name: "Основной",
         columns: [
           { key: "subnet", title: "Подсеть" }, { key: "asn", title: "ASN" },
-          { key: "asnname", title: "Название ASN" }, { key: "netname", title: "Netname" },
+          { key: "provider", title: "Провайдер" }, { key: "netname", title: "Netname" },
         ],
         rows: [
-          // у r1 своё asnname — apply перезапишет его из справочника
-          { id: "r1", values: { subnet: "10.0.0.0/8", asn: "AS12345", asnname: "Старое" }, operators: {} },
+          // у r1 свой provider — apply перезапишет его из справочника
+          { id: "r1", values: { subnet: "10.0.0.0/8", asn: "AS12345", provider: "Старое" }, operators: {} },
           { id: "r2", values: { subnet: "11.0.0.0/8", asn: "AS999" }, operators: {} },
         ] }] }],
       operators: [],
@@ -1045,10 +1046,10 @@ describe("Subnets", () => {
       const apply = calls.find(c => c.url === "/api/subnets/asns/apply" && c.init?.method === "POST");
       expect(apply).toBeTruthy();
     });
-    // назад к подсетям: строки получили asnname/netname из справочника
+    // назад к подсетям: строки получили provider/netname из справочника
     fireEvent.click(screen.getByTestId("asn-back"));
     const row1 = (await screen.findByTestId("subnets-row-r1")).querySelectorAll("td");
-    expect(row1[2]).toHaveTextContent("Яндекс");      // asnname перезаписан
+    expect(row1[2]).toHaveTextContent("Яндекс");      // provider перезаписан
     expect(row1[3]).toHaveTextContent("RU-YANDEX");   // netname перенесён
     const row2 = screen.getByTestId("subnets-row-r2").querySelectorAll("td");
     expect(row2[3]).toHaveTextContent("RU-OTHER");    // запись только с netname
@@ -1073,7 +1074,7 @@ describe("Subnets", () => {
     expect(cells2[3]).toHaveTextContent("—");
   });
 
-  it("ASN: в asn-view колонки [Иконка, ASN, Организация, Netname, Страна, Тип ASN, Примечание, Действия]; страна/тип — ячейки записи", async () => {
+  it("ASN: в asn-view колонки [Иконка, ASN, Провайдер, Netname, Страна, Тип ASN, Примечание, Действия]; страна/тип — ячейки записи", async () => {
     installFetch({ asns: [
       { asn: "AS12345", name: "Яндекс", netname: "RU-YANDEX", country: "RU", asn_type: "hosting" },
       { asn: "AS999", name: "Без" },
@@ -1081,10 +1082,10 @@ describe("Subnets", () => {
     await openList();
     fireEvent.click(screen.getByTestId("asn-dir-btn"));
     await screen.findByTestId("asn-view");
-    // заголовки: «Название» переименовано в «Организация», добавлены Страна/Тип ASN
+    // заголовки: «Название» переименовано в «Провайдер», добавлены Страна/Тип ASN
     const headers = Array.from(screen.getByTestId("asn-view").querySelectorAll("th"))
       .map(th => th.textContent);
-    expect(headers).toEqual(["Иконка", "ASN", "Организация", "Netname", "Страна", "Тип ASN", "Примечание", "Действия"]);
+    expect(headers).toEqual(["Иконка", "ASN", "Провайдер", "Netname", "Страна", "Тип ASN", "Примечание", "Действия"]);
     // ячейки: страна и тип ASN из записи; у записи без них — «—»
     const cells1 = screen.getByTestId("asn-row-AS12345").querySelectorAll("td");
     expect(cells1[4]).toHaveTextContent("RU");        // Страна
@@ -1094,7 +1095,7 @@ describe("Subnets", () => {
     expect(cells2[5]).toHaveTextContent("—");
   });
 
-  it("таблица подсетей: asnname рендерится как «Организация», country — «Страна», asn_type — «Тип ASN» (независимо от title в columns)", async () => {
+  it("таблица подсетей: asnname рендерится из columns («Название ASN»), country — «Страна», asn_type — «Тип ASN»", async () => {
     const store = {
       providers: [{ id: "p1", name: "МТС", lists: [{ id: "l1", name: "Основной",
         columns: [
@@ -1114,10 +1115,11 @@ describe("Subnets", () => {
     await openList();
     const headers = Array.from(screen.getByTestId("subnets-table-scroll").querySelectorAll("th"))
       .map(th => th.textContent);
-    expect(headers).toContain("Организация");
+    // asnname больше не переопределяется как «Организация» — берётся title из columns
+    expect(headers).toContain("Название ASN");
+    expect(headers).not.toContain("Организация");
     expect(headers).toContain("Страна");
     expect(headers).toContain("Тип ASN");
-    expect(headers).not.toContain("Название ASN");
   });
 
   it("ASN: asn-back возвращает к подсетям; выбор списка в дереве тоже сбрасывает справочник", async () => {
@@ -1143,7 +1145,7 @@ describe("Subnets", () => {
     fireEvent.click(screen.getByTestId("asn-dir-btn"));
     const row = await screen.findByTestId("asn-row-AS12345");
     // редактирование: prompt'ы с текущими значениями
-    // (Организация, netname, страна, тип, примечание) → POST
+    // (Провайдер, netname, страна, тип, примечание) → POST
     const promptSpy = vi.spyOn(window, "prompt")
       .mockReturnValueOnce("Яндекс Облако")
       .mockReturnValueOnce("RU-YANDEX")
@@ -1221,16 +1223,16 @@ describe("Subnets", () => {
       .querySelector('img[src^="/api/subnets/asns/"]')).toBeNull();
   });
 
-  it("asnname строки: пустое значение подставляется из справочника (fallback), своё — важнее", async () => {
+  it("provider строки: пустое значение подставляется из справочника (fallback), своё — важнее", async () => {
     const store = {
       providers: [{ id: "p1", name: "МТС", lists: [{ id: "l1", name: "Основной",
         columns: [
           { key: "subnet", title: "Подсеть" }, { key: "asn", title: "ASN" },
-          { key: "asnname", title: "Название ASN" },
+          { key: "provider", title: "Провайдер" },
         ],
         rows: [
-          { id: "r1", values: { subnet: "10.0.0.0/8", asn: "AS12345", asnname: "" }, operators: {} },
-          { id: "r2", values: { subnet: "11.0.0.0/8", asn: "AS999", asnname: "Свой" }, operators: {} },
+          { id: "r1", values: { subnet: "10.0.0.0/8", asn: "AS12345", provider: "" }, operators: {} },
+          { id: "r2", values: { subnet: "11.0.0.0/8", asn: "AS999", provider: "Свой" }, operators: {} },
           { id: "r3", values: { subnet: "12.0.0.0/8", asn: "AS12345" }, operators: {} },
         ] }] }],
       operators: [],
@@ -1238,8 +1240,8 @@ describe("Subnets", () => {
     installFetch({ store, asns: [{ asn: "AS12345", name: "Яндекс" }] });
     await openList();
     const cell = (id: string) => screen.getByTestId(`subnets-row-${id}`).querySelectorAll("td")[2];
-    expect(cell("r1")).toHaveTextContent("Яндекс"); // пустое asnname → справочник
+    expect(cell("r1")).toHaveTextContent("Яндекс"); // пустой provider → справочник
     expect(cell("r2")).toHaveTextContent("Свой");   // своё значение важнее справочника
-    expect(cell("r3")).toHaveTextContent("Яндекс"); // отсутствующее asnname → справочник
+    expect(cell("r3")).toHaveTextContent("Яндекс"); // отсутствующий provider → справочник
   });
 });
