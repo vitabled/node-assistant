@@ -981,3 +981,71 @@ def test_asns_isolated_per_account():
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a2)}
     assert fresh["203.0.113.0/24"]["asnname"] == "Другой"
     assert client.get("/api/subnets/asns", headers=a1).json()["asns"][0]["name"] == "Яндекс"
+
+
+# ── иконки записей ASN (у ASN, а не у файлов/провайдеров) ─────
+def test_asn_icon_upload_serve_and_delete():
+    """POST /asns/{asn}/icon кладёт icon в запись; GET /asns/{asn}/icon отдаёт
+    файл; GET /asns возвращает icon; DELETE /asns/{asn} удаляет и иконку."""
+    a = _auth()
+    assert client.post("/api/subnets/asns", headers=a,
+                       json={"asn": "12345", "name": "Яндекс"}).status_code == 200
+    # новая запись получает пустое поле icon; GET до загрузки — 404
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS12345")
+    assert rec["icon"] == ""
+    assert client.get("/api/subnets/asns/AS12345/icon", headers=a).status_code == 404
+
+    # загрузка иконки (multipart png) → поле icon = asn_AS12345.png
+    r = client.post("/api/subnets/asns/AS12345/icon", headers=a,
+                    files={"file": ("icon.png", _PNG, "image/png")})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS12345")
+    assert rec["icon"] == "asn_AS12345.png"
+    # GET отдаёт файл с правильным content-type
+    r = client.get("/api/subnets/asns/AS12345/icon", headers=a)
+    assert r.status_code == 200 and r.content == _PNG
+    assert r.headers["content-type"].startswith("image/png")
+
+    # перезапись с другим расширением: старый файл заменяется
+    r = client.post("/api/subnets/asns/AS12345/icon", headers=a,
+                    files={"file": ("icon.svg", b"<svg/>", "image/svg+xml")})
+    assert r.status_code == 200
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS12345")
+    assert rec["icon"] == "asn_AS12345.svg"
+    r = client.get("/api/subnets/asns/AS12345/icon", headers=a)
+    assert r.status_code == 200 and r.content == b"<svg/>"
+    assert "image/svg" in r.headers["content-type"]
+
+    # удаление записи удаляет и иконку: запись ушла, GET icon — 404
+    assert client.delete("/api/subnets/asns/AS12345", headers=a).status_code == 200
+    assert client.get("/api/subnets/asns/AS12345/icon", headers=a).status_code == 404
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert all(x["asn"] != "AS12345" for x in asns)
+
+
+def test_asn_icon_upload_validation():
+    a = _auth()
+    client.post("/api/subnets/asns", headers=a, json={"asn": "12345", "name": "Яндекс"})
+    # не тот формат
+    r = client.post("/api/subnets/asns/AS12345/icon", headers=a,
+                    files={"file": ("icon.jpg", b"jpeg", "image/jpeg")})
+    assert r.status_code == 400 and "PNG" in r.json()["detail"]
+    # пустой файл
+    r = client.post("/api/subnets/asns/AS12345/icon", headers=a,
+                    files={"file": ("icon.png", b"", "image/png")})
+    assert r.status_code == 400
+    # больше 256 КБ
+    big = b"x" * (256 * 1024 + 1)
+    r = client.post("/api/subnets/asns/AS12345/icon", headers=a,
+                    files={"file": ("big.png", big, "image/png")})
+    assert r.status_code == 400 and "256" in r.json()["detail"]
+    # записи нет — 404; мусор в пути — 422
+    assert client.post("/api/subnets/asns/AS99999/icon", headers=a,
+                       files={"file": ("icon.png", _PNG, "image/png")}).status_code == 404
+    assert client.post("/api/subnets/asns/abc/icon", headers=a,
+                       files={"file": ("icon.png", _PNG, "image/png")}).status_code == 422
+    # файл не сохранился после битой загрузки
+    assert client.get("/api/subnets/asns/AS12345/icon", headers=a).status_code == 404

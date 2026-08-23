@@ -57,8 +57,9 @@ interface ImportResult { imported: number; skipped: number; errors: string[] }
  *  даже в плоском списке. В режиме правки цветов нет всегда. */
 type ColorMode = "off" | "groups" | "all";
 
-/** Запись справочника ASN (GET /api/subnets/asns). */
-interface AsnRec { asn: string; name: string; note?: string }
+/** Запись справочника ASN (GET /api/subnets/asns). icon — имя файла иконки
+ *  записи (если загружена; файл отдаёт GET /asns/{asn}/icon). */
+interface AsnRec { asn: string; name: string; note?: string; icon?: string }
 
 const api = (path: string, init?: RequestInit) =>
   fetch(`/api/subnets${path}`, init ? { headers: { "Content-Type": "application/json" }, ...init } : init);
@@ -230,10 +231,9 @@ export function Subnets() {
   const [colorMode, setColorMode] = useState<ColorMode>("groups");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Справочник ASN (per-account): asn → название, синхронизируется с asnname
-  // в строках подсетей на сервере при upsert. Свёрнут в кнопку шапки карточки;
-  // панель — выпадающая под шапкой (как ioOpen), один плоский список (не дерево).
+  // в строках подсетей на сервере при upsert. Отдельная рамка-вкладка под
+  // деревом файлов (всегда открыта), один плоский список (не дерево).
   const [asns, setAsns] = useState<AsnRec[]>([]);
-  const [asnOpen, setAsnOpen] = useState(false);
   const [asnNewAsn, setAsnNewAsn] = useState("");
   const [asnNewName, setAsnNewName] = useState("");
 
@@ -269,9 +269,9 @@ export function Subnets() {
   // «Типы ASN»: эвристика по текущим данным строк (без ip-api).
   const [typesBusy, setTypesBusy] = useState(false);
   const [typesResult, setTypesResult] = useState<{ updated: number; of: number } | null>(null);
-  // Загрузка иконки: один скрытый input, цель (провайдер/список) — в ref.
+  // Загрузка иконки ASN: один скрытый input, цель (номер ASN) — в ref.
   const iconInput = useRef<HTMLInputElement | null>(null);
-  const iconTarget = useRef<{ pid: string; lid?: string } | null>(null);
+  const iconAsnTarget = useRef<string | null>(null);
 
   const load = useCallback(() => {
     api("").then(r => r.json()).then(d => {
@@ -321,16 +321,13 @@ export function Subnets() {
     return m;
   }, [current]);
 
-  // Провайдер дерева по имени — для иконок у строк/групп (строки ссылаются
-  // на провайдера именем из values.provider, иконка хранится по id).
-  const providerByRow = useMemo(() => {
-    const m = new Map<string, Prov>();
-    for (const p of providers) m.set(p.name, p);
+  // asn → запись справочника: fallback asnname (когда у строки пустое
+  // значение) + иконка ASN для строк таблицы (если у записи она есть).
+  const asnMap = useMemo(() => {
+    const m = new Map<string, AsnRec>();
+    for (const a of asns) m.set(a.asn, a);
     return m;
-  }, [providers]);
-
-  // asn → название из справочника: fallback, когда у строки пустой asnname.
-  const asnMap = useMemo(() => new Map(asns.map(a => [a.asn, a.name])), [asns]);
+  }, [asns]);
 
   const toggleGroup = (id: string) =>
     setCollapsedGroups(prev => {
@@ -385,8 +382,6 @@ export function Subnets() {
   // визуальная обёртка: добавление/выделение/редактирование не меняются).
   // groupColor — цвет строки (лёгкий rgba-фон акцента группы/провайдера).
   const renderRow = (r: Row, groupColor?: string) => {
-    const provName = (r.values?.provider ?? "").trim();
-    const rowProv = provName ? providerByRow.get(provName) : undefined;
     return (
     <tr key={r.id} data-testid={`subnets-row-${r.id}`}
       style={groupColor ? { background: hexToRgba(groupColor, 0.06) } : undefined}>
@@ -420,18 +415,27 @@ export function Subnets() {
               ))}
             </span>
           ) : c.key === "subnet" ? (
-            <span className="flex items-center gap-1.5" style={{ pointerEvents: "none" }}>
-              {rowProv?.icon && (
-                <img src={`/api/subnets/provider-icon/${rowProv.id}`} alt=""
-                  width={12} height={12}
-                  style={{ borderRadius: 3, objectFit: "contain", flex: "none" }} />
-              )}
-              <ScanRowIcon id={r.id} state={rowScanStatus.get(r.id) ?? "none"} />
-              <span className="trunc" title={r.values?.[c.key] || ""}
-                style={{ color: "var(--t-hi)" }}>
-                {r.values?.[c.key] || "—"}
+            (() => {
+              // Иконка ASN слева от подсети: только если values.asn есть в
+              // справочнике и у записи загружена иконка (иконки теперь
+              // задаются у ASN, а не у провайдеров/списков).
+              const asn = (r.values?.asn ?? "").trim();
+              const rec = asn ? asnMap.get(asn) : undefined;
+              return (
+              <span className="flex items-center gap-1.5" style={{ pointerEvents: "none" }}>
+                {rec?.icon && (
+                  <img src={`/api/subnets/asns/${encodeURIComponent(asn)}/icon`} alt=""
+                    width={14} height={14} data-testid={`asn-row-icon-${r.id}`}
+                    style={{ borderRadius: 3, objectFit: "contain", flex: "none" }} />
+                )}
+                <ScanRowIcon id={r.id} state={rowScanStatus.get(r.id) ?? "none"} />
+                <span className="trunc" title={r.values?.[c.key] || ""}
+                  style={{ color: "var(--t-hi)" }}>
+                  {r.values?.[c.key] || "—"}
+                </span>
               </span>
-            </span>
+              );
+            })()
           ) : c.key === "asn_type" ? (
             <span>
               {r.values?.[c.key] ? (
@@ -447,7 +451,7 @@ export function Subnets() {
               style={{ color: "var(--t-mid)" }}>
               {/* asnname: пустое значение строки → название из справочника ASN */}
               {c.key === "asnname"
-                ? (r.values?.[c.key] || asnMap.get(r.values?.asn ?? "") || "—")
+                ? (r.values?.[c.key] || asnMap.get(r.values?.asn ?? "")?.name || "—")
                 : (r.values?.[c.key] || "—")}
             </span>
           )}
@@ -664,32 +668,32 @@ export function Subnets() {
     } finally { setTypesBusy(false); }
   };
 
-  // ── иконки провайдеров/списков ───────────────────────────────
-  // Один скрытый input на всю панель: кнопка запоминает цель (провайдер или
-  // список), выбор файла шлёт multipart POST, после — load() обновит дерево.
-  const pickIcon = (pid: string, lid?: string) => {
-    iconTarget.current = { pid, lid };
+  // ── иконки записей ASN ───────────────────────────────────────
+  // Один скрытый input на всю панель: кнопка запоминает цель (номер ASN),
+  // выбор файла шлёт multipart POST /asns/{asn}/icon, после — loadAsns()
+  // обновит справочник (иконки сами подтянутся к строкам с этим ASN).
+  const pickAsnIcon = (asn: string) => {
+    iconAsnTarget.current = asn;
     iconInput.current?.click();
   };
 
-  const uploadIcon = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const uploadAsnIcon = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    const t = iconTarget.current;
+    const asn = iconAsnTarget.current;
     e.target.value = "";
-    if (!file || !t) return;
+    if (!file || !asn) return;
     const fd = new FormData();
     fd.append("file", file);
-    const path = t.lid ? `/providers/${t.pid}/lists/${t.lid}/icon`
-                       : `/providers/${t.pid}/icon`;
     try {
-      const res = await fetch(`/api/subnets${path}`, { method: "POST", body: fd });
+      const res = await fetch(`/api/subnets/asns/${encodeURIComponent(asn)}/icon`,
+        { method: "POST", body: fd });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
         return;
       }
       toast("Иконка загружена", "success");
-      load();
+      loadAsns();
     } catch (err) {
       toast((err as Error).message, "error");
     }
@@ -909,14 +913,6 @@ export function Subnets() {
             <div key={p.id}>
               <div className="flex items-center gap-1 group" style={{ padding: "2px 4px" }}>
                 <span className="text-xs font-semibold trunc" style={{ color: "var(--t-hi)", flex: 1 }}>{p.name}</span>
-                {p.icon && (
-                  <img src={`/api/subnets/provider-icon/${p.id}`} alt=""
-                    width={14} height={14}
-                    style={{ borderRadius: 4, objectFit: "contain", flex: "none" }} />
-                )}
-                <button className="iconbtn" style={{ width: 20, height: 20 }} title="Иконка"
-                  data-testid={`provider-icon-btn-${p.id}`}
-                  onClick={() => pickIcon(p.id)}><ImageUp size={11} /></button>
                 <button className="iconbtn" style={{ width: 20, height: 20 }} title="Новый список"
                   onClick={() => addList(p.id)}><Plus size={11} /></button>
                 <button className="iconbtn" style={{ width: 20, height: 20 }} title="Переименовать"
@@ -948,6 +944,70 @@ export function Subnets() {
               onClick={() => setTreeOpen(true)}><ChevronRight size={13} /></button>
           )}
         </div>
+
+        {/* ── справочник ASN: отдельная рамка-вкладка под деревом ── */}
+        {/* Рамка всегда видна (как дерево файлов); заголовок — стилизован как
+            активная вкладка «ASN». Иконки задаются у записей ASN и сами
+            подтягиваются к строкам таблицы с этим ASN. */}
+        {treeOpen && (
+          <div className="card card-p" data-testid="asn-tab"
+            style={{ display: "flex", flexDirection: "column", gap: 6,
+              maxHeight: "max(220px, calc(100vh - 460px))", overflowY: "auto" }}>
+            <div className="flex items-center gap-2"
+              style={{ borderBottom: "2px solid var(--accent)", paddingBottom: 4 }}>
+              <BookOpen size={13} style={{ color: "var(--accent)" }} />
+              <span className="micro" style={{ color: "var(--accent)", margin: 0 }}>ASN</span>
+              <span className="text-[10px]" style={{ color: "var(--t-faint)" }}>{asns.length}</span>
+              <button className="iconbtn" style={{ marginLeft: "auto", width: 22, height: 22 }}
+                title="Добавить ASN" data-testid="asn-add"
+                onClick={addAsn} disabled={!asnNewAsn.trim()}><Plus size={13} /></button>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <input className="input font-mono text-xs" style={{ width: 96, flex: "none" }}
+                data-testid="asn-new-asn" aria-label="Номер ASN" placeholder="AS12345"
+                value={asnNewAsn} onChange={e => setAsnNewAsn(e.target.value)} />
+              <input className="input text-xs" style={{ flex: 1, minWidth: 0 }}
+                data-testid="asn-new-name" aria-label="Название ASN"
+                placeholder="Название (например Яндекс)"
+                value={asnNewName} onChange={e => setAsnNewName(e.target.value)} />
+              <button className="btn btn-primary btn-sm" style={{ fontSize: 11, flex: "none" }}
+                onClick={addAsn} disabled={!asnNewAsn.trim()}>
+                <Plus size={11} /> Добавить
+              </button>
+            </div>
+            {asns.length === 0 && (
+              <p className="hint" style={{ margin: 0 }}>Пусто — добавьте ASN (например 12345 → Яндекс).</p>
+            )}
+            <div className="flex flex-col gap-1" data-testid="asn-list">
+              {asns.map(a => (
+                <div key={a.asn} data-testid={`asn-item-${a.asn}`}
+                  className="flex items-center gap-1 group rounded-md"
+                  style={{ padding: "2px 4px" }}>
+                  {a.icon ? (
+                    <img src={`/api/subnets/asns/${encodeURIComponent(a.asn)}/icon`} alt=""
+                      width={14} height={14}
+                      style={{ borderRadius: 3, objectFit: "contain", flex: "none" }} />
+                  ) : (
+                    <span style={{ width: 14, flex: "none" }} />
+                  )}
+                  <span className="text-xs font-mono trunc" title={a.asn}
+                    style={{ color: "var(--t-hi)", flex: "none", minWidth: 56 }}>{a.asn}</span>
+                  <span className="text-xs trunc" title={a.note || a.name}
+                    style={{ color: a.name ? "var(--t-mid)" : "var(--t-faint)", flex: 1 }}>
+                    {a.name || "—"}
+                  </span>
+                  <button className="iconbtn" style={{ width: 20, height: 20 }} title="Иконка"
+                    data-testid={`asn-icon-upload-${a.asn}`}
+                    onClick={() => pickAsnIcon(a.asn)}><ImageUp size={10} /></button>
+                  <button className="iconbtn" style={{ width: 20, height: 20 }} title="Изменить"
+                    onClick={() => editAsn(a)}><Pencil size={10} /></button>
+                  <button className="iconbtn danger" style={{ width: 20, height: 20 }} title="Удалить"
+                    onClick={() => removeAsn(a)}><Trash2 size={10} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         </div>
 
         {/* ── таблица ── */}
@@ -961,24 +1021,12 @@ export function Subnets() {
             <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap" style={{ borderBottom: "1px solid var(--line-soft)", flex: "none" }}>
               <Table2 size={13} style={{ color: "var(--t-low)" }} />
               <span className="micro">{current.name}</span>
-              {current.icon && (
-                <img src={`/api/subnets/list-icon/${sel!.pid}/${sel!.lid}`} alt=""
-                  width={16} height={16}
-                  style={{ borderRadius: 4, objectFit: "contain", flex: "none" }} />
-              )}
               <span className="text-[10px]" style={{ color: "var(--t-faint)" }}>{current.rows.length} строк</span>
               <button className={`btn btn-sm ${ioOpen ? "btn-primary" : "btn-soft"}`}
                 style={{ marginLeft: "auto", fontSize: 11 }}
                 data-testid="subnets-io-toggle"
                 onClick={() => { setIoOpen(o => !o); setImpResult(null); }}>
                 <Download size={11} /> Импорт/экспорт
-              </button>
-              <button className={`btn btn-sm ${asnOpen ? "btn-primary" : "btn-soft"}`}
-                style={{ fontSize: 11 }}
-                data-testid="asn-toggle"
-                title="Справочник ASN — один плоский список (без дерева)"
-                onClick={() => setAsnOpen(o => !o)}>
-                <BookOpen size={11} /> ASN ({asns.length})
               </button>
               {latEnabled && (
                 <button className={`btn btn-sm ${scanOpen ? "btn-primary" : "btn-soft"}`}
@@ -1008,11 +1056,6 @@ export function Subnets() {
                 <option value="groups">Цвет: Группы</option>
                 <option value="all">Цвет: Везде</option>
               </select>
-              <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
-                data-testid="list-icon-upload" title="Загрузить иконку списка (png/svg/webp)"
-                onClick={() => pickIcon(sel!.pid, sel!.lid)}>
-                <ImageUp size={11} /> Иконка
-              </button>
               <button className={`btn btn-sm ${editMode ? "btn-primary" : "btn-soft"}`}
                 style={{ fontSize: 11 }}
                 data-testid="table-edit-toggle"
@@ -1021,48 +1064,6 @@ export function Subnets() {
                 {editMode ? "Готово" : "Редактировать таблицу"}
               </button>
             </div>
-
-            {asnOpen && (
-              <div className="flex flex-col gap-2 px-3 py-2.5" data-testid="asn-panel"
-                style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)", flex: "none" }}>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="micro" style={{ margin: 0 }}>Справочник ASN</span>
-                  <input className="input font-mono text-xs" style={{ width: 110 }}
-                    data-testid="asn-new-asn" aria-label="Номер ASN" placeholder="AS12345"
-                    value={asnNewAsn} onChange={e => setAsnNewAsn(e.target.value)} />
-                  <input className="input text-xs" style={{ width: 200 }}
-                    data-testid="asn-new-name" aria-label="Название ASN"
-                    placeholder="Название (например Яндекс)"
-                    value={asnNewName} onChange={e => setAsnNewName(e.target.value)} />
-                  <button className="btn btn-primary btn-sm" style={{ fontSize: 11 }}
-                    data-testid="asn-add" onClick={addAsn} disabled={!asnNewAsn.trim()}>
-                    <Plus size={11} /> Добавить
-                  </button>
-                </div>
-                {asns.length === 0 && (
-                  <p className="hint" style={{ margin: 0 }}>Пусто — добавьте ASN (например 12345 → Яндекс).</p>
-                )}
-                <div className="flex flex-col gap-1" data-testid="asn-list"
-                  style={{ maxHeight: "max(140px, calc(100vh - 620px))", overflowY: "auto" }}>
-                  {asns.map(a => (
-                    <div key={a.asn} data-testid={`asn-item-${a.asn}`}
-                      className="flex items-center gap-1 group rounded-md"
-                      style={{ padding: "2px 4px" }}>
-                      <span className="text-xs font-mono trunc" title={a.asn}
-                        style={{ color: "var(--t-hi)", flex: "none", minWidth: 56 }}>{a.asn}</span>
-                      <span className="text-xs trunc" title={a.note || a.name}
-                        style={{ color: a.name ? "var(--t-mid)" : "var(--t-faint)", flex: 1 }}>
-                        {a.name || "—"}
-                      </span>
-                      <button className="iconbtn" style={{ width: 20, height: 20 }} title="Изменить"
-                        onClick={() => editAsn(a)}><Pencil size={10} /></button>
-                      <button className="iconbtn danger" style={{ width: 20, height: 20 }} title="Удалить"
-                        onClick={() => removeAsn(a)}><Trash2 size={10} /></button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {ioOpen && (
               <div className="flex flex-col gap-2 px-3 py-2.5" data-testid="subnets-io-panel"
@@ -1316,8 +1317,6 @@ export function Subnets() {
                     const gids = g.rows.map(r => r.id);
                     const allPicked = gids.length > 0 && gids.every(id => picked.includes(id));
                     const somePicked = gids.some(id => picked.includes(id));
-                    // Иконка группы = иконка провайдера дерева (по имени).
-                    const gProv = providerByRow.get(g.label);
                     return (
                       <Fragment key={g.id}>
                         {/* Акцентный заголовок группы: прозрачный фон + полный
@@ -1344,11 +1343,6 @@ export function Subnets() {
                                   onChange={() => toggleGroupPick(g.id)} />
                               )}
                               {collapsedGroups.has(g.id) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                              {gProv?.icon && (
-                                <img src={`/api/subnets/provider-icon/${gProv.id}`} alt=""
-                                  width={14} height={14}
-                                  style={{ borderRadius: 4, objectFit: "contain", flex: "none" }} />
-                              )}
                               <span>{g.label} ({g.rows.length})</span>
                             </span>
                           </td>
@@ -1372,6 +1366,7 @@ export function Subnets() {
                 placeholder="203.0.113.0/24 — можно несколько, через запятую или с новой строки"
                 style={{ resize: "vertical", minHeight: 34 }} />
               <button className="btn btn-primary" style={{ flex: "none" }} onClick={addRows}
+                data-testid="subnets-add-rows"
                 disabled={busy || !newSubnet.trim()}>
                 {busy ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} Добавить
               </button>
@@ -1380,7 +1375,7 @@ export function Subnets() {
         )}
       </div>
       <input ref={iconInput} type="file" hidden accept=".png,.svg,.webp"
-        data-testid="subnets-icon-file" onChange={uploadIcon} />
+        data-testid="subnets-icon-file" onChange={uploadAsnIcon} />
     </Page>
   );
 }

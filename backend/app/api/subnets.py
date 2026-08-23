@@ -57,13 +57,47 @@ async def upsert_asn(body: AsnBody):
 @router.delete("/asns/{asn}")
 async def delete_asn(asn: str):
     """Удалить запись справочника. asnname в строках подсетей НЕ трогается —
-    остаётся последнее название из справочника."""
+    остаётся последнее название из справочника. Файл иконки записи удаляется."""
     try:
         key = asn_store.normalize_asn(asn)
     except ValueError as e:
         raise HTTPException(422, str(e))
     asn_store.delete_asn(key)
     return {"ok": True}
+
+
+# ── иконки записей ASN (у ASN, а не у файлов/провайдеров) ─────
+@router.post("/asns/{asn}/icon")
+async def upload_asn_icon(asn: str, file: UploadFile = File(...)):
+    """Загрузить иконку записи ASN (png/svg/webp ≤ 256 КБ, multipart).
+    Иконка сама подтягивается к подсетям с этим ASN (GET /asns/{asn}/icon)."""
+    try:
+        key = asn_store.normalize_asn(asn)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    try:
+        asn_store.save_asn_icon(key, await file.read(), file.filename or "")
+    except KeyError as e:
+        raise _not_found(e)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@router.get("/asns/{asn}/icon")
+async def get_asn_icon(asn: str):
+    """Файл иконки записи ASN (404 — записи нет или иконка не загружена)."""
+    try:
+        key = asn_store.normalize_asn(asn)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    try:
+        path = asn_store.asn_icon_file(key)
+    except KeyError as e:
+        raise _not_found(e)
+    if path is None:
+        raise HTTPException(404, "Иконка не загружена")
+    return FileResponse(path)
 
 
 class ProviderBody(BaseModel):

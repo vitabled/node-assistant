@@ -1,12 +1,19 @@
 """«Подсети» (Обходы БС): справочник ASN (per-account).
 
 Хранилище `accounts/<id>/asns.json`:
-  asns: [{asn: "AS12345", name: "Яндекс", note: "...", updated_at: "..."}]
+  asns: [{asn: "AS12345", name: "Яндекс", note: "...", icon: "asn_AS12345.png",
+          updated_at: "..."}]
 
 Ключ ASN всегда нормализован — «AS» + цифры («12345» → «AS12345»). Справочник
 авторитетнее ручных значений asnname в строках подсетей: при upsert API
 синхронизирует asnname во всех списках (см. subnets_store.apply_asn_name);
 при удалении строки подсетей НЕ трогаются.
+
+Иконки задаются у ЗАПИСЕЙ ASN (не у файлов/провайдеров): файл лежит в
+DATA_DIR/subnets_icons (общая папка с иконками провайдеров/списков — те
+оставлены для совместимости), имя — `asn_<ASN>.<ext>`; в записи хранится
+имя файла в поле `icon`. Иконка сама подтягивается к подсетям с этим ASN
+(фронт показывает её по GET /asns/{asn}/icon).
 """
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.services import accounts
+from app.services import subnets_store
 
 _LOCK = threading.Lock()
 MAX_ASNS = 500
@@ -83,7 +91,7 @@ def upsert_asn(asn: str, name: str = "", note: str = "",
         if len(data["asns"]) >= MAX_ASNS:
             raise ValueError(f"Не больше {MAX_ASNS} записей в справочнике")
         rec = {"asn": key, "name": name.strip(),
-               "note": (note or "").strip(),
+               "note": (note or "").strip(), "icon": "",
                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
         data["asns"].append(rec)
     else:
@@ -97,8 +105,60 @@ def upsert_asn(asn: str, name: str = "", note: str = "",
 
 def delete_asn(asn: str, account_id: Optional[str] = None) -> None:
     """Удалить запись справочника. Строки подсетей НЕ трогаются (asnname
-    остаётся последним известным названием)."""
+    остаётся последним известным названием). Файл иконки записи удаляется."""
     key = normalize_asn(asn)
     data = _load(account_id)
+    rec = next((x for x in data["asns"] if x["asn"] == key), None)
+    if rec and rec.get("icon"):
+        try:
+            (subnets_store._icons_dir(account_id) / rec["icon"]).unlink()
+        except OSError:
+            pass
     data["asns"] = [x for x in data["asns"] if x["asn"] != key]
+    _save(data, account_id)
+
+
+# ── иконки записей ASN (файлы в DATA_DIR/subnets_icons, раздача через API) ──
+def save_asn_icon(asn: str, blob: bytes, filename: str,
+                  account_id: Optional[str] = None) -> str:
+    """Загрузить иконку записи ASN: файл `asn_<ASN>.<ext>` в DATA_DIR +
+    rec['icon'] (валидация png/svg/webp ≤ 256 КБ — как у провайдеров/списков,
+    общий код subnets_store). KeyError — записи нет."""
+    key = normalize_asn(asn)
+    data = _load(account_id)
+    rec = next((x for x in data["asns"] if x["asn"] == key), None)
+    if rec is None:
+        raise KeyError(key)
+    name = subnets_store._save_icon(f"asn_{key}", blob, filename, account_id)
+    rec["icon"] = name
+    rec["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _save(data, account_id)
+    return name
+
+
+def asn_icon_file(asn: str, account_id: Optional[str] = None) -> Optional[Path]:
+    """Путь к файлу иконки записи ASN (None — не загружена). KeyError —
+    записи нет."""
+    key = normalize_asn(asn)
+    rec = get_asn(key, account_id)
+    if rec is None:
+        raise KeyError(key)
+    name = rec.get("icon") or ""
+    return subnets_store.icon_file(name, account_id)
+
+
+def delete_asn_icon(asn: str, account_id: Optional[str] = None) -> None:
+    """Удалить иконку записи ASN (файл + поле). KeyError — записи нет."""
+    key = normalize_asn(asn)
+    data = _load(account_id)
+    rec = next((x for x in data["asns"] if x["asn"] == key), None)
+    if rec is None:
+        raise KeyError(key)
+    name = rec.get("icon") or ""
+    if name:
+        try:
+            (subnets_store._icons_dir(account_id) / name).unlink()
+        except OSError:
+            pass
+    rec.pop("icon", None)
     _save(data, account_id)
