@@ -45,6 +45,16 @@ OPERATORS = [
     {"key": "tmobile", "label": "T-Mobile"},
 ]
 
+# Имена операторов как они встречаются в строках (TSV LatencyLab и др.)
+# → ключи OPERATORS. Проверяется подстрокой (регистр не важен).
+_OPERATOR_ALIASES = {
+    "т-мобайл": "tmobile", "t-mobile": "tmobile", "tmobile": "tmobile",
+    "мегафон": "megafon", "megafon": "megafon",
+    "билайн": "beeline", "beeline": "beeline",
+    "мтс": "mts", "mts": "mts",
+    "tele2": "tele2", "т2": "tele2", "t2": "tele2",
+}
+
 _ASN_NUM_RE = re.compile(r"AS(\d+)")
 
 
@@ -228,16 +238,21 @@ def _row_from_dict(raw: dict, op_keys: set) -> tuple[Optional[dict], Optional[st
         return None, str(exc)
     values = {"subnet": subnet, "ipver": ipver,
               "date": time.strftime("%Y-%m-%d")}
-    operators = {k: True for k in op_keys}
+    operators = {k: False for k in op_keys}
     for k, v in raw.items():
         if k in ("subnet", "id", "values") or v is None or v == "":
             continue
         if k == "operator":
-            key = str(v).strip().lower()
-            if key in op_keys:
-                operators[key] = True
-            else:
-                values[k] = str(v)  # неизвестный оператор — сохранить как есть
+            # Строка вида «Т-Мобайл + МегаФон + Билайн + Т2» (или англ.)
+            # → флаги operators. Неизвестные имена — в values как есть.
+            found = False
+            op_str = str(v).lower()
+            for name, okey in _OPERATOR_ALIASES.items():
+                if name in op_str:
+                    operators[okey] = True
+                    found = True
+            if not found:
+                values[k] = str(v)
         elif k == "operators" and isinstance(v, dict):
             for ok, ov in v.items():
                 if ok in op_keys:

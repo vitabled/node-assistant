@@ -350,7 +350,7 @@ def test_rows_unknown_operator_kept_as_is():
     assert r.status_code == 201
     row = _rows(a)[0]
     assert row["values"]["operator"] == "yota"  # как есть, без падения
-    assert row["operators"]["mts"] is True
+    assert row["operators"]["mts"] is False  # неизвестный оператор → все флаги False
     # битая строка в пачке не убивает остальные
     r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
                     json={"rows": [{"subnet": "мусор", "country": "XX"},
