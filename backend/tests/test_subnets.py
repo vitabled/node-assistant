@@ -983,6 +983,114 @@ def test_asns_isolated_per_account():
     assert client.get("/api/subnets/asns", headers=a1).json()["asns"][0]["name"] == "Яндекс"
 
 
+# ── синхронизация справочника из списков подсетей (POST /asns/sync) ──
+def _mk_rows_with_asnname(a, pid, lid):
+    """Строки для sync: 2 валидные пары (asn+asnname), мусорный asn,
+    строка без asn вовсе."""
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                    json={"rows": [
+                        {"subnet": "203.0.113.0/24", "asn": "AS12345", "asnname": "Яндекс"},
+                        {"subnet": "198.51.100.0/24", "asn": "AS3261", "asnname": "Ростелеком"},
+                        {"subnet": "192.0.2.0/24", "asn": "мусор", "asnname": "Мусор"},
+                        {"subnet": "10.0.0.0/8"},
+                    ]})
+    assert r.status_code == 201, r.text
+
+
+def test_asns_sync_collects_from_lists_adds_missing():
+    """POST /asns/sync: пары (asn → asnname) из ВСЕХ списков попадают в
+    справочник; мусорный asn и строка без asn пропускаются; повторный sync
+    не дублирует записи (added=0); строки подсетей не меняются."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    _mk_rows_with_asnname(a, pid, lid)
+    # вторая пара провайдер/список — sync идёт по всем спискам
+    p2 = client.post("/api/subnets/providers", headers=a, json={"name": "Билайн"}).json()
+    l2 = client.post(f"/api/subnets/providers/{p2['id']}/lists", headers=a,
+                     json={"name": "Второй"}).json()
+    client.post(f"/api/subnets/providers/{p2['id']}/lists/{l2['id']}/rows", headers=a,
+                json={"rows": [{"subnet": "2001:db8::/32", "asn": "as999",
+                                "asnname": "Другой"}]})  # нижний регистр тоже норм
+
+    r = client.post("/api/subnets/asns/sync", headers=a)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["added"] == 3 and body["filled"] == 0 and body["total"] == 3
+    by_asn = {x["asn"]: x["name"] for x in client.get("/api/subnets/asns",
+                                                      headers=a).json()["asns"]}
+    assert by_asn == {"AS12345": "Яндекс", "AS3261": "Ростелеком", "AS999": "Другой"}
+    # строки подсетей не тронуты: asnname в них остался как был
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс"
+
+    # повторный sync — дубликатов нет
+    r2 = client.post("/api/subnets/asns/sync", headers=a)
+    assert r2.json() == {"ok": True, "added": 0, "filled": 0, "total": 3}
+
+
+def test_asns_sync_keeps_dictionary_name_over_rows():
+    """Существующая запись с непустым name не перезаписывается из строк
+    (справочник авторитетнее); отсутствующие — добавляются."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "203.0.113.0/24", "asn": "AS3261", "asnname": "Новое"},
+                    {"subnet": "198.51.100.0/24", "asn": "AS12345", "asnname": "Яндекс"},
+                ]})
+    # в справочнике AS3261 уже есть с другим названием
+    client.post("/api/subnets/asns", headers=a, json={"asn": "AS3261", "name": "Старое"})
+
+    r = client.post("/api/subnets/asns/sync", headers=a)
+    assert r.status_code == 200
+    assert r.json()["added"] == 1 and r.json()["filled"] == 0
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    rec = next(x for x in asns if x["asn"] == "AS3261")
+    assert rec["name"] == "Старое"  # НЕ перезаписано из файла
+    assert any(x["asn"] == "AS12345" and x["name"] == "Яндекс" for x in asns)
+
+
+def test_asns_sync_fills_empty_name_in_dictionary():
+    """У существующей записи с пустым name название заполняется из строк;
+    примечание при этом сохраняется."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [{"subnet": "203.0.113.0/24", "asn": "12345",
+                                "asnname": "Яндекс"}]})
+    # запись есть, но без названия (и с примечанием)
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "", "note": "важно"})
+
+    r = client.post("/api/subnets/asns/sync", headers=a)
+    assert r.status_code == 200
+    assert r.json()["added"] == 0 and r.json()["filled"] == 1
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS12345")
+    assert rec["name"] == "Яндекс"
+    assert rec["note"] == "важно"  # примечание не затёрто
+
+
+def test_asns_sync_respects_max(monkeypatch):
+    """Лимит MAX_ASNS: когда справочник упирается в потолок, sync добавляет
+    сколько влезает и не падает."""
+    import app.services.asn_store as asn_store
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "203.0.113.0/24", "asn": "AS1", "asnname": "Один"},
+                    {"subnet": "198.51.100.0/24", "asn": "AS2", "asnname": "Два"},
+                    {"subnet": "192.0.2.0/24", "asn": "AS3", "asnname": "Три"},
+                ]})
+    monkeypatch.setattr(asn_store, "MAX_ASNS", 2)
+    r = client.post("/api/subnets/asns/sync", headers=a)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["added"] == 2 and body["total"] == 2
+
+
 # ── иконки записей ASN (у ASN, а не у файлов/провайдеров) ─────
 def test_asn_icon_upload_serve_and_delete():
     """POST /asns/{asn}/icon кладёт icon в запись; GET /asns/{asn}/icon отдаёт

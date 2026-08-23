@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, ImageUp, Loader2, Pencil, Plus, Sparkles, Table2,
+  Activity, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, ImageUp, Loader2, Pencil, Plus, RefreshCw, Sparkles, Table2,
   Trash2, Upload, X,
 } from "lucide-react";
 import { Page, PageHeader } from "../../theme/ui";
@@ -237,6 +237,7 @@ export function Subnets() {
   const [asnNewAsn, setAsnNewAsn] = useState("");
   const [asnNewName, setAsnNewName] = useState("");
   const [asnView, setAsnView] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   // ── Latency Lab ──
   const [latEnabled, setLatEnabled] = useState(false);
@@ -510,6 +511,25 @@ export function Subnets() {
   const removeAsn = (a: AsnRec) => {
     if (!window.confirm(`Удалить ASN «${a.asn}» из справочника?`)) return;
     void mutateAsn(`/asns/${encodeURIComponent(a.asn)}`, "DELETE", undefined, "ASN удалён");
+  };
+  const syncAsns = async () => {
+    // Собрать ASN/названия из ВСЕХ списков подсетей в справочник (POST
+    // /asns/sync): добавляет отсутствующие, заполняет пустые name, не
+    // перезаписывает существующие. Строки подсетей сервер не меняет.
+    setSyncBusy(true);
+    try {
+      const res = await api("/asns/sync", { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+        return;
+      }
+      toast(`Синхронизировано: добавлено ${d.added ?? 0}, заполнено ${d.filled ?? 0}`, "success");
+      loadAsns();
+      load();
+    } finally {
+      setSyncBusy(false);
+    }
   };
 
   const addProvider = () => {
@@ -979,6 +999,13 @@ export function Subnets() {
               <BookOpen size={13} style={{ color: "var(--t-low)" }} />
               <span className="micro">Справочник ASN</span>
               <span className="text-[10px]" style={{ color: "var(--t-faint)" }}>{asns.length}</span>
+              <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
+                data-testid="asn-sync"
+                title="Собрать ASN и названия из списков подсетей в справочник"
+                onClick={() => void syncAsns()} disabled={syncBusy}>
+                {syncBusy ? <Loader2 size={11} className="spin" /> : <RefreshCw size={11} />}
+                Синхронизировать
+              </button>
               <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto", fontSize: 11 }}
                 data-testid="asn-add"
                 onClick={addAsn} disabled={!asnNewAsn.trim()}>

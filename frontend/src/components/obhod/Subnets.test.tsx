@@ -132,6 +132,32 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
       }
       return json({ ok: true, asns: asnList });
     }
+    if (url === "/api/subnets/asns/sync") {
+      // как backend: уникальные пары (asn → asnname) из строк store →
+      // в asnList (добавить отсутствующие, заполнить пустые name, не
+      // перезаписывать непустые; мусорный asn пропустить)
+      const st = (opts?.store ?? STORE) as {
+        providers?: { lists?: { rows?: { values?: Record<string, string> }[] }[] }[];
+      };
+      const pairs = new Map<string, string>();
+      for (const p of st.providers ?? [])
+        for (const l of p.lists ?? [])
+          for (const r of l.rows ?? []) {
+            const asn = String(r.values?.asn ?? "").trim();
+            const m = /(\d+)/.exec(asn);
+            if (!m) continue;
+            const name = String(r.values?.asnname ?? "").trim();
+            const key = "AS" + m[1];
+            if (name && !pairs.has(key)) pairs.set(key, name);
+          }
+      let added = 0, filled = 0;
+      for (const [key, name] of pairs) {
+        const i = asnList.findIndex(x => x.asn === key);
+        if (i < 0) { asnList.push({ asn: key, name, note: "", icon: "" }); added++; }
+        else if (!(asnList[i].name ?? "").trim()) { asnList[i] = { ...asnList[i], name }; filled++; }
+      }
+      return json({ ok: true, added, filled, total: asnList.length });
+    }
     if (url.startsWith("/api/subnets/asns/")) {
       const parts = url.split("/").filter(Boolean); // [..., "asns", "AS12345"] или [..., "AS12345", "icon"]
       const tail = decodeURIComponent(parts[parts.length - 1]);
@@ -934,6 +960,34 @@ describe("Subnets", () => {
     });
     // после мутации — loadAsns() перезагрузил справочник, новая запись видна
     expect(await screen.findByTestId("asn-row-AS99999")).toHaveTextContent("Новый");
+  });
+
+  it("ASN: «Синхронизировать» (asn-sync) шлёт POST /asns/sync и наполняет справочник из строк", async () => {
+    const store = {
+      providers: [{ id: "p1", name: "МТС", lists: [{ id: "l1", name: "Основной",
+        columns: [
+          { key: "subnet", title: "Подсеть" }, { key: "asn", title: "ASN" },
+          { key: "asnname", title: "Название ASN" },
+        ],
+        rows: [
+          { id: "r1", values: { subnet: "10.0.0.0/8", asn: "AS3261", asnname: "Ростелеком" }, operators: {} },
+          { id: "r2", values: { subnet: "11.0.0.0/8", asn: "мусор", asnname: "Мусор" }, operators: {} },
+        ] }] }],
+      operators: [],
+    };
+    const calls = installFetch({ store, asns: [] });
+    await openList();
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
+    fireEvent.click(screen.getByTestId("asn-sync"));
+    await waitFor(() => {
+      const sync = calls.find(c => c.url === "/api/subnets/asns/sync" && c.init?.method === "POST");
+      expect(sync).toBeTruthy();
+    });
+    // после sync — loadAsns() перезагрузил справочник: запись из строки
+    // появилась (asn нормализован), мусорный asn проигнорирован
+    expect(await screen.findByTestId("asn-row-AS3261")).toHaveTextContent("Ростелеком");
+    expect(screen.queryByTestId("asn-row-ASмусор")).toBeNull();
   });
 
   it("ASN: asn-back возвращает к подсетям; выбор списка в дереве тоже сбрасывает справочник", async () => {

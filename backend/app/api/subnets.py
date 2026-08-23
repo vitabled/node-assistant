@@ -54,6 +54,48 @@ async def upsert_asn(body: AsnBody):
     return {"ok": True, "asn": rec, "updated_rows": updated_rows}
 
 
+@router.post("/asns/sync")
+async def sync_asns():
+    """Собрать все уникальные пары (values.asn → values.asnname) из ВСЕХ
+    списков подсетей аккаунта и добавить их в справочник ASN.
+
+    Справочник авторитетнее файлов: у существующих записей name НЕ
+    перезаписывается (пустое name заполняется из строк). Невалидные asn
+    пропускаются, лимит MAX_ASNS соблюдается (что влезло — добавлено).
+    Строки подсетей не меняются. Ответ: {ok, added, filled, total}."""
+    data = store.get_store()
+    pairs: dict[str, str] = {}  # asn → первое непустое asnname
+    for p in data.get("providers", []):
+        for l in p.get("lists", []):
+            for row in l.get("rows", []):
+                values = row.get("values") or {}
+                raw = str(values.get("asn") or "").strip()
+                if not raw:
+                    continue
+                try:
+                    key = asn_store.normalize_asn(raw)
+                except ValueError:
+                    continue  # мусор в asn — пропускаем
+                name = str(values.get("asnname") or "").strip()
+                if name and key not in pairs:
+                    pairs[key] = name
+    added, filled = 0, 0
+    for key, name in pairs.items():
+        existing = asn_store.get_asn(key)
+        if existing is None:
+            try:
+                asn_store.upsert_asn(key, name)
+            except ValueError:
+                continue  # упёрлись в MAX_ASNS — добавляем сколько можем
+            added += 1
+        elif not str(existing.get("name") or "").strip():
+            # пустое name в справочнике — заполняем из строк (note сохраняем)
+            asn_store.upsert_asn(key, name, note=existing.get("note") or "")
+            filled += 1
+    return {"ok": True, "added": added, "filled": filled,
+            "total": len(asn_store.list_asns())}
+
+
 @router.delete("/asns/{asn}")
 async def delete_asn(asn: str):
     """Удалить запись справочника. asnname в строках подсетей НЕ трогается —
