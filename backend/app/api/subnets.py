@@ -134,6 +134,29 @@ async def sync_asns():
             "total": len(asn_store.list_asns())}
 
 
+@router.post("/asns/enrich-types")
+async def enrich_asn_types():
+    """Тип ASN (isp/hosting/business) для КАЖДОЙ записи справочника — эвристика
+    _asn_type по name (org) / netname / note (provider и country не
+    используются), без ip-api. Пустые asn_type заполняются, отличающиеся
+    перезаписываются (эвристика авторитетна, как enrich-types для строк);
+    записи без данных (все три поля пусты) не трогаются. Роут объявлен ДО
+    DELETE /asns/{asn}, чтобы «enrich-types» не был перехвачен как asn.
+    Ответ: {ok, updated, of}."""
+    updated = 0
+    recs = asn_store.list_asns()
+    for rec in recs:
+        t = store._asn_type(str(rec.get("name") or ""),
+                            str(rec.get("netname") or ""),
+                            str(rec.get("note") or ""), "")
+        if not t or str(rec.get("asn_type") or "").strip() == t:
+            continue  # данных нет или тип уже такой — не трогаем
+        asn_store.upsert_asn(rec["asn"], note=rec.get("note") or "",
+                             asn_type=t)
+        updated += 1
+    return {"ok": True, "updated": updated, "of": len(recs)}
+
+
 @router.delete("/asns/{asn}")
 async def delete_asn(asn: str):
     """Удалить запись справочника. Значения в строках подсетей НЕ трогаются —

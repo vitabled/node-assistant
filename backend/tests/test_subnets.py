@@ -971,6 +971,71 @@ def test_asns_delete_removes_record_keeps_row_values():
     assert client.delete("/api/subnets/asns/abc", headers=a).status_code == 422
 
 
+# ── типы ASN в справочнике (POST /asns/enrich-types) ─────────
+def test_asns_enrich_types_fills_empty_and_overwrites():
+    """POST /asns/enrich-types: тип каждой записи — эвристика _asn_type по
+    name/netname/note (hosting → isp → business); пустые asn_type
+    заполняются, отличающиеся перезаписываются, записи без данных не
+    трогаются, note сохраняется; ответ {ok, updated, of}."""
+    a = _auth()
+    # hosting (Selectel), isp (Ростелеком), business (ПФР), без данных
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "49505", "name": "Selectel", "netname": "RU-SELECTEL"})
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "3261", "name": "Ростелеком"})
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "11111", "name": "ПФР", "note": "пенсионный фонд"})
+    client.post("/api/subnets/asns", headers=a, json={"asn": "22222"})
+    # неверный тип вручную → эвристика перезапишет
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "33333", "name": "Selectel", "asn_type": "isp"})
+
+    r = client.post("/api/subnets/asns/enrich-types", headers=a)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body == {"ok": True, "updated": 4, "of": 5}
+    by_asn = {x["asn"]: x for x in
+              client.get("/api/subnets/asns", headers=a).json()["asns"]}
+    assert by_asn["AS49505"]["asn_type"] == "hosting"
+    assert by_asn["AS3261"]["asn_type"] == "isp"
+    assert by_asn["AS11111"]["asn_type"] == "business"
+    assert by_asn["AS33333"]["asn_type"] == "hosting"  # перезаписан
+    assert "asn_type" not in by_asn["AS22222"]          # без данных — не тронут
+    # note не затёрт (upsert с пустым note не должен чистить)
+    assert by_asn["AS11111"]["note"] == "пенсионный фонд"
+
+
+def test_asns_enrich_types_idempotent():
+    """Повторный вызов с теми же данными → updated=0 (типы уже совпадают)."""
+    a = _auth()
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "49505", "name": "Selectel", "netname": "RU-SELECTEL"})
+    client.post("/api/subnets/asns", headers=a, json={"asn": "3261", "name": "Ростелеком"})
+    r1 = client.post("/api/subnets/asns/enrich-types", headers=a)
+    assert r1.json() == {"ok": True, "updated": 2, "of": 2}
+    r2 = client.post("/api/subnets/asns/enrich-types", headers=a)
+    assert r2.json() == {"ok": True, "updated": 0, "of": 2}
+
+
+def test_asns_enrich_types_route_not_shadowed_by_delete():
+    """POST /asns/enrich-types — литеральный роут, не уходит в
+    DELETE /asns/{asn}: запись не удаляется, запись «enrich-types» не
+    создаётся, DELETE «enrich-types» — 422 (мусорный asn)."""
+    a = _auth()
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "Selectel"})
+    r = client.post("/api/subnets/asns/enrich-types", headers=a)
+    assert r.status_code == 200 and r.json()["updated"] == 1
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert any(x["asn"] == "AS12345" and x["asn_type"] == "hosting" for x in asns)
+    assert all(x["asn"] != "ASenrich-types" for x in asns)
+    # DELETE с «enrich-types» как asn — 422, запись жива
+    assert client.delete("/api/subnets/asns/enrich-types",
+                         headers=a).status_code == 422
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert any(x["asn"] == "AS12345" for x in asns)
+
+
 def test_asns_isolated_per_account():
     """Справочник per-account: записи одного аккаунта не видны другому."""
     a1, a2 = _auth(), _auth()

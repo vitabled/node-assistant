@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, ImageUp, Loader2, Pencil, Plus, RefreshCw, Sparkles, Table2,
-  Trash2, Upload, X,
+  Tag, Trash2, Upload, X,
 } from "lucide-react";
 import { Page, PageHeader } from "../../theme/ui";
 import { toast } from "../infra/Toast";
@@ -254,6 +254,8 @@ export function Subnets() {
   const [asnView, setAsnView] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
+  // «Типы ASN» в справочнике: эвристика по name/netname/note всех записей.
+  const [asnTypesBusy, setAsnTypesBusy] = useState(false);
 
   // ── Latency Lab ──
   const [latEnabled, setLatEnabled] = useState(false);
@@ -585,6 +587,25 @@ export function Subnets() {
       load();
     } finally {
       setSyncBusy(false);
+    }
+  };
+  const enrichAsnTypes = async () => {
+    // Тип ASN (isp/hosting/business) для ВСЕХ записей справочника (POST
+    // /asns/enrich-types): эвристика backend по name/netname/note; пустые
+    // типы заполняются, отличающиеся перезаписываются. Строки подсетей
+    // сервер не меняет.
+    setAsnTypesBusy(true);
+    try {
+      const res = await api("/asns/enrich-types", { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+        return;
+      }
+      toast(`Обновлено: ${d.updated ?? 0}`, "success");
+      loadAsns();
+    } finally {
+      setAsnTypesBusy(false);
     }
   };
 
@@ -1068,6 +1089,13 @@ export function Subnets() {
                 onClick={() => void applyAsns()} disabled={applyBusy}>
                 {applyBusy ? <Loader2 size={11} className="spin" /> : <ArrowDownToLine size={11} />}
                 Применить из справочника
+              </button>
+              <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
+                data-testid="asn-enrich-types"
+                title="Вычислить тип ASN (isp/hosting/business) для всех записей справочника"
+                onClick={() => void enrichAsnTypes()} disabled={asnTypesBusy}>
+                {asnTypesBusy ? <Loader2 size={11} className="spin" /> : <Tag size={11} />}
+                Типы ASN
               </button>
               <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto", fontSize: 11 }}
                 data-testid="asn-add"

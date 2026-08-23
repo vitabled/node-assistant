@@ -216,6 +216,30 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
           }
       return json({ ok: true, updated_rows: updated });
     }
+    if (url === "/api/subnets/asns/enrich-types") {
+      // как backend: тип каждой записи справочника — эвристика по
+      // name/netname/note (hosting → isp → business, регистр/дефисы не
+      // важны); пустые asn_type заполняются, отличающиеся перезаписываются,
+      // записи без данных не трогаются
+      const hosting = ["hosting", "cloud", "data center", "datacenter", "server",
+        "vps", "vds", "dedicated", "selectel", "timeweb", "hetzner", "digitalocean",
+        "aws", "azure", "облако", "хостинг"];
+      const isp = ["telecom", "связь", "интернет", "сети", "isp", "operator",
+        "ростелеком", "мтс", "билайн", "мегафон", "телеком", "provider", "lte"];
+      const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/-/g, " ");
+      let updated = 0;
+      for (const rec of asnList) {
+        const text = [rec.name, rec.netname, rec.note].map(norm).join(" ");
+        if (!text.trim()) continue;
+        let t = "business";
+        if (hosting.some(w => text.includes(w))) t = "hosting";
+        else if (isp.some(w => text.includes(w))) t = "isp";
+        if ((rec.asn_type ?? "").trim() === t) continue;
+        rec.asn_type = t;
+        updated++;
+      }
+      return json({ ok: true, updated, of: asnList.length });
+    }
     if (url.startsWith("/api/subnets/asns/")) {
       const parts = url.split("/").filter(Boolean); // [..., "asns", "AS12345"] или [..., "AS12345", "icon"]
       const tail = decodeURIComponent(parts[parts.length - 1]);
@@ -1090,6 +1114,33 @@ describe("Subnets", () => {
     expect(row1[3]).toHaveTextContent("RU-YANDEX");   // netname перенесён
     const row2 = screen.getByTestId("subnets-row-r2").querySelectorAll("td");
     expect(row2[3]).toHaveTextContent("RU-OTHER");    // запись только с netname
+  });
+
+  it("ASN: «Типы ASN» (asn-enrich-types) шлёт POST /asns/enrich-types и заполняет типы в справочнике", async () => {
+    const calls = installFetch({ asns: [
+      { asn: "AS49505", name: "Selectel", netname: "RU-SELECTEL" },
+      { asn: "AS3261", name: "Ростелеком" },
+      { asn: "AS11111", name: "ПФР", note: "пенсионный фонд" },
+      { asn: "AS22222", name: "" },
+    ] });
+    await openList();
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
+    // кнопка в шапке рядом с asn-sync/asn-apply
+    expect(screen.getByTestId("asn-enrich-types")).toHaveTextContent("Типы ASN");
+    fireEvent.click(screen.getByTestId("asn-enrich-types"));
+    await waitFor(() => {
+      const post = calls.find(c =>
+        c.url === "/api/subnets/asns/enrich-types" && c.init?.method === "POST");
+      expect(post).toBeTruthy();
+    });
+    // loadAsns() перезагрузил справочник: типы проставлены эвристикой
+    // (hosting/isp/business), запись без данных — без типа
+    expect(await screen.findByTestId("asn-row-AS49505")).toHaveTextContent("Hosting");
+    expect(screen.getByTestId("asn-row-AS3261")).toHaveTextContent("ISP");
+    expect(screen.getByTestId("asn-row-AS11111")).toHaveTextContent("Business");
+    const cells4 = screen.getByTestId("asn-row-AS22222").querySelectorAll("td");
+    expect(cells4[5]).toHaveTextContent("—");
   });
 
   it("ASN: в asn-view колонка Netname — ячейка с a.netname (или «—»)", async () => {
