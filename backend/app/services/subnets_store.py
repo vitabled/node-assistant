@@ -145,12 +145,13 @@ def delete_list(provider_id: str, list_id: str, account_id: Optional[str] = None
 
 
 # ── столбцы (режим редактирования таблицы) ─────────────────────
-def add_column(provider_id: str, list_id: str, title: str, account_id: Optional[str] = None) -> dict:
+def add_column(provider_id: str, list_id: str, title: str, account_id: Optional[str] = None, key: str = "") -> dict:
     data = _load(account_id)
     lst = _find_list(data, provider_id, list_id)
     if not lst:
         raise KeyError(list_id)
-    col = {"key": f"col_{uuid.uuid4().hex[:8]}", "title": title.strip() or "Столбец"}
+    k = key.strip() or f"col_{uuid.uuid4().hex[:8]}"
+    col = {"key": k, "title": title.strip() or "Столбец"}
     lst["columns"].append(col)
     _save(data, account_id)
     return col

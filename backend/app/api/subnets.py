@@ -194,12 +194,15 @@ async def toggle_operator(provider_id: str, list_id: str, row_id: str, op_key: s
 
 class ColumnBody(BaseModel):
     title: str = ""
+    # Кастомный ключ колонки (совпадает с ключом поля в row.values) —
+    # например "operator"/"asn"/"country". Пусто → генерируется col_xxx.
+    key: str = ""
 
 
 @router.post("/providers/{provider_id}/lists/{list_id}/columns", status_code=201)
 async def add_column(provider_id: str, list_id: str, body: ColumnBody):
     try:
-        return store.add_column(provider_id, list_id, body.title)
+        return store.add_column(provider_id, list_id, body.title, key=body.key)
     except KeyError as e:
         raise _not_found(e)
 
