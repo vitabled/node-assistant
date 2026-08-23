@@ -1261,3 +1261,156 @@ def test_asn_icon_upload_validation():
                        files={"file": ("icon.png", _PNG, "image/png")}).status_code == 422
     # файл не сохранился после битой загрузки
     assert client.get("/api/subnets/asns/AS12345/icon", headers=a).status_code == 404
+
+
+# ── country/asn_type в справочнике + авто-синхронизация строки → справочник ──
+def test_asns_upsert_country_asn_type_saved_and_not_cleared():
+    """Upsert с country/asn_type: запись получает поля; апдейт с пустыми
+    country/asn_type НЕ затирает текущие; строки подсетей получают country
+    и asn_type через apply_asn_meta."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    _mk_rows_with_asn(a, pid, lid)
+    r = client.post("/api/subnets/asns", headers=a,
+                    json={"asn": "12345", "name": "Яндекс",
+                          "country": "RU", "asn_type": "hosting"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["asn"]["country"] == "RU"
+    assert body["asn"]["asn_type"] == "hosting"
+    assert body["updated_rows"] == 1
+    # повторный upsert с пустыми country/asn_type — значения сохраняются
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "", "country": "", "asn_type": ""})
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS12345")
+    assert rec["country"] == "RU"
+    assert rec["asn_type"] == "hosting"
+    # из справочника в строки перенесены и country, и asn_type
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["country"] == "RU"
+    assert fresh["203.0.113.0/24"]["asn_type"] == "hosting"
+    # чужой ASN не тронут
+    assert "country" not in fresh["198.51.100.0/24"]
+
+
+def test_asns_sync_collects_country_and_asn_type():
+    """POST /asns/sync собирает values.country и values.asn_type из строк в
+    справочник; существующие непустые значения не перезаписываются."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "203.0.113.0/24", "asn": "AS12345",
+                     "asnname": "Яндекс", "country": "RU", "asn_type": "hosting"},
+                    {"subnet": "198.51.100.0/24", "asn": "AS3261",
+                     "country": "DE", "asn_type": "isp"},
+                ]})
+    r = client.post("/api/subnets/asns/sync", headers=a)
+    assert r.status_code == 200
+    assert r.json()["added"] == 2
+    by_asn = {x["asn"]: x for x in
+              client.get("/api/subnets/asns", headers=a).json()["asns"]}
+    assert by_asn["AS12345"]["country"] == "RU"
+    assert by_asn["AS12345"]["asn_type"] == "hosting"
+    assert by_asn["AS3261"]["country"] == "DE"
+    assert by_asn["AS3261"]["asn_type"] == "isp"
+    # существующая запись с непустыми полями не перезаписывается из строк
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "AS12345", "name": "Яндекс",
+                      "country": "KZ", "asn_type": "business"})
+    r = client.post("/api/subnets/asns/sync", headers=a)
+    assert r.json()["added"] == 0 and r.json()["filled"] == 0
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS12345")
+    assert rec["country"] == "KZ"  # не перезаписано из строк
+    assert rec["asn_type"] == "business"
+
+
+def test_asns_apply_transfers_country_and_asn_type():
+    """POST /asns/apply переносит country/asn_type из справочника в строки
+    подсетей (как name/netname); повторный apply идемпотентен."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    _mk_rows_with_asn(a, pid, lid)
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "Яндекс",
+                      "country": "RU", "asn_type": "hosting"})
+    r = client.post("/api/subnets/asns/apply", headers=a)
+    assert r.status_code == 200
+    assert r.json()["updated_rows"] == 1
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["country"] == "RU"
+    assert fresh["203.0.113.0/24"]["asn_type"] == "hosting"
+    # AS999 в справочнике нет — строка не тронута
+    assert "country" not in fresh["198.51.100.0/24"]
+    # повторный apply — снова те же строки (идемпотентно)
+    r2 = client.post("/api/subnets/asns/apply", headers=a)
+    assert r2.json()["updated_rows"] == 1
+
+
+def test_batch_cell_edit_syncs_row_to_dictionary():
+    """Правка ячейки asnname/netname/country/asn_type строки с ASN из
+    справочника АВТОМАТИЧЕСКИ обновляет запись справочника (строки →
+    справочник, без apply обратно)."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "203.0.113.0/24", "asn": "AS12345"},
+                    {"subnet": "198.51.100.0/24", "asn": "AS999"},
+                ]})
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "Яндекс"})
+    rows = _rows(a)
+    rid1 = next(x["id"] for x in rows if x["values"]["subnet"] == "203.0.113.0/24")
+    r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch",
+                     headers=a, json={"updates": [
+                         {"row_id": rid1, "col": "asnname", "value": "Яндекс Облако"},
+                         {"row_id": rid1, "col": "netname", "value": "RU-YANDEX"},
+                         {"row_id": rid1, "col": "country", "value": "RU"},
+                         {"row_id": rid1, "col": "asn_type", "value": "hosting"},
+                     ]})
+    assert r.status_code == 200, r.text
+    assert r.json()["updated"] == 4
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert len(asns) == 1  # AS999 в справочник не добавлен
+    rec = asns[0]
+    assert rec["name"] == "Яндекс Облако"
+    assert rec["netname"] == "RU-YANDEX"
+    assert rec["country"] == "RU"
+    assert rec["asn_type"] == "hosting"
+    # строка тоже получила новое значение (ячейка изменена как обычно)
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс Облако"
+    assert fresh["203.0.113.0/24"]["country"] == "RU"
+
+
+def test_batch_cell_edit_does_not_touch_dictionary():
+    """Правка ячейки у строки БЕЗ asn, с битым asn или с ASN не из
+    справочника НЕ трогает справочник (записи не создаются и не меняются)."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "203.0.113.0/24"},                    # без asn
+                    {"subnet": "198.51.100.0/24", "asn": "AS999"},   # не в справочнике
+                    {"subnet": "192.0.2.0/24", "asn": "мусор"},      # битый asn
+                ]})
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "Яндекс"})
+    rows = _rows(a)
+    rid2 = next(x["id"] for x in rows if x["values"]["subnet"] == "198.51.100.0/24")
+    r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch",
+                     headers=a, json={"updates": [
+                         {"row_id": rows[0]["id"], "col": "asnname", "value": "Новое"},
+                         {"row_id": rid2, "col": "asnname", "value": "Новое"},
+                         {"row_id": rid2, "col": "country", "value": "RU"},
+                         {"row_id": rows[2]["id"], "col": "asn_type", "value": "hosting"},
+                     ]})
+    assert r.status_code == 200, r.text
+    assert r.json()["updated"] == 4
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert len(asns) == 1  # только AS12345, новых записей нет
+    assert asns[0]["name"] == "Яндекс"  # и не изменена
+    assert "country" not in asns[0]

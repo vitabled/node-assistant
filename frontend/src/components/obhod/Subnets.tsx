@@ -59,8 +59,9 @@ type ColorMode = "off" | "groups" | "all";
 
 /** Запись справочника ASN (GET /api/subnets/asns). icon — имя файла иконки
  *  записи (если загружена; файл отдаёт GET /asns/{asn}/icon). netname —
- *  имя сети из строк подсетей (переносится в values.netname через apply). */
-interface AsnRec { asn: string; name: string; note?: string; icon?: string; netname?: string }
+ *  имя сети, country — страна, asn_type — тип (isp/hosting/business) из
+ *  строк подсетей (переносятся в values через apply). */
+interface AsnRec { asn: string; name: string; note?: string; icon?: string; netname?: string; country?: string; asn_type?: string }
 
 const api = (path: string, init?: RequestInit) =>
   fetch(`/api/subnets${path}`, init ? { headers: { "Content-Type": "application/json" }, ...init } : init);
@@ -181,6 +182,14 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
+/** Заголовки служебных колонок таблицы подсетей: фиксированные, независимо
+ *  от title в columns (asnname всегда «Организация» и т.д.). */
+const COL_TITLES: Record<string, string> = {
+  asnname: "Организация",
+  country: "Страна",
+  asn_type: "Тип ASN",
+};
+
 /** Чип колонки «Тип ASN»: isp=синий (accent), hosting=зелёный (ok), business=янтарный (warn). */
 const ASN_TYPE_META: Record<string, { label: string; cls: string }> = {
   isp: { label: "ISP", cls: "accent" },
@@ -238,6 +247,8 @@ export function Subnets() {
   const [asnNewAsn, setAsnNewAsn] = useState("");
   const [asnNewName, setAsnNewName] = useState("");
   const [asnNewNetname, setAsnNewNetname] = useState("");
+  const [asnNewCountry, setAsnNewCountry] = useState("");
+  const [asnNewAsnType, setAsnNewAsnType] = useState("");
   const [asnView, setAsnView] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
@@ -504,14 +515,23 @@ export function Subnets() {
     const asn = asnNewAsn.trim();
     if (!asn) return;
     void mutateAsn("/asns", "POST",
-      { asn, name: asnNewName.trim(), netname: asnNewNetname.trim() }, "ASN добавлен")
-      .then(ok => { if (ok) { setAsnNewAsn(""); setAsnNewName(""); setAsnNewNetname(""); } });
+      { asn, name: asnNewName.trim(), netname: asnNewNetname.trim(),
+        country: asnNewCountry.trim(), asn_type: asnNewAsnType.trim() }, "ASN добавлен")
+      .then(ok => {
+        if (ok) {
+          setAsnNewAsn(""); setAsnNewName(""); setAsnNewNetname("");
+          setAsnNewCountry(""); setAsnNewAsnType("");
+        }
+      });
   };
   const editAsn = (a: AsnRec) => {
-    const name = window.prompt("Название", a.name) ?? a.name;
+    // Пустые поля сервер не затирает (upsert обновляет только непустое).
+    const name = window.prompt("Организация", a.name) ?? a.name;
     const netname = window.prompt("Netname", a.netname ?? "") ?? (a.netname ?? "");
+    const country = window.prompt("Страна", a.country ?? "") ?? (a.country ?? "");
+    const asnType = window.prompt("Тип ASN (isp/hosting/business)", a.asn_type ?? "") ?? (a.asn_type ?? "");
     const note = window.prompt("Примечание", a.note ?? "") ?? (a.note ?? "");
-    void mutateAsn("/asns", "POST", { asn: a.asn, name, netname, note }, "ASN обновлён");
+    void mutateAsn("/asns", "POST", { asn: a.asn, name, netname, country, asn_type: asnType, note }, "ASN обновлён");
   };
   const removeAsn = (a: AsnRec) => {
     if (!window.confirm(`Удалить ASN «${a.asn}» из справочника?`)) return;
@@ -1032,7 +1052,7 @@ export function Subnets() {
               </button>
               <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
                 data-testid="asn-apply"
-                title="Перенести названия и netname из справочника в строки подсетей"
+                title="Перенести организацию, netname, страну и тип ASN из справочника в строки подсетей"
                 onClick={() => void applyAsns()} disabled={applyBusy}>
                 {applyBusy ? <Loader2 size={11} className="spin" /> : <ArrowDownToLine size={11} />}
                 Применить из справочника
@@ -1049,13 +1069,21 @@ export function Subnets() {
                 data-testid="asn-new-asn" aria-label="Номер ASN" placeholder="AS12345"
                 value={asnNewAsn} onChange={e => setAsnNewAsn(e.target.value)} />
               <input className="input text-xs" style={{ flex: 1, minWidth: 0 }}
-                data-testid="asn-new-name" aria-label="Название ASN"
-                placeholder="Название (например Яндекс)"
+                data-testid="asn-new-name" aria-label="Организация ASN"
+                placeholder="Организация (например Яндекс)"
                 value={asnNewName} onChange={e => setAsnNewName(e.target.value)} />
               <input className="input font-mono text-xs" style={{ width: 140, flex: "none" }}
                 data-testid="asn-new-netname" aria-label="Netname ASN"
                 placeholder="Netname (например RU-YANDEX)"
                 value={asnNewNetname} onChange={e => setAsnNewNetname(e.target.value)} />
+              <input className="input font-mono text-xs" style={{ width: 90, flex: "none" }}
+                data-testid="asn-new-country" aria-label="Страна ASN"
+                placeholder="Страна (например RU)"
+                value={asnNewCountry} onChange={e => setAsnNewCountry(e.target.value)} />
+              <input className="input font-mono text-xs" style={{ width: 120, flex: "none" }}
+                data-testid="asn-new-asn_type" aria-label="Тип ASN"
+                placeholder="Тип (isp/hosting/business)"
+                value={asnNewAsnType} onChange={e => setAsnNewAsnType(e.target.value)} />
               <button className="btn btn-primary btn-sm" style={{ fontSize: 11, flex: "none" }}
                 onClick={addAsn} disabled={!asnNewAsn.trim()}>
                 <Plus size={11} /> Добавить
@@ -1068,15 +1096,17 @@ export function Subnets() {
                   <tr>
                     <th className="sticky top-0 z-10" style={{ width: 40, background: "var(--bg2)" }}>Иконка</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>ASN</th>
-                    <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Название</th>
+                    <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Организация</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Netname</th>
+                    <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Страна</th>
+                    <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Тип ASN</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Примечание</th>
                     <th className="sticky top-0 z-10" style={{ width: 88, background: "var(--bg2)" }}>Действия</th>
                   </tr>
                 </thead>
                 <tbody>
                   {asns.length === 0 && (
-                    <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--t-faint)", padding: 16 }}>
+                    <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--t-faint)", padding: 16 }}>
                       Пусто — добавьте ASN (например 12345 → Яндекс).
                     </td></tr>
                   )}
@@ -1096,6 +1126,16 @@ export function Subnets() {
                         style={{ color: "var(--t-mid)" }}>{a.name || "—"}</span></td>
                       <td><span className="trunc" title={a.netname || ""}
                         style={{ color: "var(--t-mid)" }}>{a.netname || "—"}</span></td>
+                      <td><span className="trunc" title={a.country || ""}
+                        style={{ color: "var(--t-mid)" }}>{a.country || "—"}</span></td>
+                      <td>
+                        {a.asn_type ? (
+                          <span className={`chip ${ASN_TYPE_META[a.asn_type]?.cls ?? "neutral"}`}
+                            style={{ fontSize: 10 }}>
+                            {ASN_TYPE_META[a.asn_type]?.label ?? a.asn_type}
+                          </span>
+                        ) : "—"}
+                      </td>
                       <td><span className="trunc" title={a.note || ""}
                         style={{ color: "var(--t-faint)" }}>{a.note || "—"}</span></td>
                       <td>
@@ -1389,7 +1429,7 @@ export function Subnets() {
                         style={{ cursor: editMode ? "grab" : undefined, background: "var(--bg2)" }}>
                         <span className="flex items-center gap-1">
                           {editMode && <GripVertical size={10} style={{ color: "var(--t-faint)" }} />}
-                          {c.title}
+                          {COL_TITLES[c.key] ?? c.title}
                           {editMode && c.key !== "subnet" && (
                             <>
                               <button className="iconbtn" style={{ width: 16, height: 16 }} title="Переименовать"

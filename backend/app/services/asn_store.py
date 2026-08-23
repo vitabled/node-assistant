@@ -77,13 +77,14 @@ def get_asn(asn: str, account_id: Optional[str] = None) -> Optional[dict]:
 
 
 def upsert_asn(asn: str, name: str = "", note: str = "",
-               netname: str = "", account_id: Optional[str] = None) -> dict:
+               netname: str = "", country: str = "", asn_type: str = "",
+               account_id: Optional[str] = None) -> dict:
     """Создать/обновить запись справочника по номеру (нормализация без «AS»).
 
-    Пустое name/netname при апдейте существующей записи НЕ затирает текущие
-    значения. Возвращает запись; синхронизацию asnname/netname в строках
-    подсетей делает API (subnets_store.apply_asn_meta) — здесь только
-    справочник.
+    Пустые name/netname/country/asn_type при апдейте существующей записи НЕ
+    затирают текущие значения. Возвращает запись; синхронизацию полей в
+    строках подсетей делает API (subnets_store.apply_asn_meta) — здесь
+    только справочник.
     """
     key = normalize_asn(asn)
     data = _load(account_id)
@@ -95,12 +96,22 @@ def upsert_asn(asn: str, name: str = "", note: str = "",
                "note": (note or "").strip(), "icon": "",
                "netname": netname.strip(),
                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        # country/asn_type попадают в запись только непустыми — запись,
+        # созданная без них, не несёт этих ключей (справочник «не тронут»)
+        if country.strip():
+            rec["country"] = country.strip()
+        if asn_type.strip():
+            rec["asn_type"] = asn_type.strip()
         data["asns"].append(rec)
     else:
         if name.strip():
             rec["name"] = name.strip()
         if netname.strip():
             rec["netname"] = netname.strip()
+        if country.strip():
+            rec["country"] = country.strip()
+        if asn_type.strip():
+            rec["asn_type"] = asn_type.strip()
         rec["note"] = (note or "").strip()
         rec["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     _save(data, account_id)

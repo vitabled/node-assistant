@@ -32,7 +32,7 @@ DEFAULT_COLUMNS = [
     {"key": "subnet",    "title": "Подсеть"},
     {"key": "ipver",     "title": "Версия IP"},
     {"key": "asn",       "title": "ASN"},
-    {"key": "asnname",   "title": "Название ASN"},
+    {"key": "asnname",   "title": "Организация"},
     {"key": "date",      "title": "Дата"},
     {"key": "operators", "title": "Операторы"},
 ]
@@ -547,16 +547,21 @@ def apply_asn_name(asn: str, name: str, account_id: Optional[str] = None) -> int
 
 def apply_asn_meta(asn: str, name: Optional[str] = None,
                    netname: Optional[str] = None,
+                   country: Optional[str] = None,
+                   asn_type: Optional[str] = None,
                    account_id: Optional[str] = None) -> int:
     """Справочник ASN → подсети: во ВСЕХ списках всех провайдеров у строк с
     values.asn == asn (нормализованный «AS12345») перезаписать
-    values.asnname = name и values.netname = netname. Справочник авторитетнее
-    ручной правки ячейки. Непустые значения перезаписывают всегда; пустые/
-    None — поле не трогается. Возвращает число обновлённых строк (0, если
-    оба значения пусты)."""
+    values.asnname = name, values.netname = netname, values.country = country
+    и values.asn_type = asn_type. Справочник авторитетнее ручной правки
+    ячейки. Непустые значения перезаписывают всегда; пустые/None — поле не
+    трогается. Возвращает число обновлённых строк (0, если все значения
+    пусты)."""
     name = (name or "").strip()
     netname = (netname or "").strip()
-    if not name and not netname:
+    country = (country or "").strip()
+    asn_type = (asn_type or "").strip()
+    if not (name or netname or country or asn_type):
         return 0
     data = _load(account_id)
     updated = 0
@@ -569,6 +574,10 @@ def apply_asn_meta(asn: str, name: Optional[str] = None,
                         values["asnname"] = name
                     if netname:
                         values["netname"] = netname
+                    if country:
+                        values["country"] = country
+                    if asn_type:
+                        values["asn_type"] = asn_type
                     updated += 1
     if updated:
         _save(data, account_id)
