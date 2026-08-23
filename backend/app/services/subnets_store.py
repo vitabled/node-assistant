@@ -545,6 +545,36 @@ def apply_asn_name(asn: str, name: str, account_id: Optional[str] = None) -> int
     return updated
 
 
+def apply_asn_meta(asn: str, name: Optional[str] = None,
+                   netname: Optional[str] = None,
+                   account_id: Optional[str] = None) -> int:
+    """Справочник ASN → подсети: во ВСЕХ списках всех провайдеров у строк с
+    values.asn == asn (нормализованный «AS12345») перезаписать
+    values.asnname = name и values.netname = netname. Справочник авторитетнее
+    ручной правки ячейки. Непустые значения перезаписывают всегда; пустые/
+    None — поле не трогается. Возвращает число обновлённых строк (0, если
+    оба значения пусты)."""
+    name = (name or "").strip()
+    netname = (netname or "").strip()
+    if not name and not netname:
+        return 0
+    data = _load(account_id)
+    updated = 0
+    for p in data["providers"]:
+        for l in p.get("lists", []):
+            for row in l.get("rows", []):
+                values = row.get("values") or {}
+                if str(values.get("asn") or "").strip() == asn:
+                    if name:
+                        values["asnname"] = name
+                    if netname:
+                        values["netname"] = netname
+                    updated += 1
+    if updated:
+        _save(data, account_id)
+    return updated
+
+
 # ── импорт (см. api/subnets.py: /import) ───────────────────────
 def set_store(data: dict, account_id: Optional[str] = None) -> None:
     """Заменить дерево целиком (режим replace при импорте)."""

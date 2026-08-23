@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, ImageUp, Loader2, Pencil, Plus, RefreshCw, Sparkles, Table2,
+  Activity, ArrowDownToLine, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, ImageUp, Loader2, Pencil, Plus, RefreshCw, Sparkles, Table2,
   Trash2, Upload, X,
 } from "lucide-react";
 import { Page, PageHeader } from "../../theme/ui";
@@ -58,8 +58,9 @@ interface ImportResult { imported: number; skipped: number; errors: string[] }
 type ColorMode = "off" | "groups" | "all";
 
 /** Запись справочника ASN (GET /api/subnets/asns). icon — имя файла иконки
- *  записи (если загружена; файл отдаёт GET /asns/{asn}/icon). */
-interface AsnRec { asn: string; name: string; note?: string; icon?: string }
+ *  записи (если загружена; файл отдаёт GET /asns/{asn}/icon). netname —
+ *  имя сети из строк подсетей (переносится в values.netname через apply). */
+interface AsnRec { asn: string; name: string; note?: string; icon?: string; netname?: string }
 
 const api = (path: string, init?: RequestInit) =>
   fetch(`/api/subnets${path}`, init ? { headers: { "Content-Type": "application/json" }, ...init } : init);
@@ -236,8 +237,10 @@ export function Subnets() {
   const [asns, setAsns] = useState<AsnRec[]>([]);
   const [asnNewAsn, setAsnNewAsn] = useState("");
   const [asnNewName, setAsnNewName] = useState("");
+  const [asnNewNetname, setAsnNewNetname] = useState("");
   const [asnView, setAsnView] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
+  const [applyBusy, setApplyBusy] = useState(false);
 
   // ── Latency Lab ──
   const [latEnabled, setLatEnabled] = useState(false);
@@ -500,17 +503,38 @@ export function Subnets() {
   const addAsn = () => {
     const asn = asnNewAsn.trim();
     if (!asn) return;
-    void mutateAsn("/asns", "POST", { asn, name: asnNewName.trim() }, "ASN добавлен")
-      .then(ok => { if (ok) { setAsnNewAsn(""); setAsnNewName(""); } });
+    void mutateAsn("/asns", "POST",
+      { asn, name: asnNewName.trim(), netname: asnNewNetname.trim() }, "ASN добавлен")
+      .then(ok => { if (ok) { setAsnNewAsn(""); setAsnNewName(""); setAsnNewNetname(""); } });
   };
   const editAsn = (a: AsnRec) => {
     const name = window.prompt("Название", a.name) ?? a.name;
+    const netname = window.prompt("Netname", a.netname ?? "") ?? (a.netname ?? "");
     const note = window.prompt("Примечание", a.note ?? "") ?? (a.note ?? "");
-    void mutateAsn("/asns", "POST", { asn: a.asn, name, note }, "ASN обновлён");
+    void mutateAsn("/asns", "POST", { asn: a.asn, name, netname, note }, "ASN обновлён");
   };
   const removeAsn = (a: AsnRec) => {
     if (!window.confirm(`Удалить ASN «${a.asn}» из справочника?`)) return;
     void mutateAsn(`/asns/${encodeURIComponent(a.asn)}`, "DELETE", undefined, "ASN удалён");
+  };
+  const applyAsns = async () => {
+    // Перенести ВЕСЬ справочник в строки подсетей (POST /asns/apply):
+    // name → values.asnname, netname → values.netname у всех строк с этим
+    // ASN. Справочник авторитетнее — значения перезаписываются.
+    setApplyBusy(true);
+    try {
+      const res = await api("/asns/apply", { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+        return;
+      }
+      toast(`Применено к ${d.updated_rows ?? 0} строкам`, "success");
+      loadAsns();
+      load();
+    } finally {
+      setApplyBusy(false);
+    }
   };
   const syncAsns = async () => {
     // Собрать ASN/названия из ВСЕХ списков подсетей в справочник (POST
@@ -1006,6 +1030,13 @@ export function Subnets() {
                 {syncBusy ? <Loader2 size={11} className="spin" /> : <RefreshCw size={11} />}
                 Синхронизировать
               </button>
+              <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
+                data-testid="asn-apply"
+                title="Перенести названия и netname из справочника в строки подсетей"
+                onClick={() => void applyAsns()} disabled={applyBusy}>
+                {applyBusy ? <Loader2 size={11} className="spin" /> : <ArrowDownToLine size={11} />}
+                Применить из справочника
+              </button>
               <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto", fontSize: 11 }}
                 data-testid="asn-add"
                 onClick={addAsn} disabled={!asnNewAsn.trim()}>
@@ -1021,6 +1052,10 @@ export function Subnets() {
                 data-testid="asn-new-name" aria-label="Название ASN"
                 placeholder="Название (например Яндекс)"
                 value={asnNewName} onChange={e => setAsnNewName(e.target.value)} />
+              <input className="input font-mono text-xs" style={{ width: 140, flex: "none" }}
+                data-testid="asn-new-netname" aria-label="Netname ASN"
+                placeholder="Netname (например RU-YANDEX)"
+                value={asnNewNetname} onChange={e => setAsnNewNetname(e.target.value)} />
               <button className="btn btn-primary btn-sm" style={{ fontSize: 11, flex: "none" }}
                 onClick={addAsn} disabled={!asnNewAsn.trim()}>
                 <Plus size={11} /> Добавить
@@ -1034,13 +1069,14 @@ export function Subnets() {
                     <th className="sticky top-0 z-10" style={{ width: 40, background: "var(--bg2)" }}>Иконка</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>ASN</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Название</th>
+                    <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Netname</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Примечание</th>
                     <th className="sticky top-0 z-10" style={{ width: 88, background: "var(--bg2)" }}>Действия</th>
                   </tr>
                 </thead>
                 <tbody>
                   {asns.length === 0 && (
-                    <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--t-faint)", padding: 16 }}>
+                    <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--t-faint)", padding: 16 }}>
                       Пусто — добавьте ASN (например 12345 → Яндекс).
                     </td></tr>
                   )}
@@ -1058,6 +1094,8 @@ export function Subnets() {
                       <td><span className="font-mono" style={{ color: "var(--t-hi)" }}>{a.asn}</span></td>
                       <td><span className="trunc" title={a.name || ""}
                         style={{ color: "var(--t-mid)" }}>{a.name || "—"}</span></td>
+                      <td><span className="trunc" title={a.netname || ""}
+                        style={{ color: "var(--t-mid)" }}>{a.netname || "—"}</span></td>
                       <td><span className="trunc" title={a.note || ""}
                         style={{ color: "var(--t-faint)" }}>{a.note || "—"}</span></td>
                       <td>

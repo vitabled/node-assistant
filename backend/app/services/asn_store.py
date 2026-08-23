@@ -1,12 +1,12 @@
 """«Подсети» (Обходы БС): справочник ASN (per-account).
 
 Хранилище `accounts/<id>/asns.json`:
-  asns: [{asn: "AS12345", name: "Яндекс", note: "...", icon: "asn_AS12345.png",
-          updated_at: "..."}]
+  asns: [{asn: "AS12345", name: "Яндекс", note: "...", netname: "RU-YANDEX",
+          icon: "asn_AS12345.png", updated_at: "..."}]
 
 Ключ ASN всегда нормализован — «AS» + цифры («12345» → «AS12345»). Справочник
-авторитетнее ручных значений asnname в строках подсетей: при upsert API
-синхронизирует asnname во всех списках (см. subnets_store.apply_asn_name);
+авторитетнее ручных значений asnname/netname в строках подсетей: при upsert API
+синхронизирует asnname/netname во всех списках (см. subnets_store.apply_asn_meta);
 при удалении строки подсетей НЕ трогаются.
 
 Иконки задаются у ЗАПИСЕЙ ASN (не у файлов/провайдеров): файл лежит в
@@ -77,12 +77,13 @@ def get_asn(asn: str, account_id: Optional[str] = None) -> Optional[dict]:
 
 
 def upsert_asn(asn: str, name: str = "", note: str = "",
-               account_id: Optional[str] = None) -> dict:
+               netname: str = "", account_id: Optional[str] = None) -> dict:
     """Создать/обновить запись справочника по номеру (нормализация без «AS»).
 
-    Пустое name при апдейте существующей записи НЕ затирает текущее название.
-    Возвращает запись; синхронизацию asnname в строках подсетей делает API
-    (subnets_store.apply_asn_name) — здесь только справочник.
+    Пустое name/netname при апдейте существующей записи НЕ затирает текущие
+    значения. Возвращает запись; синхронизацию asnname/netname в строках
+    подсетей делает API (subnets_store.apply_asn_meta) — здесь только
+    справочник.
     """
     key = normalize_asn(asn)
     data = _load(account_id)
@@ -92,11 +93,14 @@ def upsert_asn(asn: str, name: str = "", note: str = "",
             raise ValueError(f"Не больше {MAX_ASNS} записей в справочнике")
         rec = {"asn": key, "name": name.strip(),
                "note": (note or "").strip(), "icon": "",
+               "netname": netname.strip(),
                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
         data["asns"].append(rec)
     else:
         if name.strip():
             rec["name"] = name.strip()
+        if netname.strip():
+            rec["netname"] = netname.strip()
         rec["note"] = (note or "").strip()
         rec["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     _save(data, account_id)

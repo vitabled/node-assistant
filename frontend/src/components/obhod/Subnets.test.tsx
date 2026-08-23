@@ -110,7 +110,7 @@ const ICON_STORE = {
  *  `asns` — стартовый справочник ASN: mock ДЕРЖИТ его состояние (POST
  *  добавляет/обновляет, DELETE удаляет, POST /asns/{asn}/icon кладёт icon,
  *  GET отдаёт текущий список). */
-function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[]; enrich?: unknown; enrichTypes?: unknown; asns?: { asn: string; name: string; note?: string; icon?: string }[] }) {
+function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[]; enrich?: unknown; enrichTypes?: unknown; asns?: { asn: string; name: string; note?: string; icon?: string; netname?: string }[] }) {
   const calls: { url: string; init?: RequestInit }[] = [];
   const jobQueue = [...(opts?.job ?? [])];
   const reqIdQueue = [...(opts?.reqIds ?? ["req-1"])];
@@ -157,6 +157,28 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
         else if (name && !(asnList[i].name ?? "").trim()) { asnList[i] = { ...asnList[i], name }; filled++; }
       }
       return json({ ok: true, added, filled, total: asnList.length });
+    }
+    if (url === "/api/subnets/asns/apply") {
+      // как backend: каждая запись справочника с name/netname перезаписывает
+      // asnname/netname у строк store с этим ASN (справочник авторитетнее)
+      const st = (opts?.store ?? STORE) as {
+        providers?: { lists?: { rows?: { values?: Record<string, string> }[] }[] }[];
+      };
+      const byAsn = new Map(asnList.map(x => [x.asn, x]));
+      let updated = 0;
+      for (const p of st.providers ?? [])
+        for (const l of p.lists ?? [])
+          for (const r of l.rows ?? []) {
+            const rec = byAsn.get(String(r.values?.asn ?? "").trim());
+            if (!rec) continue;
+            const name = String(rec.name ?? "").trim();
+            const netname = String(rec.netname ?? "").trim();
+            if (!name && !netname) continue;
+            if (name && r.values) r.values.asnname = name;
+            if (netname && r.values) r.values.netname = netname;
+            updated++;
+          }
+      return json({ ok: true, updated_rows: updated });
     }
     if (url.startsWith("/api/subnets/asns/")) {
       const parts = url.split("/").filter(Boolean); // [..., "asns", "AS12345"] или [..., "AS12345", "icon"]
@@ -945,18 +967,19 @@ describe("Subnets", () => {
     expect(screen.queryByText("203.0.113.0/24")).toBeNull();
   });
 
-  it("ASN: добавление через asn-add — POST /asns, новая строка появляется в таблице", async () => {
+  it("ASN: добавление через asn-add — POST /asns (с netname), новая строка появляется в таблице", async () => {
     const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс" }] });
     await openList();
     fireEvent.click(screen.getByTestId("asn-dir-btn"));
     await screen.findByTestId("asn-view");
     fireEvent.change(screen.getByTestId("asn-new-asn"), { target: { value: "99999" } });
     fireEvent.change(screen.getByTestId("asn-new-name"), { target: { value: "Новый" } });
+    fireEvent.change(screen.getByTestId("asn-new-netname"), { target: { value: "RU-NEW" } });
     fireEvent.click(screen.getByTestId("asn-add"));
     await waitFor(() => {
       const post = calls.find(c => c.url === "/api/subnets/asns" && c.init?.method === "POST");
       expect(post).toBeTruthy();
-      expect(JSON.parse(String(post!.init!.body))).toEqual({ asn: "99999", name: "Новый" });
+      expect(JSON.parse(String(post!.init!.body))).toEqual({ asn: "99999", name: "Новый", netname: "RU-NEW" });
     });
     // после мутации — loadAsns() перезагрузил справочник, новая запись видна
     expect(await screen.findByTestId("asn-row-AS99999")).toHaveTextContent("Новый");
@@ -990,6 +1013,62 @@ describe("Subnets", () => {
     expect(screen.queryByTestId("asn-row-ASмусор")).toBeNull();
   });
 
+  it("ASN: «Применить из справочника» (asn-apply) шлёт POST /asns/apply и переносит name+netname в строки", async () => {
+    const store = {
+      providers: [{ id: "p1", name: "МТС", lists: [{ id: "l1", name: "Основной",
+        columns: [
+          { key: "subnet", title: "Подсеть" }, { key: "asn", title: "ASN" },
+          { key: "asnname", title: "Название ASN" }, { key: "netname", title: "Netname" },
+        ],
+        rows: [
+          // у r1 своё asnname — apply перезапишет его из справочника
+          { id: "r1", values: { subnet: "10.0.0.0/8", asn: "AS12345", asnname: "Старое" }, operators: {} },
+          { id: "r2", values: { subnet: "11.0.0.0/8", asn: "AS999" }, operators: {} },
+        ] }] }],
+      operators: [],
+    };
+    const calls = installFetch({ store, asns: [
+      { asn: "AS12345", name: "Яндекс", netname: "RU-YANDEX" },
+      { asn: "AS999", name: "", netname: "RU-OTHER" },
+    ] });
+    await openList();
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
+    // кнопка в шапке рядом с asn-sync
+    expect(screen.getByTestId("asn-apply")).toHaveTextContent("Применить из справочника");
+    fireEvent.click(screen.getByTestId("asn-apply"));
+    await waitFor(() => {
+      const apply = calls.find(c => c.url === "/api/subnets/asns/apply" && c.init?.method === "POST");
+      expect(apply).toBeTruthy();
+    });
+    // назад к подсетям: строки получили asnname/netname из справочника
+    fireEvent.click(screen.getByTestId("asn-back"));
+    const row1 = (await screen.findByTestId("subnets-row-r1")).querySelectorAll("td");
+    expect(row1[2]).toHaveTextContent("Яндекс");      // asnname перезаписан
+    expect(row1[3]).toHaveTextContent("RU-YANDEX");   // netname перенесён
+    const row2 = screen.getByTestId("subnets-row-r2").querySelectorAll("td");
+    expect(row2[3]).toHaveTextContent("RU-OTHER");    // запись только с netname
+  });
+
+  it("ASN: в asn-view колонка Netname — ячейка с a.netname (или «—»)", async () => {
+    installFetch({ asns: [
+      { asn: "AS12345", name: "Яндекс", netname: "RU-YANDEX" },
+      { asn: "AS999", name: "Без" },
+    ] });
+    await openList();
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
+    // заголовок колонки Netname между Название и Примечание
+    const headers = Array.from(screen.getByTestId("asn-view").querySelectorAll("th"))
+      .map(th => th.textContent);
+    expect(headers).toContain("Netname");
+    // ячейка: netname из записи; у записи без netname — «—»
+    const cells1 = screen.getByTestId("asn-row-AS12345").querySelectorAll("td");
+    expect(cells1[3]).toHaveTextContent("RU-YANDEX");
+    const cells2 = screen.getByTestId("asn-row-AS999").querySelectorAll("td");
+    expect(cells2[3]).toHaveTextContent("—");
+  });
+
   it("ASN: asn-back возвращает к подсетям; выбор списка в дереве тоже сбрасывает справочник", async () => {
     installFetch({ asns: [{ asn: "AS12345", name: "Яндекс" }] });
     await openList();
@@ -1012,15 +1091,16 @@ describe("Subnets", () => {
     await openList();
     fireEvent.click(screen.getByTestId("asn-dir-btn"));
     const row = await screen.findByTestId("asn-row-AS12345");
-    // редактирование: prompt'ы с текущими значениями → POST
+    // редактирование: prompt'ы с текущими значениями (name, netname, note) → POST
     const promptSpy = vi.spyOn(window, "prompt")
       .mockReturnValueOnce("Яндекс Облако")
+      .mockReturnValueOnce("RU-YANDEX")
       .mockReturnValueOnce("новое примечание");
     fireEvent.click(row.querySelector('button[title="Изменить"]')!);
     await waitFor(() => {
       const post = calls.filter(c => c.url === "/api/subnets/asns" && c.init?.method === "POST");
       expect(post.length).toBe(1);
-      expect(JSON.parse(String(post[0].init!.body))).toEqual({ asn: "AS12345", name: "Яндекс Облако", note: "новое примечание" });
+      expect(JSON.parse(String(post[0].init!.body))).toEqual({ asn: "AS12345", name: "Яндекс Облако", netname: "RU-YANDEX", note: "новое примечание" });
     });
     promptSpy.mockRestore();
     // удаление: confirm + DELETE

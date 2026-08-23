@@ -33,6 +33,7 @@ class AsnBody(BaseModel):
     asn: str
     name: str = ""
     note: str = ""
+    netname: str = ""
 
 
 @router.get("/asns")
@@ -44,28 +45,50 @@ async def list_asns():
 async def upsert_asn(body: AsnBody):
     """Создать/обновить запись справочника (asn нормализуется: «12345» →
     «AS12345»). После upsert у ВСЕХ строк подсетей текущего аккаунта с
-    values.asn == «AS12345» перезаписывается values.asnname = name —
-    справочник авторитетнее ручной правки ячейки."""
+    values.asn == «AS12345» перезаписываются values.asnname = name и
+    values.netname = netname (непустые значения) — справочник авторитетнее
+    ручной правки ячейки. Ответ: {ok, asn, updated_rows}."""
     try:
-        rec = asn_store.upsert_asn(body.asn, body.name, body.note)
+        rec = asn_store.upsert_asn(body.asn, body.name, body.note, body.netname)
     except ValueError as e:
         raise HTTPException(422, str(e))
-    updated_rows = store.apply_asn_name(rec["asn"], rec["name"])
+    updated_rows = store.apply_asn_meta(
+        rec["asn"], name=rec.get("name") or "",
+        netname=rec.get("netname") or "")
     return {"ok": True, "asn": rec, "updated_rows": updated_rows}
+
+
+@router.post("/asns/apply")
+async def apply_asns():
+    """Перенести ВЕСЬ справочник в строки подсетей: для каждой записи с
+    непустым name/netname перезаписать values.asnname/values.netname у всех
+    строк с этим ASN (во всех списках). Строки с ASN, которого нет в
+    справочнике (или у записи пусто), не трогаются. Ответ: {ok,
+    updated_rows} — сколько строк подсетей изменено суммарно."""
+    updated_rows = 0
+    for rec in asn_store.list_asns():
+        name = rec.get("name") or ""
+        netname = rec.get("netname") or ""
+        if not name.strip() and not netname.strip():
+            continue
+        updated_rows += store.apply_asn_meta(
+            rec["asn"], name=name, netname=netname)
+    return {"ok": True, "updated_rows": updated_rows}
 
 
 @router.post("/asns/sync")
 async def sync_asns():
     """Собрать все уникальные значения values.asn из ВСЕХ списков подсетей
     аккаунта и добавить их в справочник ASN (название — первое непустое
-    values.asnname; если названия нет — запись с пустым name).
+    values.asnname, netname — первое values.netname; если названия нет —
+    запись с пустым name).
 
-    Справочник авторитетнее файлов: у существующих записей name НЕ
-    перезаписывается (пустое name заполняется из строк). Невалидные asn
+    Справочник авторитетнее файлов: у существующих записей name/netname НЕ
+    перезаписываются (пустые заполняются из строк). Невалидные asn
     пропускаются, лимит MAX_ASNS соблюдается (что влезло — добавлено).
     Строки подсетей не меняются. Ответ: {ok, added, filled, total}."""
     data = store.get_store()
-    pairs: dict[str, str] = {}  # asn → первое непустое asnname (или "")
+    pairs: dict[str, tuple[str, str]] = {}  # asn → (первое asnname, первое netname)
     for p in data.get("providers", []):
         for l in p.get("lists", []):
             for row in l.get("rows", []):
@@ -78,21 +101,27 @@ async def sync_asns():
                 except ValueError:
                     continue  # мусор в asn — пропускаем
                 name = str(values.get("asnname") or "").strip()
+                netname = str(values.get("netname") or "").strip()
                 if key not in pairs:
-                    pairs[key] = name
+                    pairs[key] = (name, netname)
     added, filled = 0, 0
-    for key, name in pairs.items():
+    for key, (name, netname) in pairs.items():
         existing = asn_store.get_asn(key)
         if existing is None:
             try:
-                asn_store.upsert_asn(key, name)
+                asn_store.upsert_asn(key, name, netname=netname)
             except ValueError:
                 continue  # упёрлись в MAX_ASNS — добавляем сколько можем
             added += 1
-        elif name and not str(existing.get("name") or "").strip():
-            # пустое name в справочнике — заполняем из строк (note сохраняем)
-            asn_store.upsert_asn(key, name, note=existing.get("note") or "")
-            filled += 1
+        else:
+            # пустые name/netname в справочнике — заполняем из строк
+            # (note сохраняем); непустые не перезаписываются
+            need_name = name and not str(existing.get("name") or "").strip()
+            need_netname = netname and not str(existing.get("netname") or "").strip()
+            if need_name or need_netname:
+                asn_store.upsert_asn(key, name, note=existing.get("note") or "",
+                                     netname=netname)
+                filled += 1
     return {"ok": True, "added": added, "filled": filled,
             "total": len(asn_store.list_asns())}
 
