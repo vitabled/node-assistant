@@ -105,16 +105,37 @@ const ICON_STORE = {
 /** `latency` — конфиг интеграции; `job` — очередь ответов GET /latency-scan/{id};
  *  `store` — ответ GET /api/subnets (по умолчанию STORE);
  *  `enrich` — ответ POST …/enrich-missing; `enrichTypes` — POST …/enrich-types;
- *  `reqIds` — очередь req_id из POST /latency-scan (по умолчанию ["req-1"]). */
-function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[]; enrich?: unknown; enrichTypes?: unknown }) {
+ *  `reqIds` — очередь req_id из POST /latency-scan (по умолчанию ["req-1"]);
+ *  `asns` — стартовый справочник ASN: mock ДЕРЖИТ его состояние (POST
+ *  добавляет/обновляет, DELETE удаляет, GET отдаёт текущий список). */
+function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[]; enrich?: unknown; enrichTypes?: unknown; asns?: { asn: string; name: string; note?: string }[] }) {
   const calls: { url: string; init?: RequestInit }[] = [];
   const jobQueue = [...(opts?.job ?? [])];
   const reqIdQueue = [...(opts?.reqIds ?? ["req-1"])];
+  const asnList = [...(opts?.asns ?? [])];
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
     calls.push({ url, init });
     const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
     if (url === "/api/subnets") return json(opts?.store ?? STORE);
+    if (url === "/api/subnets/asns") {
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        // как backend: asn нормализуется в «AS» + цифры («99999» → «AS99999»)
+        body.asn = "AS" + String(body.asn ?? "").replace(/\D/g, "");
+        const i = asnList.findIndex(x => x.asn === body.asn);
+        if (i >= 0) asnList[i] = { ...asnList[i], ...body };
+        else asnList.push({ asn: body.asn, name: body.name ?? "", note: body.note ?? "" });
+        return json({ ok: true, updated_rows: 1 });
+      }
+      return json({ ok: true, asns: asnList });
+    }
+    if (url.startsWith("/api/subnets/asns/")) {
+      const asn = decodeURIComponent(url.split("/").pop() ?? "");
+      const i = asnList.findIndex(x => x.asn === asn);
+      if (i >= 0) asnList.splice(i, 1);
+      return json({ ok: true });
+    }
     if (url === "/api/latency/config") return json(opts?.latency ?? { enabled: false, has_key: false });
     if (url === "/api/latency/operators") return json(LAT_OPS);
     if (url === "/api/subnets/latency-scan") {
@@ -842,5 +863,128 @@ describe("Subnets", () => {
     await screen.findByText("RUVDS (1)");
     expect(screen.getByTestId("subnets-group-RUVDS").querySelector('img[src="/api/subnets/provider-icon/p1"]')).toBeTruthy();
     expect(rowImg("r1")).toBeTruthy();
+  });
+
+  // ── Color mode (off/groups/all) + акцентная палитра ─────────
+
+  it("colorMode: select с off/groups/all; off гасит цвета, all красит строки по провайдеру без группировки", async () => {
+    installFetch({ store: GROUP_STORE });
+    await openList();
+    const sel = screen.getByTestId("color-mode-select") as HTMLSelectElement;
+    expect([...sel.options].map(o => o.value)).toEqual(["off", "groups", "all"]);
+    expect(sel.value).toBe("groups"); // дефолт — как раньше
+    const bg = () => screen.getByTestId("subnets-row-r1").style.backgroundColor;
+    // дефолт groups + плоский список → цветов нет
+    expect(bg()).toBe("");
+    // all без группировки → строки с провайдером получают цвет, без провайдера — нет
+    fireEvent.change(sel, { target: { value: "all" } });
+    expect(bg()).toMatch(/^rgba\(/); // r1 = RUVDS
+    expect(screen.getByTestId("subnets-row-r2").style.backgroundColor).toBe(""); // r2 без провайдера
+    // off → цветов нет вообще, даже при группировке
+    fireEvent.change(sel, { target: { value: "off" } });
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    await screen.findByText("RUVDS (2)");
+    expect(screen.getByTestId("subnets-group-RUVDS").style.backgroundColor).toBe("");
+    expect(bg()).toBe("");
+    // groups → цвета только при группировке
+    fireEvent.change(sel, { target: { value: "groups" } });
+    expect(screen.getByTestId("subnets-group-RUVDS").style.backgroundColor).toMatch(/^rgba\(/);
+    expect(bg()).toMatch(/^rgba\(/);
+    // в режиме правки — цвета гаснут (и группировка, и раскраска)
+    fireEvent.click(screen.getByTestId("table-edit-toggle"));
+    expect(screen.queryByTestId("subnets-group-RUVDS")).toBeNull();
+    expect(bg()).toBe("");
+  });
+
+  it("заголовки групп — акцентный стиль: rgba-фон 0.14, цветной текст, полоса слева; строки — лёгкий rgba", async () => {
+    installFetch({ store: GROUP_STORE });
+    await openList();
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    const head = await screen.findByTestId("subnets-group-RUVDS") as HTMLElement;
+    // прозрачный фон акцента + текст полным цветом палитры (не пастель)
+    expect(head.style.backgroundColor).toMatch(/rgba\(/);
+    expect(head.style.color).toMatch(/^rgb\(/); // jsdom отдаёт hex как rgb()
+    // полоса слева 3px — на единственной ячейке заголовка
+    const td = head.querySelector("td") as HTMLElement;
+    expect(td.style.borderLeft).toMatch(/3px solid rgb\(/); // jsdom: hex → rgb()
+    // строки группы — лёгкий rgba-фон
+    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
+    // «all» в плоском списке: цвет строки = цвет её группы (RUVDS → тот же hex)
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    fireEvent.change(screen.getByTestId("color-mode-select"), { target: { value: "all" } });
+    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
+  });
+
+  // ── Справочник ASN (рамка под деревом) ──────────────────────
+
+  it("справочник ASN: GET /asns отрисован; добавление — prompt'ы + POST /asns, список обновляется", async () => {
+    const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс" }] });
+    await openList();
+    expect(await screen.findByTestId("asn-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("asn-item-AS12345")).toHaveTextContent("AS12345");
+    expect(screen.getByTestId("asn-item-AS12345")).toHaveTextContent("Яндекс");
+    // добавление: ASN → название → примечание, POST с нормализацией
+    const promptSpy = vi.spyOn(window, "prompt")
+      .mockReturnValueOnce("99999")
+      .mockReturnValueOnce("Новый")
+      .mockReturnValueOnce("");
+    fireEvent.click(screen.getByTestId("asn-add"));
+    await waitFor(() => {
+      const post = calls.find(c => c.url === "/api/subnets/asns" && c.init?.method === "POST");
+      expect(post).toBeTruthy();
+      expect(JSON.parse(String(post!.init!.body))).toEqual({ asn: "99999", name: "Новый", note: "" });
+    });
+    // после мутации — loadAsns() перезагрузил список, новая запись видна
+    expect(await screen.findByTestId("asn-item-AS99999")).toHaveTextContent("Новый");
+    promptSpy.mockRestore();
+  });
+
+  it("справочник ASN: Pencil редактирует (POST upsert), Trash2 удаляет (DELETE /asns/{asn})", async () => {
+    const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс", note: "" }] });
+    await openList();
+    await screen.findByTestId("asn-item-AS12345");
+    // редактирование: prompt'ы с текущими значениями → POST
+    const promptSpy = vi.spyOn(window, "prompt")
+      .mockReturnValueOnce("Яндекс Облако")
+      .mockReturnValueOnce("новое примечание");
+    fireEvent.click(screen.getByTestId("asn-item-AS12345").querySelector('button[title="Изменить"]')!);
+    await waitFor(() => {
+      const post = calls.filter(c => c.url === "/api/subnets/asns" && c.init?.method === "POST");
+      expect(post.length).toBe(1);
+      expect(JSON.parse(String(post[0].init!.body))).toEqual({ asn: "AS12345", name: "Яндекс Облако", note: "новое примечание" });
+    });
+    promptSpy.mockRestore();
+    // удаление: confirm + DELETE
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByTestId("asn-item-AS12345").querySelector('button[title="Удалить"]')!);
+    await waitFor(() => {
+      const del = calls.find(c => c.url === "/api/subnets/asns/AS12345" && c.init?.method === "DELETE");
+      expect(del).toBeTruthy();
+    });
+    // после перезагрузки записи нет
+    await waitFor(() => expect(screen.queryByTestId("asn-item-AS12345")).toBeNull());
+    confirmSpy.mockRestore();
+  });
+
+  it("asnname строки: пустое значение подставляется из справочника (fallback), своё — важнее", async () => {
+    const store = {
+      providers: [{ id: "p1", name: "МТС", lists: [{ id: "l1", name: "Основной",
+        columns: [
+          { key: "subnet", title: "Подсеть" }, { key: "asn", title: "ASN" },
+          { key: "asnname", title: "Название ASN" },
+        ],
+        rows: [
+          { id: "r1", values: { subnet: "10.0.0.0/8", asn: "AS12345", asnname: "" }, operators: {} },
+          { id: "r2", values: { subnet: "11.0.0.0/8", asn: "AS999", asnname: "Свой" }, operators: {} },
+          { id: "r3", values: { subnet: "12.0.0.0/8", asn: "AS12345" }, operators: {} },
+        ] }] }],
+      operators: [],
+    };
+    installFetch({ store, asns: [{ asn: "AS12345", name: "Яндекс" }] });
+    await openList();
+    const cell = (id: string) => screen.getByTestId(`subnets-row-${id}`).querySelectorAll("td")[2];
+    expect(cell("r1")).toHaveTextContent("Яндекс"); // пустое asnname → справочник
+    expect(cell("r2")).toHaveTextContent("Свой");   // своё значение важнее справочника
+    expect(cell("r3")).toHaveTextContent("Яндекс"); // отсутствующее asnname → справочник
   });
 });

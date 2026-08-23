@@ -861,3 +861,123 @@ def test_icon_upload_validation():
     assert r.status_code == 404
     # файл не сохранился после битой загрузки
     assert client.get(f"/api/subnets/provider-icon/{pid}", headers=a).status_code == 404
+
+
+# ── справочник ASN (per-account, синхронизация asnname в строках) ──
+def _mk_rows_with_asn(a, pid, lid, asn1="AS12345", asn2="AS999"):
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                    json={"rows": [
+                        {"subnet": "203.0.113.0/24", "asn": asn1},
+                        {"subnet": "198.51.100.0/24", "asn": asn2},
+                    ]})
+    assert r.status_code == 201, r.text
+    return {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+
+
+def test_asns_upsert_normalizes_without_as_prefix():
+    a = _auth()
+    # «12345» без префикса → «AS12345»; регистр/пробелы не важны
+    r = client.post("/api/subnets/asns", headers=a,
+                    json={"asn": "12345", "name": "Яндекс", "note": "основной"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["asn"]["asn"] == "AS12345"
+    assert body["asn"]["name"] == "Яндекс"
+    assert body["asn"]["note"] == "основной"
+    assert body["updated_rows"] == 0
+    # GET отдаёт нормализованную запись
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert any(x["asn"] == "AS12345" and x["name"] == "Яндекс" for x in asns)
+    # «as12345» и «AS 12345» — тот же ключ (upsert, не дубль)
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "as 12345", "name": "Яндекс", "note": ""})
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert sum(1 for x in asns if x["asn"] == "AS12345") == 1
+    # мусор — 422
+    r = client.post("/api/subnets/asns", headers=a, json={"asn": "abc"})
+    assert r.status_code == 422
+
+
+def test_asns_upsert_syncs_asnname_in_all_lists():
+    """Upsert справочника перезаписывает values.asnname у ВСЕХ строк с
+    values.asn == «AS12345» (во всех провайдерах/списках), чужие ASN не
+    трогаются; ответ содержит updated_rows."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    _mk_rows_with_asn(a, pid, lid)
+    # вторая пара провайдер/список — синхронизация идёт по всем спискам
+    p2 = client.post("/api/subnets/providers", headers=a, json={"name": "Билайн"}).json()
+    l2 = client.post(f"/api/subnets/providers/{p2['id']}/lists", headers=a,
+                     json={"name": "Второй"}).json()
+    _mk_rows_with_asn(a, p2["id"], l2["id"])
+
+    r = client.post("/api/subnets/asns", headers=a,
+                    json={"asn": "12345", "name": "Яндекс"})
+    assert r.status_code == 200
+    assert r.json()["updated_rows"] == 2  # по одной строке в каждом списке
+
+    data = client.get("/api/subnets", headers=a).json()
+    for p in data["providers"]:
+        for l in p["lists"]:
+            by_sub = {x["values"]["subnet"]: x["values"] for x in l["rows"]}
+            assert by_sub["203.0.113.0/24"]["asnname"] == "Яндекс"
+            assert "asnname" not in by_sub["198.51.100.0/24"]  # AS999 не тронут
+
+
+def test_asns_reupsert_updates_name_and_rows():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    _mk_rows_with_asn(a, pid, lid)
+    client.post("/api/subnets/asns", headers=a, json={"asn": "12345", "name": "Яндекс"})
+    # повторный upsert с другим названием → запись и asnname в строках обновлены
+    r = client.post("/api/subnets/asns", headers=a,
+                    json={"asn": "AS12345", "name": "Яндекс Облако"})
+    assert r.status_code == 200
+    assert r.json()["updated_rows"] == 1
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    rec = next(x for x in asns if x["asn"] == "AS12345")
+    assert rec["name"] == "Яндекс Облако"
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс Облако"
+    # пустое name при апдейте не затирает название
+    client.post("/api/subnets/asns", headers=a, json={"asn": "12345", "name": ""})
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS12345")
+    assert rec["name"] == "Яндекс Облако"
+
+
+def test_asns_delete_removes_record_keeps_row_asnname():
+    """DELETE /asns/{asn}: запись уходит из справочника, asnname в строках
+    подсетей НЕ трогается (остаётся последнее название)."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    _mk_rows_with_asn(a, pid, lid)
+    client.post("/api/subnets/asns", headers=a, json={"asn": "12345", "name": "Яндекс"})
+
+    r = client.delete("/api/subnets/asns/AS12345", headers=a)
+    assert r.status_code == 200 and r.json()["ok"] is True
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert all(x["asn"] != "AS12345" for x in asns)
+    # строки не тронуты: asnname остался
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс"
+    # удаление без префикса тоже работает; повторное удаление — идемпотентно
+    assert client.delete("/api/subnets/asns/12345", headers=a).status_code == 200
+    assert client.delete("/api/subnets/asns/12345", headers=a).status_code == 200
+    # мусор в пути — 422
+    assert client.delete("/api/subnets/asns/abc", headers=a).status_code == 422
+
+
+def test_asns_isolated_per_account():
+    """Справочник per-account: записи одного аккаунта не видны другому."""
+    a1, a2 = _auth(), _auth()
+    client.post("/api/subnets/asns", headers=a1, json={"asn": "12345", "name": "Яндекс"})
+    assert client.get("/api/subnets/asns", headers=a2).json()["asns"] == []
+    # синхронизация тоже по аккаунту: строка a2 с тем же ASN не тронута
+    pid, lid = _mk_list(a2)
+    _mk_rows_with_asn(a2, pid, lid)
+    client.post("/api/subnets/asns", headers=a2, json={"asn": "12345", "name": "Другой"})
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a2)}
+    assert fresh["203.0.113.0/24"]["asnname"] == "Другой"
+    assert client.get("/api/subnets/asns", headers=a1).json()["asns"][0]["name"] == "Яндекс"

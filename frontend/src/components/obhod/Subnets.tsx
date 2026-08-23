@@ -52,6 +52,14 @@ type ExportFormat = "json" | "csv" | "txt" | "xlsx";
 type ImportMode = "merge" | "replace";
 interface ImportResult { imported: number; skipped: number; errors: string[] }
 
+/** Цвет строк таблицы: off — цветов нет; groups — только при группировке
+ *  (заголовки групп + строки групп); all — строки окрашены по провайдеру
+ *  даже в плоском списке. В режиме правки цветов нет всегда. */
+type ColorMode = "off" | "groups" | "all";
+
+/** Запись справочника ASN (GET /api/subnets/asns). */
+interface AsnRec { asn: string; name: string; note?: string }
+
 const api = (path: string, init?: RequestInit) =>
   fetch(`/api/subnets${path}`, init ? { headers: { "Content-Type": "application/json" }, ...init } : init);
 
@@ -154,10 +162,13 @@ function ScanRowIcon({ id, state }: { id: string; state: RowScanState }) {
 
 const NO_PROVIDER_KEY = "__none__";
 
-/** Палитра групп (по индексу группы): мягкие пастельные оттенки. */
+/** Палитра групп (по индексу группы): контрастные акценты, хорошо различимые
+ *  и на светлом, и на тёмном фоне. Используются как АКЦЕНТЫ: фон заголовка
+ *  группы — rgba(цвет, 0.14), строк — rgba(цвет, 0.06), текст/иконка/полоса
+ *  слева — полным цветом. */
 const GROUP_COLORS = [
-  "#e8f1fb", "#fdf3e1", "#e9f7ee", "#fbeae8", "#f0eafb",
-  "#e6f6f8", "#f7f0e3", "#eaf0e8",
+  "#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6",
+  "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6",
 ];
 
 /** HEX → rgba(..., alpha) — лёгкий фон строк группы (без opacity на весь tr). */
@@ -215,7 +226,12 @@ export function Subnets() {
   // Группировка строк таблицы по провайдеру (по умолчанию выключена —
   // плоский список). Свёрнутые группы: Set id'ов, по умолчанию всё развёрнуто.
   const [groupByProvider, setGroupByProvider] = useState(false);
+  // Цвет строк: off/groups/all (по умолчанию «groups» — как было раньше).
+  const [colorMode, setColorMode] = useState<ColorMode>("groups");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // Справочник ASN (per-account): asn → название, синхронизируется с asnname
+  // в строках подсетей на сервере при upsert.
+  const [asns, setAsns] = useState<AsnRec[]>([]);
 
   // ── Latency Lab ──
   const [latEnabled, setLatEnabled] = useState(false);
@@ -261,6 +277,13 @@ export function Subnets() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  const loadAsns = useCallback(() => {
+    api("/asns").then(r => r.json()).then(d => {
+      setAsns(Array.isArray(d?.asns) ? d.asns : []);
+    }).catch(() => setAsns([]));
+  }, []);
+  useEffect(() => { loadAsns(); }, [loadAsns]);
+
   // Интеграция может быть выключена — тогда UI скана не показываем вовсе.
   useEffect(() => {
     fetch("/api/latency/config").then(r => r.json()).then(d => {
@@ -277,6 +300,22 @@ export function Subnets() {
   // списку как раньше; toggle на шапке при этом заблокирован.
   const grouped = groupByProvider && !editMode;
   const groups = grouped ? groupRows(current?.rows ?? []) : [];
+  // Цвета активны вне режима правки (и «off», и editMode гасят всё).
+  const colored = colorMode !== "off" && !editMode;
+
+  // Цвет строки в плоском списке (colorMode === "all"): по провайдеру строки.
+  // Та же палитра и тот же порядок назначения, что у групп (первое появление
+  // провайдера в списке), поэтому цвета не «прыгают» при переключении режимов.
+  const rowColor = useMemo(() => {
+    const m = new Map<string, string>();
+    let i = 0;
+    for (const r of current?.rows ?? []) {
+      const p = (r.values?.provider ?? "").trim();
+      if (!p || m.has(p)) continue;
+      m.set(p, GROUP_COLORS[i++ % GROUP_COLORS.length]);
+    }
+    return m;
+  }, [current]);
 
   // Провайдер дерева по имени — для иконок у строк/групп (строки ссылаются
   // на провайдера именем из values.provider, иконка хранится по id).
@@ -285,6 +324,9 @@ export function Subnets() {
     for (const p of providers) m.set(p.name, p);
     return m;
   }, [providers]);
+
+  // asn → название из справочника: fallback, когда у строки пустой asnname.
+  const asnMap = useMemo(() => new Map(asns.map(a => [a.asn, a.name])), [asns]);
 
   const toggleGroup = (id: string) =>
     setCollapsedGroups(prev => {
@@ -337,13 +379,13 @@ export function Subnets() {
 
   // Строка таблицы — общая для плоского списка и групп (группы — только
   // визуальная обёртка: добавление/выделение/редактирование не меняются).
-  // groupColor — фон строки в группе (лёгкий rgba того же цвета группы).
+  // groupColor — цвет строки (лёгкий rgba-фон акцента группы/провайдера).
   const renderRow = (r: Row, groupColor?: string) => {
     const provName = (r.values?.provider ?? "").trim();
     const rowProv = provName ? providerByRow.get(provName) : undefined;
     return (
     <tr key={r.id} data-testid={`subnets-row-${r.id}`}
-      style={groupColor ? { background: hexToRgba(groupColor, 0.35) } : undefined}>
+      style={groupColor ? { background: hexToRgba(groupColor, 0.06) } : undefined}>
       {scanOpen && (
         <td>
           <input type="checkbox" data-testid={`latency-pick-${r.id}`}
@@ -399,7 +441,10 @@ export function Subnets() {
           ) : (
             <span className="trunc" title={r.values?.[c.key] || ""}
               style={{ color: "var(--t-mid)" }}>
-              {r.values?.[c.key] || "—"}
+              {/* asnname: пустое значение строки → название из справочника ASN */}
+              {c.key === "asnname"
+                ? (r.values?.[c.key] || asnMap.get(r.values?.asn ?? "") || "—")
+                : (r.values?.[c.key] || "—")}
             </span>
           )}
         </td>
@@ -425,6 +470,39 @@ export function Subnets() {
     if (msg) toast(msg, "success");
     load();
     return true;
+  };
+
+  // ── Справочник ASN ───────────────────────────────────────────
+  // После любого изменения — load() (сервер при upsert переписал asnname
+  // в строках подсетей) + loadAsns() (сам справочник).
+  const mutateAsn = async (path: string, method: string, body?: unknown, msg?: string) => {
+    const res = await api(path, { method, body: body !== undefined ? JSON.stringify(body) : undefined });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+      return false;
+    }
+    if (msg) toast(msg, "success");
+    load();
+    loadAsns();
+    return true;
+  };
+  const addAsn = () => {
+    const asn = window.prompt("ASN (номер, например 12345 или AS12345)");
+    if (!asn) return;
+    const name = window.prompt("Название (например Яндекс)") ?? "";
+    const note = window.prompt("Примечание (необязательно)") ?? "";
+    void mutateAsn("/asns", "POST",
+      { asn: asn.trim(), name: name.trim(), note: note.trim() }, "ASN добавлен");
+  };
+  const editAsn = (a: AsnRec) => {
+    const name = window.prompt("Название", a.name) ?? a.name;
+    const note = window.prompt("Примечание", a.note ?? "") ?? (a.note ?? "");
+    void mutateAsn("/asns", "POST", { asn: a.asn, name, note }, "ASN обновлён");
+  };
+  const removeAsn = (a: AsnRec) => {
+    if (!window.confirm(`Удалить ASN «${a.asn}» из справочника?`)) return;
+    void mutateAsn(`/asns/${encodeURIComponent(a.asn)}`, "DELETE", undefined, "ASN удалён");
   };
 
   const addProvider = () => {
@@ -802,11 +880,12 @@ export function Subnets() {
         subtitle="Справочник подсетей/IP по провайдерам — разметка для обходов БС" />
 
       <div style={{ display: "grid", gap: 14, gridTemplateColumns: treeOpen ? "240px 1fr" : "34px 1fr", alignItems: "stretch" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
         {/* ── дерево ── */}
         <div className={treeOpen ? "card card-p" : "card"}
           style={{
             display: "flex", flexDirection: "column", gap: 6,
-            maxHeight: "max(280px, calc(100vh - 200px))",
+            maxHeight: treeOpen ? "max(240px, calc(100vh - 460px))" : undefined,
             overflowY: treeOpen ? "auto" : "hidden",
             ...(treeOpen ? {} : { alignItems: "center", justifyContent: "center" }),
           }}>
@@ -868,6 +947,44 @@ export function Subnets() {
           )}
         </div>
 
+        {/* ── справочник ASN (под деревом) ── */}
+        {treeOpen && (
+          <div className="card card-p" data-testid="asn-panel"
+            style={{
+              display: "flex", flexDirection: "column", gap: 6,
+              maxHeight: "max(140px, calc(100vh - 620px))", minHeight: 96,
+              overflowY: "auto",
+            }}>
+            <div className="flex items-center gap-2">
+              <span className="micro">Справочник ASN</span>
+              <button className="iconbtn" style={{ marginLeft: "auto", width: 22, height: 22 }}
+                title="Добавить ASN" data-testid="asn-add" onClick={addAsn}><Plus size={13} /></button>
+            </div>
+            {asns.length === 0 && (
+              <p className="hint">Пусто — добавьте ASN (например 12345 → Яндекс).</p>
+            )}
+            <div className="flex flex-col gap-1" data-testid="asn-list">
+              {asns.map(a => (
+                <div key={a.asn} data-testid={`asn-item-${a.asn}`}
+                  className="flex items-center gap-1 group rounded-md"
+                  style={{ padding: "2px 4px" }}>
+                  <span className="text-xs font-mono trunc" title={a.asn}
+                    style={{ color: "var(--t-hi)", flex: "none", minWidth: 56 }}>{a.asn}</span>
+                  <span className="text-xs trunc" title={a.note || a.name}
+                    style={{ color: a.name ? "var(--t-mid)" : "var(--t-faint)", flex: 1 }}>
+                    {a.name || "—"}
+                  </span>
+                  <button className="iconbtn" style={{ width: 20, height: 20 }} title="Изменить"
+                    onClick={() => editAsn(a)}><Pencil size={10} /></button>
+                  <button className="iconbtn danger" style={{ width: 20, height: 20 }} title="Удалить"
+                    onClick={() => removeAsn(a)}><Trash2 size={10} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        </div>
+
         {/* ── таблица ── */}
         {!current ? (
           <div className="card card-p" style={{ textAlign: "center", color: "var(--t-faint)", fontSize: 13 }}>
@@ -908,6 +1025,17 @@ export function Subnets() {
                 {groupByProvider ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                 {groupByProvider ? "Группировать: Провайдер" : "Группировать: Выкл"}
               </button>
+              <select className="selectbox text-xs" style={{ width: 116 }}
+                data-testid="color-mode-select" aria-label="Цвет строк"
+                value={colorMode}
+                disabled={editMode}
+                title={editMode ? "Недоступно в режиме правки"
+                  : "Цвет строк: выкл / только при группировке / по провайдеру везде"}
+                onChange={e => setColorMode(e.target.value as ColorMode)}>
+                <option value="off">Цвет: Выкл</option>
+                <option value="groups">Цвет: Группы</option>
+                <option value="all">Цвет: Везде</option>
+              </select>
               <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
                 data-testid="list-icon-upload" title="Загрузить иконку списка (png/svg/webp)"
                 onClick={() => pickIcon(sel!.pid, sel!.lid)}>
@@ -1178,11 +1306,18 @@ export function Subnets() {
                     const gProv = providerByRow.get(g.label);
                     return (
                       <Fragment key={g.id}>
+                        {/* Акцентный заголовок группы: прозрачный фон + полный
+                            цвет текста/иконок + полоса слева (borderLeft). */}
                         <tr data-testid={`subnets-group-${g.id}`} onClick={() => toggleGroup(g.id)}
-                          style={{ background: g.color, cursor: "pointer" }}>
-                          <td colSpan={current.columns.length + (scanOpen ? 2 : 1)}>
+                          style={{
+                            background: colored ? hexToRgba(g.color, 0.14) : undefined,
+                            color: colored ? g.color : undefined,
+                            cursor: "pointer",
+                          }}>
+                          <td colSpan={current.columns.length + (scanOpen ? 2 : 1)}
+                            style={colored ? { borderLeft: `3px solid ${g.color}` } : undefined}>
                             <span className="flex items-center gap-1.5 font-semibold"
-                              style={{ fontSize: 11, color: "var(--t-hi)" }}>
+                              style={{ fontSize: 11 }}>
                               {scanOpen && (
                                 // Чекбокс «выбрать все строки группы»: клик не
                                 // сворачивает группу (stopPropagation).
@@ -1204,10 +1339,15 @@ export function Subnets() {
                             </span>
                           </td>
                         </tr>
-                        {!collapsedGroups.has(g.id) && g.rows.map(r => renderRow(r, g.color))}
+                        {!collapsedGroups.has(g.id) && g.rows.map(r => renderRow(r, colored ? g.color : undefined))}
                       </Fragment>
                     );
-                  }) : current.rows.map(r => renderRow(r))}
+                  }) : current.rows.map(r => renderRow(
+                    r,
+                    colored && colorMode === "all"
+                      ? rowColor.get((r.values?.provider ?? "").trim())
+                      : undefined,
+                  ))}
                 </tbody>
               </table>
             </div>

@@ -13,6 +13,7 @@ from openpyxl.styles import Font
 from pydantic import BaseModel, Field, model_validator
 
 from app.services import latency_lab
+from app.services import asn_store
 from app.services import subnets_store as store
 
 router = APIRouter(prefix="/api/subnets")
@@ -25,6 +26,44 @@ def _not_found(exc: KeyError) -> HTTPException:
 @router.get("")
 async def get_all():
     return {**store.get_store(), "operators": store.OPERATORS}
+
+
+# ── справочник ASN (per-account, синхронизация asnname в строках) ──
+class AsnBody(BaseModel):
+    asn: str
+    name: str = ""
+    note: str = ""
+
+
+@router.get("/asns")
+async def list_asns():
+    return {"ok": True, "asns": asn_store.list_asns()}
+
+
+@router.post("/asns")
+async def upsert_asn(body: AsnBody):
+    """Создать/обновить запись справочника (asn нормализуется: «12345» →
+    «AS12345»). После upsert у ВСЕХ строк подсетей текущего аккаунта с
+    values.asn == «AS12345» перезаписывается values.asnname = name —
+    справочник авторитетнее ручной правки ячейки."""
+    try:
+        rec = asn_store.upsert_asn(body.asn, body.name, body.note)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    updated_rows = store.apply_asn_name(rec["asn"], rec["name"])
+    return {"ok": True, "asn": rec, "updated_rows": updated_rows}
+
+
+@router.delete("/asns/{asn}")
+async def delete_asn(asn: str):
+    """Удалить запись справочника. asnname в строках подсетей НЕ трогается —
+    остаётся последнее название из справочника."""
+    try:
+        key = asn_store.normalize_asn(asn)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    asn_store.delete_asn(key)
+    return {"ok": True}
 
 
 class ProviderBody(BaseModel):
