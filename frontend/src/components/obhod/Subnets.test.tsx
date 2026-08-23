@@ -44,13 +44,36 @@ const GROUP_STORE = {
     id: "p1", name: "МТС",
     lists: [{
       id: "l1", name: "Основной",
-      columns: [{ key: "subnet", title: "Подсеть" }],
+      columns: [{ key: "subnet", title: "Подсеть" }, { key: "provider", title: "Провайдер" }],
       rows: [
         { id: "r1", values: { subnet: "10.0.0.0/8", provider: "RUVDS" }, operators: {} },
         { id: "r2", values: { subnet: "11.0.0.0/8", provider: "" }, operators: {} },
         { id: "r3", values: { subnet: "12.0.0.0/8", provider: "Beeline" }, operators: {} },
         { id: "r4", values: { subnet: "13.0.0.0/8", provider: "RUVDS" }, operators: {} },
         { id: "r5", values: { subnet: "14.0.0.0/8", provider: "Аврора" }, operators: {} },
+      ],
+    }],
+  }],
+  operators: [],
+};
+
+/** Строки с повторяющимися и пустыми значениями по колонкам — для теста
+ *  раскраски по значению выбранного столбца (color-column-select). */
+const COLORS_STORE = {
+  providers: [{
+    id: "p1", name: "МТС",
+    lists: [{
+      id: "l1", name: "Основной",
+      columns: [
+        { key: "subnet", title: "Подсеть" },
+        { key: "provider", title: "Провайдер" },
+        { key: "asn_type", title: "Тип ASN" },
+      ],
+      rows: [
+        { id: "r1", values: { subnet: "10.0.0.0/8", provider: "RUVDS", asn_type: "hosting" }, operators: {} },
+        { id: "r2", values: { subnet: "11.0.0.0/8", provider: "Beeline", asn_type: "isp" }, operators: {} },
+        { id: "r3", values: { subnet: "12.0.0.0/8", provider: "RUVDS", asn_type: "business" }, operators: {} },
+        { id: "r4", values: { subnet: "13.0.0.0/8", provider: "", asn_type: "" }, operators: {} },
       ],
     }],
   }],
@@ -110,7 +133,7 @@ const ICON_STORE = {
  *  `asns` — стартовый справочник ASN: mock ДЕРЖИТ его состояние (POST
  *  добавляет/обновляет, DELETE удаляет, POST /asns/{asn}/icon кладёт icon,
  *  GET отдаёт текущий список). */
-function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[]; enrich?: unknown; enrichTypes?: unknown; asns?: { asn: string; name: string; note?: string; icon?: string; netname?: string; country?: string; asn_type?: string }[] }) {
+function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[]; enrich?: unknown; enrichTypes?: unknown; asns?: { asn: string; name: string; note?: string; icon?: string; netname?: string; country?: string; asn_type?: string; category?: string }[] }) {
   const calls: { url: string; init?: RequestInit }[] = [];
   const jobQueue = [...(opts?.job ?? [])];
   const reqIdQueue = [...(opts?.reqIds ?? ["req-1"])];
@@ -134,12 +157,12 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
     }
     if (url === "/api/subnets/asns/sync") {
       // как backend: все уникальные asn из строк store → в asnList (добавить
-      // отсутствующие даже без названия, заполнить пустые name, не
+      // отсутствующие даже без названия, заполнить пустые name/category, не
       // перезаписывать непустые; мусорный asn пропустить)
       const st = (opts?.store ?? STORE) as {
         providers?: { lists?: { rows?: { values?: Record<string, string> }[] }[] }[];
       };
-      const pairs = new Map<string, string>();
+      const pairs = new Map<string, { name: string; category: string }>();
       for (const p of st.providers ?? [])
         for (const l of p.lists ?? [])
           for (const r of l.rows ?? []) {
@@ -148,20 +171,30 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
             if (!m) continue;
             // как backend: name собирается из values.provider (не asnname)
             const name = String(r.values?.provider ?? "").trim();
+            const category = String(r.values?.category ?? "").trim();
             const key = "AS" + m[1];
-            if (!pairs.has(key)) pairs.set(key, name);
+            if (!pairs.has(key)) pairs.set(key, { name, category });
           }
       let added = 0, filled = 0;
-      for (const [key, name] of pairs) {
+      for (const [key, meta] of pairs) {
         const i = asnList.findIndex(x => x.asn === key);
-        if (i < 0) { asnList.push({ asn: key, name, note: "", icon: "" }); added++; }
-        else if (name && !(asnList[i].name ?? "").trim()) { asnList[i] = { ...asnList[i], name }; filled++; }
+        if (i < 0) {
+          asnList.push({ asn: key, name: meta.name, note: "", icon: "", category: meta.category });
+          added++;
+        } else {
+          const cur = asnList[i];
+          const upd: Record<string, string> = {};
+          if (meta.name && !(cur.name ?? "").trim()) upd.name = meta.name;
+          if (meta.category && !(cur.category ?? "").trim()) upd.category = meta.category;
+          if (Object.keys(upd).length) { asnList[i] = { ...cur, ...upd }; filled++; }
+        }
       }
       return json({ ok: true, added, filled, total: asnList.length });
     }
     if (url === "/api/subnets/asns/apply") {
-      // как backend: каждая запись справочника с name/netname перезаписывает
-      // provider/netname у строк store с этим ASN (справочник авторитетнее)
+      // как backend: каждая запись справочника с name/netname/category
+      // перезаписывает provider/netname/category у строк store с этим ASN
+      // (справочник авторитетнее)
       const st = (opts?.store ?? STORE) as {
         providers?: { lists?: { rows?: { values?: Record<string, string> }[] }[] }[];
       };
@@ -174,9 +207,11 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
             if (!rec) continue;
             const name = String(rec.name ?? "").trim();
             const netname = String(rec.netname ?? "").trim();
-            if (!name && !netname) continue;
+            const category = String(rec.category ?? "").trim();
+            if (!name && !netname && !category) continue;
             if (name && r.values) r.values.provider = name;
             if (netname && r.values) r.values.netname = netname;
+            if (category && r.values) r.values.category = category;
             updated++;
           }
       return json({ ok: true, updated_rows: updated });
@@ -858,28 +893,78 @@ describe("Subnets", () => {
     expect(chip).toHaveTextContent("Типы: 3 из 5");
   });
 
-  // ── Цвета групп (палитра при группировке) ──────────────────
+  // ── Цвет по столбцу (color-column-select): раскраска по значению ──
 
-  it("группы получают цвета палитры; строки группы — лёгкий фон; без группировки/в правке цветов нет", async () => {
+  it("color-column-select: варианты «Выкл» + колонки списка; дефолт — выкл; выбор столбца раскрашивает строки по значению (одинаковые — один цвет, разные — разные), пустые значения и «Выкл» — без фона", async () => {
+    installFetch({ store: COLORS_STORE });
+    await openList();
+    const sel = screen.getByTestId("color-column-select") as HTMLSelectElement;
+    // варианты: «Выкл» (пустое значение) + колонки списка по ключу
+    expect([...sel.options].map(o => o.value)).toEqual(["", "subnet", "provider", "asn_type"]);
+    expect(sel.value).toBe(""); // дефолт — выкл
+    const bg = (id: string) => screen.getByTestId(`subnets-row-${id}`).style.backgroundColor;
+    // выкл — фона нет
+    expect(bg("r1")).toBe("");
+    // выбор provider → одинаковые значения — один цвет, разные — разные
+    fireEvent.change(sel, { target: { value: "provider" } });
+    expect(bg("r1")).toMatch(/^rgba\(/);
+    expect(bg("r3")).toBe(bg("r1")); // RUVDS — тот же цвет
+    expect(bg("r2")).toMatch(/^rgba\(/);
+    expect(bg("r2")).not.toBe(bg("r1")); // Beeline — другой цвет
+    expect(bg("r4")).toBe(""); // пустое значение — без фона
+    // выбор asn_type — те же правила по своим значениям
+    fireEvent.change(sel, { target: { value: "asn_type" } });
+    expect(bg("r1")).toMatch(/^rgba\(/);
+    expect(bg("r2")).toMatch(/^rgba\(/);
+    expect(bg("r3")).toMatch(/^rgba\(/);
+    expect(bg("r3")).not.toBe(bg("r1")); // hosting vs business — разные
+    // «Выкл» → фона нет вообще
+    fireEvent.change(sel, { target: { value: "" } });
+    expect(bg("r1")).toBe("");
+    expect(bg("r2")).toBe("");
+    expect(bg("r3")).toBe("");
+  });
+
+  it("цвет по столбцу + группировка: заголовок группы — цвет первого значения, строки — по своим значениям; «Без провайдера» и правка — без фона", async () => {
+    installFetch({ store: GROUP_STORE });
+    await openList();
+    // дефолт «Выкл»: группировка есть, но фона нет
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    await screen.findByText("RUVDS (2)");
+    expect(screen.getByTestId("subnets-group-RUVDS").style.backgroundColor).toBe("");
+    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toBe("");
+    // выбираем provider → заголовок RUVDS цветной (по первой строке r1),
+    // строки RUVDS (r1, r4) — одним цветом
+    fireEvent.change(screen.getByTestId("color-column-select"), { target: { value: "provider" } });
+    expect(screen.getByTestId("subnets-group-RUVDS").style.backgroundColor).toMatch(/^rgba\(/);
+    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
+    expect(screen.getByTestId("subnets-row-r4").style.backgroundColor)
+      .toBe(screen.getByTestId("subnets-row-r1").style.backgroundColor);
+    // «Без провайдера» — пустое значение → заголовок и строки без фона
+    expect(screen.getByTestId("subnets-group-__none__").style.backgroundColor).toBe("");
+    expect(screen.getByTestId("subnets-row-r2").style.backgroundColor).toBe("");
+    // выключаем группировку → строки всё равно цветные (плоский список)
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
+    // в режиме правки — цвета гаснут
+    fireEvent.click(screen.getByTestId("table-edit-toggle"));
+    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toBe("");
+  });
+
+  it("заголовки групп — акцентный стиль по значению колонки: rgba-фон 0.14, цветной текст, полоса слева; строки — контрастный rgba", async () => {
     installFetch({ store: GROUP_STORE });
     await openList();
     fireEvent.click(screen.getByTestId("group-toggle"));
-    const heads = await screen.findAllByTestId(/^subnets-group-/);
-    const colors = heads.map(h => (h as HTMLElement).style.backgroundColor);
-    // у каждой группы свой цвет из палитры (4 группы — 4 разных)
-    expect(colors.every(c => !!c && c !== "transparent")).toBe(true);
-    expect(new Set(colors).size).toBe(4);
-    // строки группы — лёгкий rgba-фон того же цвета
+    fireEvent.change(screen.getByTestId("color-column-select"), { target: { value: "provider" } });
+    const head = await screen.findByTestId("subnets-group-RUVDS") as HTMLElement;
+    // прозрачный фон акцента + текст полным цветом палитры (не пастель)
+    expect(head.style.backgroundColor).toMatch(/rgba\(/);
+    expect(head.style.color).toMatch(/^rgb\(/); // jsdom отдаёт hex как rgb()
+    // полоса слева 3px — на единственной ячейке заголовка
+    const td = head.querySelector("td") as HTMLElement;
+    expect(td.style.borderLeft).toMatch(/3px solid rgb\(/); // jsdom: hex → rgb()
+    // строки группы — контрастный rgba-фон (0.12)
     expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
-    // выключили группировку → фон строк пропал
-    fireEvent.click(screen.getByTestId("group-toggle"));
-    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toBe("");
-    // в режиме правки группировки нет → цветов нет
-    fireEvent.click(screen.getByTestId("group-toggle"));
-    await screen.findByText("RUVDS (2)");
-    fireEvent.click(screen.getByTestId("table-edit-toggle"));
-    expect(screen.queryByTestId("subnets-group-RUVDS")).toBeNull();
-    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toBe("");
   });
 
   // ── Иконки переехали с файлов на ASN ────────────────────────
@@ -896,56 +981,6 @@ describe("Subnets", () => {
     await screen.findByText("RUVDS (1)");
     expect(document.querySelector('img[src^="/api/subnets/provider-icon/"]')).toBeNull();
     expect(document.querySelector('img[src^="/api/subnets/list-icon/"]')).toBeNull();
-  });
-
-  // ── Color mode (off/groups/all) + акцентная палитра ─────────
-
-  it("colorMode: select с off/groups/all; off гасит цвета, all красит строки по провайдеру без группировки", async () => {
-    installFetch({ store: GROUP_STORE });
-    await openList();
-    const sel = screen.getByTestId("color-mode-select") as HTMLSelectElement;
-    expect([...sel.options].map(o => o.value)).toEqual(["off", "groups", "all"]);
-    expect(sel.value).toBe("groups"); // дефолт — как раньше
-    const bg = () => screen.getByTestId("subnets-row-r1").style.backgroundColor;
-    // дефолт groups + плоский список → цветов нет
-    expect(bg()).toBe("");
-    // all без группировки → строки с провайдером получают цвет, без провайдера — нет
-    fireEvent.change(sel, { target: { value: "all" } });
-    expect(bg()).toMatch(/^rgba\(/); // r1 = RUVDS
-    expect(screen.getByTestId("subnets-row-r2").style.backgroundColor).toBe(""); // r2 без провайдера
-    // off → цветов нет вообще, даже при группировке
-    fireEvent.change(sel, { target: { value: "off" } });
-    fireEvent.click(screen.getByTestId("group-toggle"));
-    await screen.findByText("RUVDS (2)");
-    expect(screen.getByTestId("subnets-group-RUVDS").style.backgroundColor).toBe("");
-    expect(bg()).toBe("");
-    // groups → цвета только при группировке
-    fireEvent.change(sel, { target: { value: "groups" } });
-    expect(screen.getByTestId("subnets-group-RUVDS").style.backgroundColor).toMatch(/^rgba\(/);
-    expect(bg()).toMatch(/^rgba\(/);
-    // в режиме правки — цвета гаснут (и группировка, и раскраска)
-    fireEvent.click(screen.getByTestId("table-edit-toggle"));
-    expect(screen.queryByTestId("subnets-group-RUVDS")).toBeNull();
-    expect(bg()).toBe("");
-  });
-
-  it("заголовки групп — акцентный стиль: rgba-фон 0.14, цветной текст, полоса слева; строки — лёгкий rgba", async () => {
-    installFetch({ store: GROUP_STORE });
-    await openList();
-    fireEvent.click(screen.getByTestId("group-toggle"));
-    const head = await screen.findByTestId("subnets-group-RUVDS") as HTMLElement;
-    // прозрачный фон акцента + текст полным цветом палитры (не пастель)
-    expect(head.style.backgroundColor).toMatch(/rgba\(/);
-    expect(head.style.color).toMatch(/^rgb\(/); // jsdom отдаёт hex как rgb()
-    // полоса слева 3px — на единственной ячейке заголовка
-    const td = head.querySelector("td") as HTMLElement;
-    expect(td.style.borderLeft).toMatch(/3px solid rgb\(/); // jsdom: hex → rgb()
-    // строки группы — лёгкий rgba-фон
-    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
-    // «all» в плоском списке: цвет строки = цвет её группы (RUVDS → тот же hex)
-    fireEvent.click(screen.getByTestId("group-toggle"));
-    fireEvent.change(screen.getByTestId("color-mode-select"), { target: { value: "all" } });
-    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
   });
 
   // ── Справочник ASN: кнопка «Справочник» под деревом → полная таблица справа ──
@@ -968,7 +1003,7 @@ describe("Subnets", () => {
     expect(screen.queryByText("203.0.113.0/24")).toBeNull();
   });
 
-  it("ASN: добавление через asn-add — POST /asns (с netname/country/asn_type), новая строка появляется в таблице", async () => {
+  it("ASN: добавление через asn-add — POST /asns (с netname/country/asn_type/category), новая строка появляется в таблице", async () => {
     const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс" }] });
     await openList();
     fireEvent.click(screen.getByTestId("asn-dir-btn"));
@@ -978,12 +1013,14 @@ describe("Subnets", () => {
     fireEvent.change(screen.getByTestId("asn-new-netname"), { target: { value: "RU-NEW" } });
     fireEvent.change(screen.getByTestId("asn-new-country"), { target: { value: "RU" } });
     fireEvent.change(screen.getByTestId("asn-new-asn_type"), { target: { value: "hosting" } });
+    fireEvent.change(screen.getByTestId("asn-new-category"), { target: { value: "CDN" } });
     fireEvent.click(screen.getByTestId("asn-add"));
     await waitFor(() => {
       const post = calls.find(c => c.url === "/api/subnets/asns" && c.init?.method === "POST");
       expect(post).toBeTruthy();
       expect(JSON.parse(String(post!.init!.body))).toEqual({
-        asn: "99999", name: "Новый", netname: "RU-NEW", country: "RU", asn_type: "hosting",
+        asn: "99999", name: "Новый", netname: "RU-NEW", country: "RU",
+        asn_type: "hosting", category: "CDN",
       });
     });
     // после мутации — loadAsns() перезагрузил справочник, новая запись видна
@@ -1074,7 +1111,7 @@ describe("Subnets", () => {
     expect(cells2[3]).toHaveTextContent("—");
   });
 
-  it("ASN: в asn-view колонки [Иконка, ASN, Провайдер, Netname, Страна, Тип ASN, Примечание, Действия]; страна/тип — ячейки записи", async () => {
+  it("ASN: в asn-view колонки [Иконка, ASN, Провайдер, Netname, Страна, Тип ASN, Категория, Примечание, Действия]; страна/тип — ячейки записи", async () => {
     installFetch({ asns: [
       { asn: "AS12345", name: "Яндекс", netname: "RU-YANDEX", country: "RU", asn_type: "hosting" },
       { asn: "AS999", name: "Без" },
@@ -1082,17 +1119,33 @@ describe("Subnets", () => {
     await openList();
     fireEvent.click(screen.getByTestId("asn-dir-btn"));
     await screen.findByTestId("asn-view");
-    // заголовки: «Название» переименовано в «Провайдер», добавлены Страна/Тип ASN
+    // заголовки: «Название» переименовано в «Провайдер», добавлены Страна/Тип ASN/Категория
     const headers = Array.from(screen.getByTestId("asn-view").querySelectorAll("th"))
       .map(th => th.textContent);
-    expect(headers).toEqual(["Иконка", "ASN", "Провайдер", "Netname", "Страна", "Тип ASN", "Примечание", "Действия"]);
+    expect(headers).toEqual(["Иконка", "ASN", "Провайдер", "Netname", "Страна", "Тип ASN", "Категория", "Примечание", "Действия"]);
     // ячейки: страна и тип ASN из записи; у записи без них — «—»
     const cells1 = screen.getByTestId("asn-row-AS12345").querySelectorAll("td");
     expect(cells1[4]).toHaveTextContent("RU");        // Страна
     expect(cells1[5]).toHaveTextContent("Hosting");   // Тип ASN (чип)
+    expect(cells1[6]).toHaveTextContent("—");         // Категория не задана
     const cells2 = screen.getByTestId("asn-row-AS999").querySelectorAll("td");
     expect(cells2[4]).toHaveTextContent("—");
     expect(cells2[5]).toHaveTextContent("—");
+    expect(cells2[6]).toHaveTextContent("—");
+  });
+
+  it("ASN: в asn-view колонка Категория — ячейка с a.category (или «—»)", async () => {
+    installFetch({ asns: [
+      { asn: "AS12345", name: "Яндекс", category: "CDN" },
+      { asn: "AS999", name: "Без" },
+    ] });
+    await openList();
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
+    const cells1 = screen.getByTestId("asn-row-AS12345").querySelectorAll("td");
+    expect(cells1[6]).toHaveTextContent("CDN");
+    const cells2 = screen.getByTestId("asn-row-AS999").querySelectorAll("td");
+    expect(cells2[6]).toHaveTextContent("—");
   });
 
   it("таблица подсетей: asnname рендерится из columns («Название ASN»), country — «Страна», asn_type — «Тип ASN»", async () => {
@@ -1145,12 +1198,13 @@ describe("Subnets", () => {
     fireEvent.click(screen.getByTestId("asn-dir-btn"));
     const row = await screen.findByTestId("asn-row-AS12345");
     // редактирование: prompt'ы с текущими значениями
-    // (Провайдер, netname, страна, тип, примечание) → POST
+    // (Провайдер, netname, страна, тип, категория, примечание) → POST
     const promptSpy = vi.spyOn(window, "prompt")
       .mockReturnValueOnce("Яндекс Облако")
       .mockReturnValueOnce("RU-YANDEX")
       .mockReturnValueOnce("RU")
       .mockReturnValueOnce("hosting")
+      .mockReturnValueOnce("CDN")
       .mockReturnValueOnce("новое примечание");
     fireEvent.click(row.querySelector('button[title="Изменить"]')!);
     await waitFor(() => {
@@ -1158,7 +1212,7 @@ describe("Subnets", () => {
       expect(post.length).toBe(1);
       expect(JSON.parse(String(post[0].init!.body))).toEqual({
         asn: "AS12345", name: "Яндекс Облако", netname: "RU-YANDEX",
-        country: "RU", asn_type: "hosting", note: "новое примечание",
+        country: "RU", asn_type: "hosting", category: "CDN", note: "новое примечание",
       });
     });
     promptSpy.mockRestore();

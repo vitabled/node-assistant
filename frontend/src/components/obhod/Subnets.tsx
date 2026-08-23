@@ -52,16 +52,15 @@ type ExportFormat = "json" | "csv" | "txt" | "xlsx";
 type ImportMode = "merge" | "replace";
 interface ImportResult { imported: number; skipped: number; errors: string[] }
 
-/** Цвет строк таблицы: off — цветов нет; groups — только при группировке
- *  (заголовки групп + строки групп); all — строки окрашены по провайдеру
- *  даже в плоском списке. В режиме правки цветов нет всегда. */
-type ColorMode = "off" | "groups" | "all";
+/** Цвет строк таблицы по значению выбранной колонки: пустая строка —
+ *  без фона. В режиме правки цветов нет всегда. */
 
 /** Запись справочника ASN (GET /api/subnets/asns). icon — имя файла иконки
  *  записи (если загружена; файл отдаёт GET /asns/{asn}/icon). netname —
- *  имя сети, country — страна, asn_type — тип (isp/hosting/business) из
- *  строк подсетей (переносятся в values через apply). */
-interface AsnRec { asn: string; name: string; note?: string; icon?: string; netname?: string; country?: string; asn_type?: string }
+ *  имя сети, country — страна, asn_type — тип (isp/hosting/business),
+ *  category — категория из строк подсетей (переносятся в values через
+ *  apply). */
+interface AsnRec { asn: string; name: string; note?: string; icon?: string; netname?: string; country?: string; asn_type?: string; category?: string }
 
 const api = (path: string, init?: RequestInit) =>
   fetch(`/api/subnets${path}`, init ? { headers: { "Content-Type": "application/json" }, ...init } : init);
@@ -188,6 +187,7 @@ function hexToRgba(hex: string, alpha: number): string {
 const COL_TITLES: Record<string, string> = {
   country: "Страна",
   asn_type: "Тип ASN",
+  category: "Категория",
 };
 
 /** Чип колонки «Тип ASN»: isp=синий (accent), hosting=зелёный (ok), business=янтарный (warn). */
@@ -199,8 +199,8 @@ const ASN_TYPE_META: Record<string, { label: string; cls: string }> = {
 
 /** Группирует строки по провайдеру (row.values.provider): сортировка по
  *  имени (ru), пустой/отсутствующий провайдер — «Без провайдера» последней.
- *  Каждая группа получает цвет из палитры по индексу (до сортировки — цвет
- *  стабилен и не зависит от порядка отображения). */
+ *  Цвета здесь НЕ назначаются: заголовок группы и строки красятся по
+ *  значению выбранной колонки (colorColumn), как и в плоском списке. */
 function groupRows(rows: Row[]) {
   const byProvider = new Map<string, Row[]>();
   for (const r of rows) {
@@ -211,11 +211,10 @@ function groupRows(rows: Row[]) {
     else byProvider.set(key, [r]);
   }
   return [...byProvider.entries()]
-    .map(([id, rs], i) => ({
+    .map(([id, rs]) => ({
       id,
       label: id === NO_PROVIDER_KEY ? "Без провайдера" : id,
       rows: rs,
-      color: GROUP_COLORS[i % GROUP_COLORS.length],
     }))
     .sort((a, b) => {
       if (a.id === NO_PROVIDER_KEY) return 1;
@@ -237,8 +236,10 @@ export function Subnets() {
   // Группировка строк таблицы по провайдеру (по умолчанию выключена —
   // плоский список). Свёрнутые группы: Set id'ов, по умолчанию всё развёрнуто.
   const [groupByProvider, setGroupByProvider] = useState(false);
-  // Цвет строк: off/groups/all (по умолчанию «groups» — как было раньше).
-  const [colorMode, setColorMode] = useState<ColorMode>("groups");
+  // Цвет строк: пусто («Выкл») — без фона; ключ колонки — строки контрастно
+  // раскрашиваются по значению этой колонки (одинаковые значения — один
+  // цвет из палитры). В режиме правки цветов нет.
+  const [colorColumn, setColorColumn] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Справочник ASN (per-account): asn → название, синхронизируется с provider
   // в строках подсетей на сервере при upsert. Кнопка «Справочник» под деревом
@@ -249,6 +250,7 @@ export function Subnets() {
   const [asnNewNetname, setAsnNewNetname] = useState("");
   const [asnNewCountry, setAsnNewCountry] = useState("");
   const [asnNewAsnType, setAsnNewAsnType] = useState("");
+  const [asnNewCategory, setAsnNewCategory] = useState("");
   const [asnView, setAsnView] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
@@ -320,22 +322,29 @@ export function Subnets() {
   // списку как раньше; toggle на шапке при этом заблокирован.
   const grouped = groupByProvider && !editMode;
   const groups = grouped ? groupRows(current?.rows ?? []) : [];
-  // Цвета активны вне режима правки (и «off», и editMode гасят всё).
-  const colored = colorMode !== "off" && !editMode;
+  // Цвета активны вне режима правки (и «Выкл», и editMode гасят всё).
+  const colored = colorColumn !== "" && !editMode;
 
-  // Цвет строки в плоском списке (colorMode === "all"): по провайдеру строки.
-  // Та же палитра и тот же порядок назначения, что у групп (первое появление
-  // провайдера в списке), поэтому цвета не «прыгают» при переключении режимов.
-  const rowColor = useMemo(() => {
+  // Цвет строки по значению выбранной колонки (colorColumn): каждое
+  // уникальное значение получает цвет из палитры по порядку первого
+  // появления — одинаковые значения всегда один цвет, цвета не «прыгают»
+  // при переключении группировки. Пустые значения (и «Выкл») цвета не
+  // получают.
+  const valueColor = useMemo(() => {
     const m = new Map<string, string>();
     let i = 0;
     for (const r of current?.rows ?? []) {
-      const p = (r.values?.provider ?? "").trim();
-      if (!p || m.has(p)) continue;
-      m.set(p, GROUP_COLORS[i++ % GROUP_COLORS.length]);
+      const v = (r.values?.[colorColumn] ?? "").trim();
+      if (!colorColumn || !v || m.has(v)) continue;
+      m.set(v, GROUP_COLORS[i++ % GROUP_COLORS.length]);
     }
     return m;
-  }, [current]);
+  }, [current, colorColumn]);
+
+  // Фон строки: по её значению в выбранной колонке (или undefined — без
+  // фона). Общая для плоского списка и групп.
+  const rowBg = (r: Row): string | undefined =>
+    colored ? valueColor.get((r.values?.[colorColumn] ?? "").trim()) : undefined;
 
   // asn → запись справочника: fallback provider (когда у строки пустое
   // значение) + иконка ASN для строк таблицы (если у записи она есть).
@@ -396,11 +405,12 @@ export function Subnets() {
 
   // Строка таблицы — общая для плоского списка и групп (группы — только
   // визуальная обёртка: добавление/выделение/редактирование не меняются).
-  // groupColor — цвет строки (лёгкий rgba-фон акцента группы/провайдера).
-  const renderRow = (r: Row, groupColor?: string) => {
+  // bg — цвет строки (контрастный лёгкий rgba-фон по значению выбранной
+  // колонки; 0.12 — заметнее прежнего 0.06).
+  const renderRow = (r: Row, bg?: string) => {
     return (
     <tr key={r.id} data-testid={`subnets-row-${r.id}`}
-      style={groupColor ? { background: hexToRgba(groupColor, 0.06) } : undefined}>
+      style={bg ? { background: hexToRgba(bg, 0.12) } : undefined}>
       {scanOpen && (
         <td>
           <input type="checkbox" data-testid={`latency-pick-${r.id}`}
@@ -516,11 +526,12 @@ export function Subnets() {
     if (!asn) return;
     void mutateAsn("/asns", "POST",
       { asn, name: asnNewName.trim(), netname: asnNewNetname.trim(),
-        country: asnNewCountry.trim(), asn_type: asnNewAsnType.trim() }, "ASN добавлен")
+        country: asnNewCountry.trim(), asn_type: asnNewAsnType.trim(),
+        category: asnNewCategory.trim() }, "ASN добавлен")
       .then(ok => {
         if (ok) {
           setAsnNewAsn(""); setAsnNewName(""); setAsnNewNetname("");
-          setAsnNewCountry(""); setAsnNewAsnType("");
+          setAsnNewCountry(""); setAsnNewAsnType(""); setAsnNewCategory("");
         }
       });
   };
@@ -530,8 +541,9 @@ export function Subnets() {
     const netname = window.prompt("Netname", a.netname ?? "") ?? (a.netname ?? "");
     const country = window.prompt("Страна", a.country ?? "") ?? (a.country ?? "");
     const asnType = window.prompt("Тип ASN (isp/hosting/business)", a.asn_type ?? "") ?? (a.asn_type ?? "");
+    const category = window.prompt("Категория", a.category ?? "") ?? (a.category ?? "");
     const note = window.prompt("Примечание", a.note ?? "") ?? (a.note ?? "");
-    void mutateAsn("/asns", "POST", { asn: a.asn, name, netname, country, asn_type: asnType, note }, "ASN обновлён");
+    void mutateAsn("/asns", "POST", { asn: a.asn, name, netname, country, asn_type: asnType, category, note }, "ASN обновлён");
   };
   const removeAsn = (a: AsnRec) => {
     if (!window.confirm(`Удалить ASN «${a.asn}» из справочника?`)) return;
@@ -1084,6 +1096,10 @@ export function Subnets() {
                 data-testid="asn-new-asn_type" aria-label="Тип ASN"
                 placeholder="Тип (isp/hosting/business)"
                 value={asnNewAsnType} onChange={e => setAsnNewAsnType(e.target.value)} />
+              <input className="input font-mono text-xs" style={{ width: 110, flex: "none" }}
+                data-testid="asn-new-category" aria-label="Категория ASN"
+                placeholder="Категория (например CDN)"
+                value={asnNewCategory} onChange={e => setAsnNewCategory(e.target.value)} />
               <button className="btn btn-primary btn-sm" style={{ fontSize: 11, flex: "none" }}
                 onClick={addAsn} disabled={!asnNewAsn.trim()}>
                 <Plus size={11} /> Добавить
@@ -1100,13 +1116,14 @@ export function Subnets() {
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Netname</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Страна</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Тип ASN</th>
+                    <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Категория</th>
                     <th className="sticky top-0 z-10" style={{ background: "var(--bg2)" }}>Примечание</th>
                     <th className="sticky top-0 z-10" style={{ width: 88, background: "var(--bg2)" }}>Действия</th>
                   </tr>
                 </thead>
                 <tbody>
                   {asns.length === 0 && (
-                    <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--t-faint)", padding: 16 }}>
+                    <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--t-faint)", padding: 16 }}>
                       Пусто — добавьте ASN (например 12345 → Яндекс).
                     </td></tr>
                   )}
@@ -1136,6 +1153,8 @@ export function Subnets() {
                           </span>
                         ) : "—"}
                       </td>
+                      <td><span className="trunc" title={a.category || ""}
+                        style={{ color: "var(--t-mid)" }}>{a.category || "—"}</span></td>
                       <td><span className="trunc" title={a.note || ""}
                         style={{ color: "var(--t-faint)" }}>{a.note || "—"}</span></td>
                       <td>
@@ -1189,16 +1208,17 @@ export function Subnets() {
                 {groupByProvider ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                 {groupByProvider ? "Группировать: Провайдер" : "Группировать: Выкл"}
               </button>
-              <select className="selectbox text-xs" style={{ width: 116 }}
-                data-testid="color-mode-select" aria-label="Цвет строк"
-                value={colorMode}
+              <select className="selectbox text-xs" style={{ width: 150 }}
+                data-testid="color-column-select" aria-label="Цвет строк по столбцу"
+                value={colorColumn}
                 disabled={editMode}
                 title={editMode ? "Недоступно в режиме правки"
-                  : "Цвет строк: выкл / только при группировке / по провайдеру везде"}
-                onChange={e => setColorMode(e.target.value as ColorMode)}>
-                <option value="off">Цвет: Выкл</option>
-                <option value="groups">Цвет: Группы</option>
-                <option value="all">Цвет: Везде</option>
+                  : "Раскрасить строки по значению выбранного столбца (одинаковые значения — один цвет)"}
+                onChange={e => setColorColumn(e.target.value)}>
+                <option value="">Цвет: Выкл</option>
+                {current.columns.map(c => (
+                  <option key={c.key} value={c.key}>{COL_TITLES[c.key] ?? c.title}</option>
+                ))}
               </select>
               <button className={`btn btn-sm ${editMode ? "btn-primary" : "btn-soft"}`}
                 style={{ fontSize: 11 }}
@@ -1461,18 +1481,24 @@ export function Subnets() {
                     const gids = g.rows.map(r => r.id);
                     const allPicked = gids.length > 0 && gids.every(id => picked.includes(id));
                     const somePicked = gids.some(id => picked.includes(id));
+                    // Цвет заголовка группы — по значению выбранной колонки у
+                    // ПЕРВОЙ строки группы (нейтрально, если «Выкл» или у
+                    // первой строки пустое значение).
+                    const gColor = colored
+                      ? valueColor.get((g.rows[0]?.values?.[colorColumn] ?? "").trim())
+                      : undefined;
                     return (
                       <Fragment key={g.id}>
                         {/* Акцентный заголовок группы: прозрачный фон + полный
                             цвет текста/иконок + полоса слева (borderLeft). */}
                         <tr data-testid={`subnets-group-${g.id}`} onClick={() => toggleGroup(g.id)}
                           style={{
-                            background: colored ? hexToRgba(g.color, 0.14) : undefined,
-                            color: colored ? g.color : undefined,
+                            background: gColor ? hexToRgba(gColor, 0.14) : undefined,
+                            color: gColor ?? undefined,
                             cursor: "pointer",
                           }}>
                           <td colSpan={current.columns.length + (scanOpen ? 2 : 1)}
-                            style={colored ? { borderLeft: `3px solid ${g.color}` } : undefined}>
+                            style={gColor ? { borderLeft: `3px solid ${gColor}` } : undefined}>
                             <span className="flex items-center gap-1.5 font-semibold"
                               style={{ fontSize: 11 }}>
                               {scanOpen && (
@@ -1491,15 +1517,10 @@ export function Subnets() {
                             </span>
                           </td>
                         </tr>
-                        {!collapsedGroups.has(g.id) && g.rows.map(r => renderRow(r, colored ? g.color : undefined))}
+                        {!collapsedGroups.has(g.id) && g.rows.map(r => renderRow(r, rowBg(r)))}
                       </Fragment>
                     );
-                  }) : current.rows.map(r => renderRow(
-                    r,
-                    colored && colorMode === "all"
-                      ? rowColor.get((r.values?.provider ?? "").trim())
-                      : undefined,
-                  ))}
+                  }) : current.rows.map(r => renderRow(r, rowBg(r)))}
                 </tbody>
               </table>
             </div>

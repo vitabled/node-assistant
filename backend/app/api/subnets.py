@@ -36,6 +36,7 @@ class AsnBody(BaseModel):
     netname: str = ""
     country: str = ""
     asn_type: str = ""
+    category: str = ""
 
 
 @router.get("/asns")
@@ -48,61 +49,54 @@ async def upsert_asn(body: AsnBody):
     """Создать/обновить запись справочника (asn нормализуется: «12345» →
     «AS12345»). После upsert у ВСЕХ строк подсетей текущего аккаунта с
     values.asn == «AS12345» перезаписываются values.provider = name,
-    values.netname = netname, values.country = country и values.asn_type =
-    asn_type (непустые значения) — справочник авторитетнее ручной правки
-    ячейки. Ответ: {ok, asn, updated_rows}."""
+    values.netname = netname, values.country = country, values.asn_type =
+    asn_type и values.category = category (непустые значения) — справочник
+    авторитетнее ручной правки ячейки. Ответ: {ok, asn, updated_rows}."""
     try:
         rec = asn_store.upsert_asn(body.asn, body.name, body.note,
-                                   body.netname, body.country, body.asn_type)
+                                   body.netname, body.country, body.asn_type,
+                                   body.category)
     except ValueError as e:
         raise HTTPException(422, str(e))
     updated_rows = store.apply_asn_meta(
-        rec["asn"], name=rec.get("name") or "",
-        netname=rec.get("netname") or "",
-        country=rec.get("country") or "",
-        asn_type=rec.get("asn_type") or "")
+        rec["asn"],
+        fields={k: rec.get(v) or "" for k, v in store.ASN_SYNC_FIELDS.items()})
     return {"ok": True, "asn": rec, "updated_rows": updated_rows}
 
 
 @router.post("/asns/apply")
 async def apply_asns():
     """Перенести ВЕСЬ справочник в строки подсетей: для каждой записи с
-    непустым name/netname/country/asn_type перезаписать
-    values.provider/values.netname/values.country/values.asn_type у всех
-    строк с этим ASN (во всех списках). Строки с ASN, которого нет в
-    справочнике (или у записи пусто), не трогаются. Ответ: {ok,
-    updated_rows} — сколько строк подсетей изменено суммарно."""
+    непустым name/netname/country/asn_type/category перезаписать
+    values.provider/values.netname/values.country/values.asn_type/
+    values.category у всех строк с этим ASN (во всех списках). Строки с ASN,
+    которого нет в справочнике (или у записи пусто), не трогаются. Ответ:
+    {ok, updated_rows} — сколько строк подсетей изменено суммарно."""
     updated_rows = 0
     for rec in asn_store.list_asns():
-        name = rec.get("name") or ""
-        netname = rec.get("netname") or ""
-        country = rec.get("country") or ""
-        asn_type = rec.get("asn_type") or ""
-        if not (name.strip() or netname.strip()
-                or country.strip() or asn_type.strip()):
+        fields = {k: rec.get(v) or "" for k, v in store.ASN_SYNC_FIELDS.items()}
+        if not any((x or "").strip() for x in fields.values()):
             continue
-        updated_rows += store.apply_asn_meta(
-            rec["asn"], name=name, netname=netname,
-            country=country, asn_type=asn_type)
+        updated_rows += store.apply_asn_meta(rec["asn"], fields=fields)
     return {"ok": True, "updated_rows": updated_rows}
 
 
 @router.post("/asns/sync")
 async def sync_asns():
     """Собрать все уникальные значения values.asn из ВСЕХ списков подсетей
-    аккаунта и добавить их в справочник ASN (название — первое непустое
-    values.provider, netname — первое values.netname, страна — первое
-    values.country, тип — первое values.asn_type; если названия нет —
-    запись с пустым name).
+    аккаунта и добавить их в справочник ASN. Значения берутся по единому
+    маппингу ASN_SYNC_FIELDS (колонка строки → поле записи): provider → name,
+    netname → netname, country → country, asn_type → asn_type, category →
+    category (первое непустое по каждому полю; если названия нет — запись с
+    пустым name).
 
-    Справочник авторитетнее файлов: у существующих записей name/netname/
-    country/asn_type НЕ перезаписываются (пустые заполняются из строк).
-    Невалидные asn пропускаются, лимит MAX_ASNS соблюдается (что влезло —
-    добавлено). Строки подсетей не меняются. Ответ: {ok, added, filled,
-    total}."""
+    Справочник авторитетнее файлов: у существующих записей непустые поля НЕ
+    перезаписываются (пустые заполняются из строк). Невалидные asn
+    пропускаются, лимит MAX_ASNS соблюдается (что влезло — добавлено).
+    Строки подсетей не меняются. Ответ: {ok, added, filled, total}."""
     data = store.get_store()
-    pairs: dict[str, tuple[str, str, str, str]] = {}
-    # asn → (первый provider, первое netname, первая country, первый asn_type)
+    # asn → {поле справочника: первое непустое значение из строк}
+    pairs: dict[str, dict[str, str]] = {}
     for p in data.get("providers", []):
         for l in p.get("lists", []):
             for row in l.get("rows", []):
@@ -114,37 +108,27 @@ async def sync_asns():
                     key = asn_store.normalize_asn(raw)
                 except ValueError:
                     continue  # мусор в asn — пропускаем
-                name = str(values.get("provider") or "").strip()
-                netname = str(values.get("netname") or "").strip()
-                country = str(values.get("country") or "").strip()
-                asn_type = str(values.get("asn_type") or "").strip()
-                if key not in pairs:
-                    pairs[key] = (name, netname, country, asn_type)
+                meta = pairs.setdefault(key, {})
+                for col, field in store.ASN_SYNC_FIELDS.items():
+                    val = str(values.get(col) or "").strip()
+                    if val and not meta.get(field):
+                        meta[field] = val
     added, filled = 0, 0
-    for key, (name, netname, country, asn_type) in pairs.items():
+    for key, meta in pairs.items():
         existing = asn_store.get_asn(key)
         if existing is None:
             try:
-                asn_store.upsert_asn(key, name, netname=netname,
-                                     country=country, asn_type=asn_type)
+                asn_store.upsert_asn(key, **{f: v for f, v in meta.items()})
             except ValueError:
                 continue  # упёрлись в MAX_ASNS — добавляем сколько можем
             added += 1
         else:
-            # пустые name/netname/country/asn_type в справочнике — заполняем
-            # из строк (note сохраняем); непустые не перезаписываются
-            need_name = name and not str(existing.get("name") or "").strip()
-            need_netname = netname and not str(existing.get("netname") or "").strip()
-            need_country = country and not str(existing.get("country") or "").strip()
-            need_asn_type = asn_type and not str(existing.get("asn_type") or "").strip()
-            if need_name or need_netname or need_country or need_asn_type:
-                asn_store.upsert_asn(
-                    key,
-                    name if need_name else (existing.get("name") or ""),
-                    note=existing.get("note") or "",
-                    netname=netname if need_netname else (existing.get("netname") or ""),
-                    country=country if need_country else (existing.get("country") or ""),
-                    asn_type=asn_type if need_asn_type else (existing.get("asn_type") or ""))
+            # пустые поля в справочнике — заполняем из строк (note
+            # сохраняем); непустые не перезаписываются
+            upd = {f: v for f, v in meta.items()
+                   if v and not str(existing.get(f) or "").strip()}
+            if upd:
+                asn_store.upsert_asn(key, note=existing.get("note") or "", **upd)
                 filled += 1
     return {"ok": True, "added": added, "filled": filled,
             "total": len(asn_store.list_asns())}
@@ -305,29 +289,23 @@ class BatchCellsBody(BaseModel):
     updates: list[CellUpdateBody] = Field(..., min_length=1, max_length=MAX_BATCH_UPDATES)
 
 
-# Строки → справочник (АВТО, без кнопок): правка ячейки подсети с одним из
-# этих ключей обновляет соответствующее поле записи ASN в справочнике.
-# asnname со справочником НЕ синхронизируется (это поле строки больше не
-# связано с name).
-_ASN_SYNC_COLS = {
-    "provider": "name",
-    "netname": "netname",
-    "country": "country",
-    "asn_type": "asn_type",
-}
+# Строки → справочник (АВТО, без кнопок): правка ячейки подсети с ключом из
+# ASN_SYNC_FIELDS (provider/netname/country/asn_type/category) обновляет
+# соответствующее поле записи ASN в справочнике. asnname со справочником НЕ
+# синхронизируется (это поле строки больше не связано с name).
 
 
 def _sync_row_to_asn_dict(provider_id: str, list_id: str, row_id: str,
                           col: str, value: str) -> None:
     """Правка ячейки строки подсетей → запись справочника ASN.
 
-    Только для col в {provider, netname, country, asn_type} и только если у
-    строки есть values.asn, который ЕСТЬ в справочнике: соответствующее
-    поле записи обновляется через upsert (пустое значение НЕ затирает).
-    apply обратно НЕ вызывается — строка уже содержит новое значение,
-    которое пользователь только что вписал (иначе был бы лишний цикл
-    справочник→строки)."""
-    field = _ASN_SYNC_COLS.get(col)
+    Только для col из ASN_SYNC_FIELDS (provider/netname/country/asn_type/
+    category) и только если у строки есть values.asn, который ЕСТЬ в
+    справочнике: соответствующее поле записи обновляется через upsert
+    (пустое значение НЕ затирает). apply обратно НЕ вызывается — строка
+    уже содержит новое значение, которое пользователь только что вписал
+    (иначе был бы лишний цикл справочник→строки)."""
+    field = store.ASN_SYNC_FIELDS.get(col)
     if not field or not (value or "").strip():
         return
     data = store.get_store()
@@ -359,9 +337,9 @@ async def batch_update_cells(provider_id: str, list_id: str, body: BatchCellsBod
     не убивают batch: считаются в skipped и перечисляются в errors.
 
     АВТО-синхронизация строки → справочник ASN: правка ячейки provider/
-    netname/country/asn_type у строки, чей values.asn есть в справочнике,
-    обновляет соответствующее поле записи (см. _sync_row_to_asn_dict);
-    apply обратно не вызывается."""
+    netname/country/asn_type/category у строки, чей values.asn есть в
+    справочнике, обновляет соответствующее поле записи
+    (см. _sync_row_to_asn_dict); apply обратно не вызывается."""
     _pick_list(provider_id, list_id)  # 404, если списка нет
     updated, skipped = 0, 0
     errors: list[str] = []

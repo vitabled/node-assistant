@@ -1351,6 +1351,141 @@ def test_asns_apply_transfers_country_and_asn_type():
     assert r2.json()["updated_rows"] == 1
 
 
+# ── Категория (category) в справочнике + общий маппинг ASN_SYNC_FIELDS ──
+def test_asns_upsert_category_saved_and_not_cleared():
+    """Upsert с category: запись получает поле; апдейт с пустым category НЕ
+    затирает текущее; строки подсетей получают category через
+    apply_asn_meta (общий маппинг)."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    _mk_rows_with_asn(a, pid, lid)
+    r = client.post("/api/subnets/asns", headers=a,
+                    json={"asn": "12345", "name": "Яндекс", "category": "хостинг"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["asn"]["category"] == "хостинг"
+    assert body["updated_rows"] == 1
+    # повторный upsert с пустым category — значение сохраняется
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "", "category": ""})
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS12345")
+    assert rec["category"] == "хостинг"
+    # из справочника в строки перенесена и category
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["category"] == "хостинг"
+    # чужой ASN не тронут
+    assert "category" not in fresh["198.51.100.0/24"]
+
+
+def test_asns_sync_collects_category():
+    """POST /asns/sync собирает values.category из строк в справочник
+    (по ASN_SYNC_FIELDS); существующее непустое значение не
+    перезаписывается; строки подсетей не меняются."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "203.0.113.0/24", "asn": "AS12345",
+                     "provider": "Яндекс", "category": "облако"},
+                    {"subnet": "198.51.100.0/24", "asn": "AS3261",
+                     "category": "CDN"},
+                ]})
+    r = client.post("/api/subnets/asns/sync", headers=a)
+    assert r.status_code == 200
+    assert r.json()["added"] == 2
+    by_asn = {x["asn"]: x for x in
+              client.get("/api/subnets/asns", headers=a).json()["asns"]}
+    assert by_asn["AS12345"]["category"] == "облако"
+    assert by_asn["AS3261"]["category"] == "CDN"
+    # самим sync строки подсетей не тронуты
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["category"] == "облако"
+    # существующая запись с непустой category не перезаписывается из строк
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "AS12345", "name": "Яндекс", "category": "другое"})
+    r = client.post("/api/subnets/asns/sync", headers=a)
+    assert r.json()["added"] == 0 and r.json()["filled"] == 0
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS12345")
+    assert rec["category"] == "другое"  # не перезаписано из строк
+    # но сам upsert перенёс «другое» в строки (справочник авторитетнее)
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["category"] == "другое"
+
+
+def test_asns_apply_transfers_category():
+    """POST /asns/apply переносит category из справочника в строки подсетей
+    (как name/netname); повторный apply идемпотентен."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    _mk_rows_with_asn(a, pid, lid)
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "Яндекс", "category": "хостинг"})
+    r = client.post("/api/subnets/asns/apply", headers=a)
+    assert r.status_code == 200
+    assert r.json()["updated_rows"] == 1
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["203.0.113.0/24"]["category"] == "хостинг"
+    # AS999 в справочнике нет — строка не тронута
+    assert "category" not in fresh["198.51.100.0/24"]
+    # повторный apply — снова те же строки (идемпотентно)
+    r2 = client.post("/api/subnets/asns/apply", headers=a)
+    assert r2.json()["updated_rows"] == 1
+
+
+def test_batch_cell_edit_category_syncs_to_dictionary():
+    """Правка ячейки category строки с ASN из справочника АВТОМАТИЧЕСКИ
+    обновляет category записи справочника (строки → справочник, без apply
+    обратно); другие поля записи не тронуты."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [{"subnet": "203.0.113.0/24", "asn": "AS12345"}]})
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "Яндекс", "category": "хостинг"})
+    rid = _rows(a)[0]["id"]
+    r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch",
+                     headers=a, json={"updates": [
+                         {"row_id": rid, "col": "category", "value": "CDN"},
+                     ]})
+    assert r.status_code == 200, r.text
+    assert r.json()["updated"] == 1
+    asns = client.get("/api/subnets/asns", headers=a).json()["asns"]
+    assert len(asns) == 1
+    rec = asns[0]
+    assert rec["category"] == "CDN"
+    assert rec["name"] == "Яндекс"  # другие поля не тронуты
+    # ячейка строки тоже изменена
+    fresh = _rows(a)[0]["values"]
+    assert fresh["category"] == "CDN"
+
+
+def test_batch_cell_edit_isolates_fields():
+    """Общий маппинг: правка одной колонки меняет ТОЛЬКО соответствующее
+    поле справочника (country → name/netname/asn_type/category не тронуты)."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [{"subnet": "203.0.113.0/24", "asn": "AS12345"}]})
+    client.post("/api/subnets/asns", headers=a,
+                json={"asn": "12345", "name": "Яндекс", "netname": "RU-YANDEX",
+                      "country": "RU", "asn_type": "hosting",
+                      "category": "хостинг"})
+    rid = _rows(a)[0]["id"]
+    r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch",
+                     headers=a, json={"updates": [
+                         {"row_id": rid, "col": "country", "value": "KZ"},
+                     ]})
+    assert r.status_code == 200, r.text
+    rec = client.get("/api/subnets/asns", headers=a).json()["asns"][0]
+    assert rec["country"] == "KZ"
+    assert rec["name"] == "Яндекс"
+    assert rec["netname"] == "RU-YANDEX"
+    assert rec["asn_type"] == "hosting"
+    assert rec["category"] == "хостинг"
+
+
 def test_batch_cell_edit_syncs_row_to_dictionary():
     """Правка ячейки provider/netname/country/asn_type строки с ASN из
     справочника АВТОМАТИЧЕСКИ обновляет запись справочника (строки →

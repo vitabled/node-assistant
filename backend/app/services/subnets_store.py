@@ -545,24 +545,41 @@ def apply_asn_name(asn: str, name: str, account_id: Optional[str] = None) -> int
     return updated
 
 
-def apply_asn_meta(asn: str, name: Optional[str] = None,
-                   netname: Optional[str] = None,
-                   country: Optional[str] = None,
-                   asn_type: Optional[str] = None,
+# ── синхронизация ASN ↔ строки подсетей ────────────────────────
+# Единый маппинг «колонка строки подсетей → поле записи справочника ASN» —
+# ОДИН источник истины для ВСЕХ направлений синхронизации:
+#   apply_asn_meta (справочник → строки: name → values.provider, …),
+#   _sync_row_to_asn_dict (правка ячейки строки → поле записи),
+#   POST /asns/sync (сбор значений из строк в справочник).
+# Новое поле = одна строка здесь + параметр в asn_store.upsert_asn.
+ASN_SYNC_FIELDS: dict[str, str] = {
+    "provider": "name",
+    "netname": "netname",
+    "country": "country",
+    "asn_type": "asn_type",
+    "category": "category",
+}
+
+
+def apply_asn_meta(asn: str, fields: Optional[dict[str, str]] = None,
                    account_id: Optional[str] = None) -> int:
     """Справочник ASN → подсети: во ВСЕХ списках всех провайдеров у строк с
     values.asn == asn (нормализованный «AS12345») перезаписать
-    values.provider = name, values.netname = netname, values.country = country
-    и values.asn_type = asn_type. Справочник авторитетнее ручной правки
-    ячейки. Непустые значения перезаписывают всегда; пустые/None — поле не
-    трогается (asnname из name НЕ обновляется — это поле больше не связано
-    со справочником). Возвращает число обновлённых строк (0, если все
-    значения пусты)."""
-    name = (name or "").strip()
-    netname = (netname or "").strip()
-    country = (country or "").strip()
-    asn_type = (asn_type or "").strip()
-    if not (name or netname or country or asn_type):
+    values.<key> из каждого непустого значения записи.
+
+    fields — маппинг «ключ в values строки → значение записи справочника»
+    (например {"provider": "Яндекс", "category": "CDN"}); пустые/None —
+    поле не трогается (asnname из name НЕ обновляется — это поле больше не
+    связано со справочником). Справочник авторитетнее ручной правки ячейки.
+    Звонящий строит fields из ASN_SYNC_FIELDS (колонка строки → поле
+    записи), чтобы маппинг жил в одном месте; дефолт — стандартные колонки
+    с пустыми значениями (0 обновлённых строк, как раньше без значений).
+    Возвращает число обновлённых строк."""
+    if fields is None:
+        # стандартный маппинг (обратный ASN_SYNC_FIELDS), без значений
+        fields = {k: "" for k in ASN_SYNC_FIELDS}
+    vals = {k: (v or "").strip() for k, v in fields.items()}
+    if not any(vals.values()):
         return 0
     data = _load(account_id)
     updated = 0
@@ -571,14 +588,9 @@ def apply_asn_meta(asn: str, name: Optional[str] = None,
             for row in l.get("rows", []):
                 values = row.get("values") or {}
                 if str(values.get("asn") or "").strip() == asn:
-                    if name:
-                        values["provider"] = name
-                    if netname:
-                        values["netname"] = netname
-                    if country:
-                        values["country"] = country
-                    if asn_type:
-                        values["asn_type"] = asn_type
+                    for target, val in vals.items():
+                        if val:
+                            values[target] = val
                     updated += 1
     if updated:
         _save(data, account_id)
