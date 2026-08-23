@@ -57,6 +57,121 @@ _OPERATOR_ALIASES = {
 
 _ASN_NUM_RE = re.compile(r"AS(\d+)")
 
+# ── тип ASN (эвристика, ip-info/ip-api тип без ключа не отдают) ─────
+# Проверяется подстрокой по org/asnname/netname/provider (регистр и дефисы
+# не важны: «data-center» == «data center» == «datacenter»).
+_ASN_HOSTING_WORDS = (
+    "hosting", "cloud", "data center", "datacenter", "server", "vps", "vds",
+    "dedicated", "ihc", "selectel", "timeweb", "reg.ru", "ruvds", "firstvds",
+    "aeza", "hetzner", "digitalocean", "aws", "azure", "gcore", "ddos-guard",
+    "spaceweb", "beget", "sprinthost", "justhost", "cloudflare", "serverius",
+    "хостинг", "облако", "дата-центр",
+)
+_ASN_ISP_WORDS = (
+    "telecom", "telekom", "связь", "интернет", "сети", "net", "isp",
+    "operator", "мтс", "билайн", "мегафон", "ростелеком", "beeline",
+    "megafon", "mts", "телеком", "коммуникац", "wireline", "broadband",
+    "provider", "wimax", "lte", "транстелеком",
+)
+
+
+def _asn_type(org: str, asnname: str = "", netname: str = "",
+              provider: str = "") -> str:
+    """Тип ASN по имени организации/ASN/сети/провайдеру — эвристика.
+
+    Порядок: hosting → isp → business. Пусто только если данных нет вовсе
+    (все четыре поля пустые). Регистр и дефисы не важны.
+    """
+    parts = " ".join(x for x in (org, asnname, netname, provider) if x)
+    if not parts.strip():
+        return ""
+    raw = parts.lower()
+    clean = raw.replace("-", " ")
+    for words, kind in ((_ASN_HOSTING_WORDS, "hosting"),
+                        (_ASN_ISP_WORDS, "isp")):
+        for w in words:
+            wl = w.lower()
+            if wl in raw or wl.replace("-", " ") in clean:
+                return kind
+    return "business"
+
+
+# ── иконки провайдеров/списков (файлы в DATA_DIR, раздача через API) ──
+ICON_EXTS = ("png", "svg", "webp")
+ICON_MAX_BYTES = 256 * 1024
+
+
+def _icons_dir(account_id: Optional[str]) -> Path:
+    aid = account_id or accounts.current_account.get()
+    if not aid:
+        raise RuntimeError("No active account in context")
+    d = accounts.data_dir(aid) / "subnets_icons"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _validate_icon(blob: bytes, filename: str) -> str:
+    """Расширение иконки (png/svg/webp) и размер ≤ 256 КБ. → ext."""
+    ext = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
+    if ext not in ICON_EXTS:
+        raise ValueError("Иконка должна быть PNG, SVG или WebP")
+    if not blob:
+        raise ValueError("Файл пуст")
+    if len(blob) > ICON_MAX_BYTES:
+        raise ValueError(f"Иконка не больше {ICON_MAX_BYTES // 1024} КБ")
+    return ext
+
+
+def _save_icon(kind_name: str, blob: bytes, filename: str,
+               account_id: Optional[str]) -> str:
+    """Сохранить файл иконки → имя файла (kind.ext). Старая иконка того же
+    владельца с другим расширением удаляется."""
+    ext = _validate_icon(blob, filename)
+    name = f"{kind_name}.{ext}"
+    d = _icons_dir(account_id)
+    for old in d.glob(f"{kind_name}.*"):
+        if old.name != name:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    (d / name).write_bytes(blob)
+    return name
+
+
+def save_provider_icon(provider_id: str, blob: bytes, filename: str,
+                       account_id: Optional[str] = None) -> str:
+    """Загрузить иконку провайдера: файл в DATA_DIR + provider['icon']."""
+    data = _load(account_id)
+    p = _find_provider(data, provider_id)
+    if not p:
+        raise KeyError(provider_id)
+    name = _save_icon(provider_id, blob, filename, account_id)
+    p["icon"] = name
+    _save(data, account_id)
+    return name
+
+
+def save_list_icon(provider_id: str, list_id: str, blob: bytes, filename: str,
+                   account_id: Optional[str] = None) -> str:
+    """Загрузить иконку списка: файл в DATA_DIR + list['icon']."""
+    data = _load(account_id)
+    lst = _find_list(data, provider_id, list_id)
+    if not lst:
+        raise KeyError(list_id)
+    name = _save_icon(f"list_{list_id}", blob, filename, account_id)
+    lst["icon"] = name
+    _save(data, account_id)
+    return name
+
+
+def icon_file(name: str, account_id: Optional[str] = None) -> Optional[Path]:
+    """Путь к файлу иконки по имени из provider/list['icon'] (или None)."""
+    if not (name or "").strip():
+        return None
+    p = _icons_dir(account_id) / name
+    return p if p.exists() else None
+
 
 def _path(account_id: Optional[str]) -> Path:
     aid = account_id or accounts.current_account.get()
@@ -100,7 +215,8 @@ def add_provider(name: str, account_id: Optional[str] = None) -> dict:
     data = _load(account_id)
     if len(data["providers"]) >= MAX_LISTS:
         raise ValueError(f"Не больше {MAX_LISTS} провайдеров")
-    p = {"id": uuid.uuid4().hex[:10], "name": name.strip() or "Провайдер", "lists": []}
+    p = {"id": uuid.uuid4().hex[:10], "name": name.strip() or "Провайдер",
+         "icon": "", "lists": []}
     data["providers"].append(p)
     _save(data, account_id)
     return p
@@ -130,6 +246,7 @@ def add_list(provider_id: str, name: str, account_id: Optional[str] = None) -> d
     if sum(len(x.get("lists", [])) for x in data["providers"]) >= MAX_LISTS:
         raise ValueError(f"Не больше {MAX_LISTS} списков")
     lst = {"id": uuid.uuid4().hex[:10], "name": name.strip() or "Список",
+           "icon": "",
            "columns": [dict(c) for c in DEFAULT_COLUMNS], "rows": []}
     p.setdefault("lists", []).append(lst)
     _save(data, account_id)

@@ -68,11 +68,45 @@ const SCAN_RESULT = {
   },
 };
 
+/** Список с колонкой asn_type — чипы ISP/Hosting/Business. */
+const TYPES_STORE = {
+  providers: [{
+    id: "p1", name: "МТС",
+    lists: [{
+      id: "l1", name: "Основной",
+      columns: [{ key: "subnet", title: "Подсеть" }, { key: "asn_type", title: "Тип ASN" }],
+      rows: [
+        { id: "r1", values: { subnet: "10.0.0.0/8", asn_type: "hosting" }, operators: {} },
+        { id: "r2", values: { subnet: "11.0.0.0/8", asn_type: "isp" }, operators: {} },
+        { id: "r3", values: { subnet: "12.0.0.0/8", asn_type: "business" }, operators: {} },
+        { id: "r4", values: { subnet: "13.0.0.0/8" }, operators: {} },
+      ],
+    }],
+  }],
+  operators: [],
+};
+
+/** Провайдер с иконкой (icon задаёт файл, GET отдаёт его по id). */
+const ICON_STORE = {
+  providers: [{
+    id: "p1", name: "RUVDS", icon: "p1.png",
+    lists: [{
+      id: "l1", name: "Основной",
+      columns: [{ key: "subnet", title: "Подсеть" }],
+      rows: [
+        { id: "r1", values: { subnet: "10.0.0.0/8", provider: "RUVDS" }, operators: {} },
+        { id: "r2", values: { subnet: "11.0.0.0/8", provider: "" }, operators: {} },
+      ],
+    }],
+  }],
+  operators: [],
+};
+
 /** `latency` — конфиг интеграции; `job` — очередь ответов GET /latency-scan/{id};
  *  `store` — ответ GET /api/subnets (по умолчанию STORE);
- *  `enrich` — ответ POST …/enrich-missing;
+ *  `enrich` — ответ POST …/enrich-missing; `enrichTypes` — POST …/enrich-types;
  *  `reqIds` — очередь req_id из POST /latency-scan (по умолчанию ["req-1"]). */
-function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[]; enrich?: unknown }) {
+function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[]; enrich?: unknown; enrichTypes?: unknown }) {
   const calls: { url: string; init?: RequestInit }[] = [];
   const jobQueue = [...(opts?.job ?? [])];
   const reqIdQueue = [...(opts?.reqIds ?? ["req-1"])];
@@ -101,6 +135,8 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
       return json(opts?.imp ?? { ok: true, imported: 2, skipped: 1, errors: [] });
     if (url.endsWith("/enrich-missing"))
       return json(opts?.enrich ?? { updated: 0, of: 0, skipped: 0 });
+    if (url.endsWith("/enrich-types"))
+      return json(opts?.enrichTypes ?? { updated: 0, of: 0 });
     return new Response("{}", { status: 200 });
   });
   vi.stubGlobal("fetch", fn);
@@ -705,5 +741,106 @@ describe("Subnets", () => {
     // выходим из правки → группировка вернулась
     fireEvent.click(screen.getByTestId("table-edit-toggle"));
     expect(await screen.findByText("RUVDS (2)")).toBeInTheDocument();
+  });
+
+  // ── Тип ASN (колонка asn_type, кнопка «Типы ASN») ───────────
+
+  it("колонка asn_type рендерит чипы ISP/Hosting/Business с цветами; пусто — «—»", async () => {
+    installFetch({ store: TYPES_STORE });
+    await openList();
+    const chip = (id: string) => screen.getByTestId(`asn-type-${id}`);
+    expect(chip("r1")).toHaveTextContent("Hosting");
+    expect(chip("r2")).toHaveTextContent("ISP");
+    expect(chip("r3")).toHaveTextContent("Business");
+    expect(chip("r1").className).toContain("chip ok");      // hosting — зелёный
+    expect(chip("r2").className).toContain("chip accent");  // isp — синий
+    expect(chip("r3").className).toContain("chip warn");    // business — янтарный
+    // без значения — прочерк, без чипа
+    expect(screen.getByText("13.0.0.0/8").closest("tr")!.textContent).toContain("—");
+    expect(screen.queryByTestId("asn-type-r4")).toBeNull();
+  });
+
+  it("«Типы ASN» зовёт enrich-types (все строки) и показывает итог", async () => {
+    const calls = installFetch({ enrichTypes: { updated: 3, of: 5 } });
+    await openIo();
+    fireEvent.click(screen.getByTestId("enrich-types-run"));
+    await waitFor(() => {
+      const post = calls.find(c => c.url.endsWith("/enrich-types"));
+      expect(post).toBeTruthy();
+      expect(post!.init!.method).toBe("POST");
+      expect(JSON.parse(String(post!.init!.body))).toEqual({});
+    });
+    const chip = await screen.findByTestId("enrich-types-result");
+    expect(chip).toHaveTextContent("Типы: 3 из 5");
+  });
+
+  // ── Цвета групп (палитра при группировке) ──────────────────
+
+  it("группы получают цвета палитры; строки группы — лёгкий фон; без группировки/в правке цветов нет", async () => {
+    installFetch({ store: GROUP_STORE });
+    await openList();
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    const heads = await screen.findAllByTestId(/^subnets-group-/);
+    const colors = heads.map(h => (h as HTMLElement).style.backgroundColor);
+    // у каждой группы свой цвет из палитры (4 группы — 4 разных)
+    expect(colors.every(c => !!c && c !== "transparent")).toBe(true);
+    expect(new Set(colors).size).toBe(4);
+    // строки группы — лёгкий rgba-фон того же цвета
+    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
+    // выключили группировку → фон строк пропал
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toBe("");
+    // в режиме правки группировки нет → цветов нет
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    await screen.findByText("RUVDS (2)");
+    fireEvent.click(screen.getByTestId("table-edit-toggle"));
+    expect(screen.queryByTestId("subnets-group-RUVDS")).toBeNull();
+    expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toBe("");
+  });
+
+  // ── Иконки провайдеров/списков ──────────────────────────────
+
+  it("кнопка «Иконка» у провайдера шлёт multipart POST /providers/{p}/icon", async () => {
+    const calls = installFetch();
+    await openList();
+    fireEvent.click(screen.getByTestId("provider-icon-btn-p1"));
+    const file = new File(["png-bytes"], "icon.png", { type: "image/png" });
+    fireEvent.change(screen.getByTestId("subnets-icon-file"), { target: { files: [file] } });
+    await waitFor(() => {
+      const post = calls.find(c => c.url === "/api/subnets/providers/p1/icon");
+      expect(post).toBeTruthy();
+      expect(post!.init!.method).toBe("POST");
+      const fd = post!.init!.body as FormData;
+      expect(fd).toBeInstanceOf(FormData);
+      expect((fd.get("file") as File).name).toBe("icon.png");
+    });
+  });
+
+  it("иконка списка грузится из шапки списка (multipart, /lists/{l}/icon)", async () => {
+    const calls = installFetch();
+    await openList();
+    fireEvent.click(screen.getByTestId("list-icon-upload"));
+    const file = new File(["<svg/>"], "list.svg", { type: "image/svg+xml" });
+    fireEvent.change(screen.getByTestId("subnets-icon-file"), { target: { files: [file] } });
+    await waitFor(() => {
+      const post = calls.find(c => c.url === "/api/subnets/providers/p1/lists/l1/icon");
+      expect(post).toBeTruthy();
+      const fd = post!.init!.body as FormData;
+      expect((fd.get("file") as File).name).toBe("list.svg");
+    });
+  });
+
+  it("иконка провайдера показывается у строк (плоский список) и в заголовке группы", async () => {
+    installFetch({ store: ICON_STORE });
+    await openList();
+    // плоский список: иконка у строк с провайдером (в дереве — своя копия)
+    const rowImg = (id: string) => screen.getByTestId(`subnets-row-${id}`)
+      .querySelector('img[src="/api/subnets/provider-icon/p1"]');
+    expect(rowImg("r1")).toBeTruthy();  // у r1 провайдер RUVDS
+    expect(rowImg("r2")).toBeNull();    // у r2 провайдера нет — без иконки
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    await screen.findByText("RUVDS (1)");
+    expect(screen.getByTestId("subnets-group-RUVDS").querySelector('img[src="/api/subnets/provider-icon/p1"]')).toBeTruthy();
+    expect(rowImg("r1")).toBeTruthy();
   });
 });

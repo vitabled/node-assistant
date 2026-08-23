@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, Loader2, Pencil, Plus, Sparkles, Table2,
+  Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, ImageUp, Loader2, Pencil, Plus, Sparkles, Table2,
   Trash2, Upload, X,
 } from "lucide-react";
 import { Page, PageHeader } from "../../theme/ui";
@@ -26,8 +26,8 @@ import { toast } from "../infra/Toast";
 interface Col { key: string; title: string }
 interface Op { key: string; label: string }
 interface Row { id: string; values: Record<string, string>; operators: Record<string, boolean> }
-interface Lst { id: string; name: string; columns: Col[]; rows: Row[] }
-interface Prov { id: string; name: string; lists: Lst[] }
+interface Lst { id: string; name: string; icon?: string; columns: Col[]; rows: Row[] }
+interface Prov { id: string; name: string; icon?: string; lists: Lst[] }
 
 interface LatOp { id: string; label: string; online: boolean; configured: boolean }
 interface ScanItem {
@@ -154,8 +154,31 @@ function ScanRowIcon({ id, state }: { id: string; state: RowScanState }) {
 
 const NO_PROVIDER_KEY = "__none__";
 
+/** Палитра групп (по индексу группы): мягкие пастельные оттенки. */
+const GROUP_COLORS = [
+  "#e8f1fb", "#fdf3e1", "#e9f7ee", "#fbeae8", "#f0eafb",
+  "#e6f6f8", "#f7f0e3", "#eaf0e8",
+];
+
+/** HEX → rgba(..., alpha) — лёгкий фон строк группы (без opacity на весь tr). */
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+/** Чип колонки «Тип ASN»: isp=синий (accent), hosting=зелёный (ok), business=янтарный (warn). */
+const ASN_TYPE_META: Record<string, { label: string; cls: string }> = {
+  isp: { label: "ISP", cls: "accent" },
+  hosting: { label: "Hosting", cls: "ok" },
+  business: { label: "Business", cls: "warn" },
+};
+
 /** Группирует строки по провайдеру (row.values.provider): сортировка по
- *  имени (ru), пустой/отсутствующий провайдер — «Без провайдера» последней. */
+ *  имени (ru), пустой/отсутствующий провайдер — «Без провайдера» последней.
+ *  Каждая группа получает цвет из палитры по индексу (до сортировки — цвет
+ *  стабилен и не зависит от порядка отображения). */
 function groupRows(rows: Row[]) {
   const byProvider = new Map<string, Row[]>();
   for (const r of rows) {
@@ -166,7 +189,12 @@ function groupRows(rows: Row[]) {
     else byProvider.set(key, [r]);
   }
   return [...byProvider.entries()]
-    .map(([id, rs]) => ({ id, label: id === NO_PROVIDER_KEY ? "Без провайдера" : id, rows: rs }))
+    .map(([id, rs], i) => ({
+      id,
+      label: id === NO_PROVIDER_KEY ? "Без провайдера" : id,
+      rows: rs,
+      color: GROUP_COLORS[i % GROUP_COLORS.length],
+    }))
     .sort((a, b) => {
       if (a.id === NO_PROVIDER_KEY) return 1;
       if (b.id === NO_PROVIDER_KEY) return -1;
@@ -218,6 +246,12 @@ export function Subnets() {
   // «Разметить провайдеров»: обогащение всех неразмеченных строк списка.
   const [enrichBusy, setEnrichBusy] = useState(false);
   const [enrichResult, setEnrichResult] = useState<{ updated: number; of: number; skipped: number } | null>(null);
+  // «Типы ASN»: эвристика по текущим данным строк (без ip-api).
+  const [typesBusy, setTypesBusy] = useState(false);
+  const [typesResult, setTypesResult] = useState<{ updated: number; of: number } | null>(null);
+  // Загрузка иконки: один скрытый input, цель (провайдер/список) — в ref.
+  const iconInput = useRef<HTMLInputElement | null>(null);
+  const iconTarget = useRef<{ pid: string; lid?: string } | null>(null);
 
   const load = useCallback(() => {
     api("").then(r => r.json()).then(d => {
@@ -243,6 +277,14 @@ export function Subnets() {
   // списку как раньше; toggle на шапке при этом заблокирован.
   const grouped = groupByProvider && !editMode;
   const groups = grouped ? groupRows(current?.rows ?? []) : [];
+
+  // Провайдер дерева по имени — для иконок у строк/групп (строки ссылаются
+  // на провайдера именем из values.provider, иконка хранится по id).
+  const providerByRow = useMemo(() => {
+    const m = new Map<string, Prov>();
+    for (const p of providers) m.set(p.name, p);
+    return m;
+  }, [providers]);
 
   const toggleGroup = (id: string) =>
     setCollapsedGroups(prev => {
@@ -295,8 +337,13 @@ export function Subnets() {
 
   // Строка таблицы — общая для плоского списка и групп (группы — только
   // визуальная обёртка: добавление/выделение/редактирование не меняются).
-  const renderRow = (r: Row) => (
-    <tr key={r.id}>
+  // groupColor — фон строки в группе (лёгкий rgba того же цвета группы).
+  const renderRow = (r: Row, groupColor?: string) => {
+    const provName = (r.values?.provider ?? "").trim();
+    const rowProv = provName ? providerByRow.get(provName) : undefined;
+    return (
+    <tr key={r.id} data-testid={`subnets-row-${r.id}`}
+      style={groupColor ? { background: hexToRgba(groupColor, 0.35) } : undefined}>
       {scanOpen && (
         <td>
           <input type="checkbox" data-testid={`latency-pick-${r.id}`}
@@ -328,11 +375,26 @@ export function Subnets() {
             </span>
           ) : c.key === "subnet" ? (
             <span className="flex items-center gap-1.5" style={{ pointerEvents: "none" }}>
+              {rowProv?.icon && (
+                <img src={`/api/subnets/provider-icon/${rowProv.id}`} alt=""
+                  width={12} height={12}
+                  style={{ borderRadius: 3, objectFit: "contain", flex: "none" }} />
+              )}
               <ScanRowIcon id={r.id} state={rowScanStatus.get(r.id) ?? "none"} />
               <span className="trunc" title={r.values?.[c.key] || ""}
                 style={{ color: "var(--t-hi)" }}>
                 {r.values?.[c.key] || "—"}
               </span>
+            </span>
+          ) : c.key === "asn_type" ? (
+            <span>
+              {r.values?.[c.key] ? (
+                <span className={`chip ${ASN_TYPE_META[r.values[c.key]]?.cls ?? "neutral"}`}
+                  style={{ fontSize: 10 }}
+                  data-testid={`asn-type-${r.id}`}>
+                  {ASN_TYPE_META[r.values[c.key]]?.label ?? r.values[c.key]}
+                </span>
+              ) : "—"}
             </span>
           ) : (
             <span className="trunc" title={r.values?.[c.key] || ""}
@@ -350,7 +412,8 @@ export function Subnets() {
         </button>
       </td>
     </tr>
-  );
+    );
+  };
 
   const mutate = async (path: string, method: string, body?: unknown, msg?: string) => {
     const res = await api(path, { method, body: body !== undefined ? JSON.stringify(body) : undefined });
@@ -494,6 +557,62 @@ export function Subnets() {
     } catch (e) {
       toast((e as Error).message, "error");
     } finally { setEnrichBusy(false); }
+  };
+
+  // Тип ASN (isp/hosting/business) по ТЕКУЩИМ данным строк — без ip-api:
+  // backend создаёт колонку asn_type (если её нет) и заполняет её.
+  const doEnrichTypes = async () => {
+    if (!sel) return;
+    setTypesBusy(true);
+    setTypesResult(null);
+    try {
+      const res = await api(`/providers/${sel.pid}/lists/${sel.lid}/enrich-types`, {
+        method: "POST", body: JSON.stringify({}),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+        return;
+      }
+      const upd = Number(d.updated ?? 0);
+      const of = Number(d.of ?? 0);
+      setTypesResult({ updated: upd, of });
+      toast(`Типы ASN: ${upd} из ${of}`, "success");
+      load();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally { setTypesBusy(false); }
+  };
+
+  // ── иконки провайдеров/списков ───────────────────────────────
+  // Один скрытый input на всю панель: кнопка запоминает цель (провайдер или
+  // список), выбор файла шлёт multipart POST, после — load() обновит дерево.
+  const pickIcon = (pid: string, lid?: string) => {
+    iconTarget.current = { pid, lid };
+    iconInput.current?.click();
+  };
+
+  const uploadIcon = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const t = iconTarget.current;
+    e.target.value = "";
+    if (!file || !t) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    const path = t.lid ? `/providers/${t.pid}/lists/${t.lid}/icon`
+                       : `/providers/${t.pid}/icon`;
+    try {
+      const res = await fetch(`/api/subnets${path}`, { method: "POST", body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+        return;
+      }
+      toast("Иконка загружена", "success");
+      load();
+    } catch (err) {
+      toast((err as Error).message, "error");
+    }
   };
 
   // ── Latency-скан ──────────────────────────────────────────────
@@ -709,6 +828,14 @@ export function Subnets() {
             <div key={p.id}>
               <div className="flex items-center gap-1 group" style={{ padding: "2px 4px" }}>
                 <span className="text-xs font-semibold trunc" style={{ color: "var(--t-hi)", flex: 1 }}>{p.name}</span>
+                {p.icon && (
+                  <img src={`/api/subnets/provider-icon/${p.id}`} alt=""
+                    width={14} height={14}
+                    style={{ borderRadius: 4, objectFit: "contain", flex: "none" }} />
+                )}
+                <button className="iconbtn" style={{ width: 20, height: 20 }} title="Иконка"
+                  data-testid={`provider-icon-btn-${p.id}`}
+                  onClick={() => pickIcon(p.id)}><ImageUp size={11} /></button>
                 <button className="iconbtn" style={{ width: 20, height: 20 }} title="Новый список"
                   onClick={() => addList(p.id)}><Plus size={11} /></button>
                 <button className="iconbtn" style={{ width: 20, height: 20 }} title="Переименовать"
@@ -752,6 +879,11 @@ export function Subnets() {
             <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap" style={{ borderBottom: "1px solid var(--line-soft)", flex: "none" }}>
               <Table2 size={13} style={{ color: "var(--t-low)" }} />
               <span className="micro">{current.name}</span>
+              {current.icon && (
+                <img src={`/api/subnets/list-icon/${sel!.pid}/${sel!.lid}`} alt=""
+                  width={16} height={16}
+                  style={{ borderRadius: 4, objectFit: "contain", flex: "none" }} />
+              )}
               <span className="text-[10px]" style={{ color: "var(--t-faint)" }}>{current.rows.length} строк</span>
               <button className={`btn btn-sm ${ioOpen ? "btn-primary" : "btn-soft"}`}
                 style={{ marginLeft: "auto", fontSize: 11 }}
@@ -775,6 +907,11 @@ export function Subnets() {
                 onClick={() => setGroupByProvider(g => !g)}>
                 {groupByProvider ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                 {groupByProvider ? "Группировать: Провайдер" : "Группировать: Выкл"}
+              </button>
+              <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
+                data-testid="list-icon-upload" title="Загрузить иконку списка (png/svg/webp)"
+                onClick={() => pickIcon(sel!.pid, sel!.lid)}>
+                <ImageUp size={11} /> Иконка
               </button>
               <button className={`btn btn-sm ${editMode ? "btn-primary" : "btn-soft"}`}
                 style={{ fontSize: 11 }}
@@ -836,6 +973,17 @@ export function Subnets() {
                     title="Заполнить провайдера/страну/ASN у всех строк списка без провайдера (ip-api, пачками)">
                     {enrichBusy ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />} Разметить провайдеров
                   </button>
+                  <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
+                    data-testid="enrich-types-run" onClick={() => void doEnrichTypes()}
+                    disabled={typesBusy}
+                    title="Определить тип ASN (ISP/Hosting/Business) по названию организации/ASN — без ip-api, создаёт колонку «Тип ASN»">
+                    {typesBusy ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />} Типы ASN
+                  </button>
+                  {typesResult && (
+                    <span className="chip accent" style={{ fontSize: 10 }} data-testid="enrich-types-result">
+                      Типы: {typesResult.updated} из {typesResult.of}
+                    </span>
+                  )}
                   {enrichResult && (
                     <span className="chip ok" style={{ fontSize: 10 }} data-testid="enrich-missing-result">
                       Обновлено: {enrichResult.updated} из {enrichResult.of}
@@ -1026,10 +1174,12 @@ export function Subnets() {
                     const gids = g.rows.map(r => r.id);
                     const allPicked = gids.length > 0 && gids.every(id => picked.includes(id));
                     const somePicked = gids.some(id => picked.includes(id));
+                    // Иконка группы = иконка провайдера дерева (по имени).
+                    const gProv = providerByRow.get(g.label);
                     return (
                       <Fragment key={g.id}>
                         <tr data-testid={`subnets-group-${g.id}`} onClick={() => toggleGroup(g.id)}
-                          style={{ background: "var(--bg1)", cursor: "pointer" }}>
+                          style={{ background: g.color, cursor: "pointer" }}>
                           <td colSpan={current.columns.length + (scanOpen ? 2 : 1)}>
                             <span className="flex items-center gap-1.5 font-semibold"
                               style={{ fontSize: 11, color: "var(--t-hi)" }}>
@@ -1045,14 +1195,19 @@ export function Subnets() {
                                   onChange={() => toggleGroupPick(g.id)} />
                               )}
                               {collapsedGroups.has(g.id) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                              {gProv?.icon && (
+                                <img src={`/api/subnets/provider-icon/${gProv.id}`} alt=""
+                                  width={14} height={14}
+                                  style={{ borderRadius: 4, objectFit: "contain", flex: "none" }} />
+                              )}
                               <span>{g.label} ({g.rows.length})</span>
                             </span>
                           </td>
                         </tr>
-                        {!collapsedGroups.has(g.id) && g.rows.map(renderRow)}
+                        {!collapsedGroups.has(g.id) && g.rows.map(r => renderRow(r, g.color))}
                       </Fragment>
                     );
-                  }) : current.rows.map(renderRow)}
+                  }) : current.rows.map(r => renderRow(r))}
                 </tbody>
               </table>
             </div>
@@ -1070,6 +1225,8 @@ export function Subnets() {
           </div>
         )}
       </div>
+      <input ref={iconInput} type="file" hidden accept=".png,.svg,.webp"
+        data-testid="subnets-icon-file" onChange={uploadIcon} />
     </Page>
   );
 }

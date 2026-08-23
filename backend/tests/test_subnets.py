@@ -695,3 +695,169 @@ def test_export_xlsx_values_match_source():
     # группы: строка 3 (Билайн) и строка 5 (МТС) — данные уровня 1
     assert ws.row_dimensions[3].outline_level == 1
     assert ws.row_dimensions[5].outline_level == 1
+
+
+# ── тип ASN (эвристика isp/hosting/business) ──────────────────
+def test_asn_type_heuristic():
+    t = store._asn_type
+    # hosting — приоритетнее isp
+    assert t("Selectel", "SELECTEL-NET", "SELECTEL-NET", "") == "hosting"
+    assert t("", "Timeweb Cloud", "", "") == "hosting"
+    assert t("ООО «Облако»", "", "", "") == "hosting"
+    assert t("", "", "AEZA-Data-Center", "") == "hosting"  # дефис == пробел
+    assert t("Hetzner Online GmbH", "", "", "") == "hosting"
+    assert t("", "DigitalOcean", "", "") == "hosting"
+    assert t("Amazon Web Services", "", "", "") == "business"  # «amazon» не в списке
+    assert t("", "AWS-AMAZON", "", "") == "hosting"  # ключевое слово aws
+    assert t("", "", "", "RUVDS") == "hosting"  # по провайдеру
+    assert t("RU-SERVER", "RU-SERVER", "", "") == "hosting"  # "server" в строке
+    # isp
+    assert t("Ростелеком", "", "", "") == "isp"
+    assert t("", "", "", "МТС") == "isp"
+    assert t("PJSC MegaFon", "", "", "") == "isp"
+    assert t("", "Beeline", "", "") == "isp"
+    assert t("ОАО «Транстелеком»", "", "", "") == "isp"
+    assert t("Some Telecom LLC", "", "", "") == "isp"
+    assert t("", "", "INTERNET-NET", "") == "isp"
+    assert t("Wireline Networks", "", "", "") == "isp"
+    # business — всё остальное с данными
+    assert t("Газпром", "GAZPROM-TRADE", "", "") == "business"
+    assert t("", "CorpSystems", "CORP-1", "") == "business"
+    # пусто — данных нет
+    assert t("", "", "", "") == ""
+    # регистр не важен
+    assert t("HOSTING", "", "", "") == "hosting"
+    assert t("", "hEtZnEr", "", "") == "hosting"
+
+
+def test_enrich_types_fills_column_without_touching_provider():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "203.0.113.0/24", "org": "Selectel",
+                     "asnname": "SELECTEL-NET", "provider": "МТС"},
+                    {"subnet": "198.51.100.0/24", "org": "Ростелеком"},
+                    {"subnet": "192.0.2.0/24", "org": "Газпром"},
+                    {"subnet": "10.0.0.0/8"},  # данных нет — пропуск
+                ]})
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/enrich-types",
+                    headers=a, json={})
+    assert r.status_code == 200
+    assert r.json() == {"updated": 3, "of": 4}
+    data = client.get("/api/subnets", headers=a).json()
+    lst = data["providers"][0]["lists"][0]
+    # колонка asn_type создана (реальная колонка → уходит в экспорт)
+    assert any(c["key"] == "asn_type" and c["title"] == "Тип ASN"
+               for c in lst["columns"])
+    by_subnet = {x["values"]["subnet"]: x["values"] for x in lst["rows"]}
+    assert by_subnet["203.0.113.0/24"]["asn_type"] == "hosting"
+    assert by_subnet["198.51.100.0/24"]["asn_type"] == "isp"
+    assert by_subnet["192.0.2.0/24"]["asn_type"] == "business"
+    assert "asn_type" not in by_subnet["10.0.0.0/8"]
+    # provider НЕ тронут
+    assert by_subnet["203.0.113.0/24"]["provider"] == "МТС"
+    # повторный вызов не дублирует колонку, asn_type в CSV-экспорте
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/enrich-types",
+                    headers=a, json={})
+    assert r.json() == {"updated": 0, "of": 4}
+    cols = [c["key"] for c in lst["columns"]]
+    assert cols.count("asn_type") == 1
+    r = client.get("/api/subnets/export", headers=a,
+                   params={"provider_id": pid, "list_id": lid, "format": "csv"})
+    assert r.status_code == 200
+    assert "Тип ASN" in r.text.splitlines()[0]
+
+
+def test_enrich_types_row_ids_and_404():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "203.0.113.0/24", "org": "Selectel"},
+                    {"subnet": "198.51.100.0/24", "org": "Ростелеком"},
+                ]})
+    rows = _rows(a)
+    rid = next(x["id"] for x in rows if x["values"]["subnet"] == "203.0.113.0/24")
+    # только выбранная строка
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/enrich-types",
+                    headers=a, json={"row_ids": [rid]})
+    assert r.status_code == 200 and r.json() == {"updated": 1, "of": 1}
+    fresh = _rows(a)
+    by_subnet = {x["values"]["subnet"]: x["values"] for x in fresh}
+    assert by_subnet["203.0.113.0/24"]["asn_type"] == "hosting"
+    assert "asn_type" not in by_subnet["198.51.100.0/24"]
+    # несуществующие строки/список
+    assert client.post(f"/api/subnets/providers/{pid}/lists/{lid}/enrich-types",
+                       headers=a, json={"row_ids": ["nope"]}).status_code == 404
+    assert client.post("/api/subnets/providers/nope/lists/nope2/enrich-types",
+                       headers=a, json={}).status_code == 404
+
+
+# ── иконки провайдеров/списков ────────────────────────────────
+_PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+
+
+def test_icon_upload_and_serve_provider_and_list():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    # до загрузки — иконки нет, GET отдаёт 404
+    assert client.get(f"/api/subnets/provider-icon/{pid}", headers=a).status_code == 404
+    assert client.get(f"/api/subnets/list-icon/{pid}/{lid}", headers=a).status_code == 404
+    assert client.get("/api/subnets/provider-icon/nope", headers=a).status_code == 404
+
+    # загрузка иконки провайдера (multipart png)
+    r = client.post(f"/api/subnets/providers/{pid}/icon", headers=a,
+                    files={"file": ("icon.png", _PNG, "image/png")})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    data = client.get("/api/subnets", headers=a).json()
+    prov = data["providers"][0]
+    assert prov["icon"] == f"{pid}.png"
+    # GET отдаёт файл с правильным content-type
+    r = client.get(f"/api/subnets/provider-icon/{pid}", headers=a)
+    assert r.status_code == 200
+    assert r.content == _PNG
+    assert r.headers["content-type"].startswith("image/png")
+
+    # иконка списка — отдельно
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/icon", headers=a,
+                    files={"file": ("list.svg", b"<svg/>", "image/svg+xml")})
+    assert r.status_code == 200
+    data = client.get("/api/subnets", headers=a).json()
+    lst = data["providers"][0]["lists"][0]
+    assert lst["icon"] == f"list_{lid}.svg"
+    r = client.get(f"/api/subnets/list-icon/{pid}/{lid}", headers=a)
+    assert r.status_code == 200 and r.content == b"<svg/>"
+    assert "image/svg" in r.headers["content-type"]
+
+    # перезапись с другим расширением: старый файл заменяется
+    r = client.post(f"/api/subnets/providers/{pid}/icon", headers=a,
+                    files={"file": ("icon.webp", b"WEBP", "image/webp")})
+    assert r.status_code == 200
+    prov = client.get("/api/subnets", headers=a).json()["providers"][0]
+    assert prov["icon"] == f"{pid}.webp"
+    assert client.get(f"/api/subnets/provider-icon/{pid}", headers=a).content == b"WEBP"
+
+
+def test_icon_upload_validation():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    # не тот формат
+    r = client.post(f"/api/subnets/providers/{pid}/icon", headers=a,
+                    files={"file": ("icon.jpg", b"jpeg", "image/jpeg")})
+    assert r.status_code == 400 and "PNG" in r.json()["detail"]
+    # пустой файл
+    r = client.post(f"/api/subnets/providers/{pid}/icon", headers=a,
+                    files={"file": ("icon.png", b"", "image/png")})
+    assert r.status_code == 400
+    # больше 256 КБ
+    big = b"x" * (256 * 1024 + 1)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/icon", headers=a,
+                    files={"file": ("big.png", big, "image/png")})
+    assert r.status_code == 400 and "256" in r.json()["detail"]
+    # несуществующий провайдер/список — 404
+    r = client.post("/api/subnets/providers/nope/icon", headers=a,
+                    files={"file": ("icon.png", _PNG, "image/png")})
+    assert r.status_code == 404
+    # файл не сохранился после битой загрузки
+    assert client.get(f"/api/subnets/provider-icon/{pid}", headers=a).status_code == 404

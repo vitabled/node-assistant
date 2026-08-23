@@ -8,7 +8,7 @@ import time
 import httpx
 import openpyxl
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from openpyxl.styles import Font
 from pydantic import BaseModel, Field, model_validator
 
@@ -356,6 +356,104 @@ async def enrich_missing(provider_id: str, list_id: str,
             if i + ENRICH_BATCH_SIZE < len(targets):
                 await asyncio.sleep(ENRICH_BATCH_SLEEP)
     return {"updated": updated, "of": of, "skipped": of - updated}
+
+
+class EnrichTypesBody(BaseModel):
+    # Пусто = все строки списка.
+    row_ids: list[str] = Field(default_factory=list)
+
+
+@router.post("/providers/{provider_id}/lists/{list_id}/enrich-types")
+async def enrich_types(provider_id: str, list_id: str,
+                       body: EnrichTypesBody | None = None):
+    """Тип ASN (isp/hosting/business) по ТЕКУЩИМ данным строки — эвристика
+    по org/asnname/netname/provider, ip-api НЕ вызывается, provider не
+    меняется. Колонка asn_type создаётся, если её ещё нет, и заполняется
+    у строк с непустыми данными. Ответ: {updated, of}."""
+    data = store.get_store()
+    lst = next((l for p in data["providers"] if p["id"] == provider_id
+                for l in p.get("lists", []) if l["id"] == list_id), None)
+    if not lst:
+        raise HTTPException(404, "Список не найден")
+    rows = lst.get("rows", [])
+    if body and body.row_ids:
+        wanted = set(body.row_ids)
+        rows = [r for r in rows if r.get("id") in wanted]
+    if not rows:
+        raise HTTPException(404, "Строки не найдены")
+
+    if "asn_type" not in {c.get("key") for c in lst.get("columns", [])}:
+        store.add_column(provider_id, list_id, "Тип ASN", key="asn_type")
+
+    updated = 0
+    for row in rows:
+        values = row.get("values") or {}
+        t = store._asn_type(str(values.get("org") or ""),
+                            str(values.get("asnname") or ""),
+                            str(values.get("netname") or ""),
+                            str(values.get("provider") or ""))
+        if not t or str(values.get("asn_type") or "") == t:
+            continue  # данных нет или тип уже проставлен — не трогаем
+        store.set_cell(provider_id, list_id, row["id"], "asn_type", t)
+        updated += 1
+    return {"updated": updated, "of": len(rows)}
+
+
+# ── иконки провайдеров/списков (файлы в DATA_DIR, раздача через API) ──
+@router.post("/providers/{provider_id}/icon")
+async def upload_provider_icon(provider_id: str, file: UploadFile = File(...)):
+    """Загрузить иконку провайдера (png/svg/webp ≤ 256 КБ, multipart)."""
+    try:
+        store.save_provider_icon(provider_id, await file.read(),
+                                 file.filename or "")
+    except KeyError as e:
+        raise _not_found(e)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@router.post("/providers/{provider_id}/lists/{list_id}/icon")
+async def upload_list_icon(provider_id: str, list_id: str,
+                           file: UploadFile = File(...)):
+    """Загрузить иконку списка (png/svg/webp ≤ 256 КБ, multipart)."""
+    try:
+        store.save_list_icon(provider_id, list_id, await file.read(),
+                             file.filename or "")
+    except KeyError as e:
+        raise _not_found(e)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+def _icon_response(provider_id: str, list_id: str = "") -> FileResponse:
+    data = store.get_store()
+    if list_id:
+        lst = next((l for p in data["providers"] if p["id"] == provider_id
+                    for l in p.get("lists", []) if l["id"] == list_id), None)
+        if not lst:
+            raise _not_found(KeyError(list_id))
+        name = lst.get("icon") or ""
+    else:
+        p = next((x for x in data["providers"] if x.get("id") == provider_id), None)
+        if not p:
+            raise _not_found(KeyError(provider_id))
+        name = p.get("icon") or ""
+    path = store.icon_file(name)
+    if path is None:
+        raise HTTPException(404, "Иконка не загружена")
+    return FileResponse(path)
+
+
+@router.get("/provider-icon/{provider_id}")
+async def get_provider_icon(provider_id: str):
+    return _icon_response(provider_id)
+
+
+@router.get("/list-icon/{provider_id}/{list_id}")
+async def get_list_icon(provider_id: str, list_id: str):
+    return _icon_response(provider_id, list_id)
 
 
 # ── Latency Lab: замер подсетей списка ────────────────────────
