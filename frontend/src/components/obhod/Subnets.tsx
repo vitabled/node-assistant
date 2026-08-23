@@ -41,8 +41,12 @@ type ScanStatus = "pending" | "done" | "cancelled" | "error";
 type RowScanState = "none" | "running" | "ok" | "unavailable" | "error";
 
 /** Одна порция скана: все req_id, которые вернул один POST /latency-scan.
+ *  rowIds — строки, которые реально ушли в порцию НА МОМЕНТ СТАРТА (для
+ *  all:true — все строки списка тогда). Состав фиксируется при старте,
+ *  чтобы статусы не пересчитывались от текущего выбора (после отмены
+ *  новые выбранные строки не должны получать статусы старого скана).
  *  Порция готова, когда готовы ВСЕ её req_id. */
-interface ScanPart { reqIds: string[]; status: ScanStatus }
+interface ScanPart { reqIds: string[]; rowIds: string[]; status: ScanStatus }
 
 type ExportFormat = "json" | "csv" | "txt" | "xlsx";
 type ImportMode = "merge" | "replace";
@@ -67,6 +71,19 @@ function scanChunks(rows: Row[], picked: string[]): string[][] {
 }
 
 const ICON_BOX = { width: 12, height: 12, flex: "none" } as const;
+
+/** Канонический статус job'а Latency Lab: API местами отдаёт синонимы
+ *  («success» вместо «done», «failed» вместо «error») — поллинг ждёт ровно
+ *  done/error/cancelled, иначе скан с одной подсетью крутился бы вечно. */
+function normalizeScanStatus(s: unknown): ScanStatus {
+  const st = String(s ?? "").trim().toLowerCase();
+  if (st === "done" || st === "success" || st === "completed"
+    || st === "finished" || st === "ok") return "done";
+  if (st === "error" || st === "failed") return "error";
+  if (st === "cancelled" || st === "canceled") return "cancelled";
+  if (!st) return "error"; // статуса нет — считаем ошибкой (как раньше ?? "error")
+  return "pending"; // running/queued/… — ещё идёт, поллим дальше
+}
 
 /** Значок статуса скана строки. Только визуал: родитель гасит pointer-events,
  *  чтобы значок не перехватывал клики строки/выделения/редактирования. */
@@ -183,14 +200,13 @@ export function Subnets() {
     });
 
   // Статус скана для каждой строки: derived из порций + объединённого
-  // результата. Порядок приоритетов: ошибка запуска (errors) → ошибка порции
-  // → спиннер (порция строки ещё идёт) → результат строки (ok/недоступна).
-  // Вне скана или для строк вне порций — «none» (пустой плейсхолдер).
+  // результата. Состав скана зафиксирован при старте (ScanPart.rowIds):
+  // текущий выбор (picked) на статусы НЕ влияет — строки вне скана всегда
+  // «none», после отмены значки сбрасываются в «none» (отмена ≠ ошибка).
   const rowScanStatus = useMemo(() => {
     const map = new Map<string, RowScanState>();
     if (!current) return map;
     const rows = current.rows;
-    const chunks = scanChunks(rows, picked);
     const bySubnet = new Map(rows.map(r => [r.values?.subnet ?? "", r.id]));
     const resultRows = new Map<string, ScanItem>();
     const list = Array.isArray(scanResult?.rows) ? scanResult.rows
@@ -200,34 +216,29 @@ export function Subnets() {
       if (rid) resultRows.set(rid, it);
     }
     const errSubs = new Set(scanErrors.map(e => String(e).split(":")[0].trim()));
-    // Пустой чанк (= all:true на бэкенде) покрывает ВСЕ строки списка.
-    const allChunk = chunks.length === 1 && chunks[0].length === 0;
+    // Порция, покрывающая строку, — по rowIds, замороженным при старте.
+    const partOf = (rid: string): ScanPart | undefined =>
+      scanParts.find(p => p.rowIds.includes(rid));
     for (const r of rows) {
       const subnet = r.values?.subnet ?? "";
       if (errSubs.has(subnet)) { map.set(r.id, "error"); continue; }
-      let ci = allChunk ? 0 : -1;
-      if (!allChunk)
-        for (let i = 0; i < chunks.length; i++)
-          if (chunks[i].includes(r.id)) { ci = i; break; }
-      if (ci === -1) { map.set(r.id, "none"); continue; } // строка не в скане
-      const part = scanParts[ci];
-      if (!part) { map.set(r.id, "none"); continue; }
-      if (part.status === "error" || part.status === "cancelled") {
-        map.set(r.id, "error"); continue;
-      }
+      const part = partOf(r.id);
+      if (!part) { map.set(r.id, "none"); continue; } // строка не в скане
+      if (part.status === "error") { map.set(r.id, "error"); continue; }
+      if (part.status === "cancelled") { map.set(r.id, "none"); continue; } // отмена → сброс
       if (scanStatus === "pending" && part.status !== "done") {
         map.set(r.id, "running"); continue;
       }
       const it = resultRows.get(r.id);
       if (it) { map.set(r.id, it.available ? "ok" : "unavailable"); continue; }
       // порция завершилась, но замера строки нет — скан не дал ответа
-      if (scanStatus === "done" || scanStatus === "error" || scanStatus === "cancelled") {
+      if (scanStatus === "done" || scanStatus === "error") {
         map.set(r.id, "error"); continue;
       }
       map.set(r.id, "none");
     }
     return map;
-  }, [current, picked, scanStatus, scanResult, scanParts, scanErrors]);
+  }, [current, scanStatus, scanResult, scanParts, scanErrors]);
 
   // Строка таблицы — общая для плоского списка и групп (группы — только
   // визуальная обёртка: добавление/выделение/редактирование не меняются).
@@ -434,6 +445,18 @@ export function Subnets() {
     setPicked(p => (p.includes(id) ? p.filter(x => x !== id) : [...p, id]));
   const toggleAll = () =>
     setPicked(p => (current && p.length === current.rows.length ? [] : (current?.rows ?? []).map(r => r.id)));
+  // Чекбокс в заголовке группы: выбрать/снять ВСЕ строки группы.
+  const toggleGroupPick = (gid: string) => {
+    const g = groups.find(x => x.id === gid);
+    if (!g || g.rows.length === 0) return;
+    const ids = g.rows.map(r => r.id);
+    setPicked(p => {
+      if (ids.every(id => p.includes(id))) return p.filter(x => !ids.includes(x));
+      const next = new Set(p);
+      for (const id of ids) next.add(id);
+      return [...next];
+    });
+  };
 
   // Поллинг порций: единственный источник статуса — GET по каждому req_id.
   // Порция готова, когда готовы ВСЕ её req_id; общий статус — по всем порциям
@@ -452,7 +475,9 @@ export function Subnets() {
             try {
               const res = await api(`/latency-scan/${id}`);
               const d = await res.json().catch(() => ({}));
-              return { status: (d?.status ?? "error") as ScanStatus, result: d?.result ?? null, error: d?.error };
+              // Статусы-синонимы Latency Lab нормализуем до done/error —
+              // иначе скан с одной подсетью крутился бы вечно.
+              return { status: normalizeScanStatus(d?.status), result: d?.result ?? null, error: d?.error };
             } catch { return { status: "pending" as ScanStatus, result: null }; }
           }));
           // порция без req_id (упала при запуске) — статус уже error/cancelled
@@ -478,7 +503,7 @@ export function Subnets() {
             }
           }
         }
-        setScanParts(snaps.map(s => ({ reqIds: s.part.reqIds, status: s.st })));
+        setScanParts(snaps.map(s => ({ reqIds: s.part.reqIds, rowIds: s.part.rowIds, status: s.st })));
         setScanResult({ rows });
         const anyErr = snaps.some(s => s.st === "error");
         const anyCancelled = snaps.some(s => s.st === "cancelled");
@@ -520,6 +545,9 @@ export function Subnets() {
       // Порции шлём ПОСЛЕДОВАТЕЛЬНО: параллельные пачки сожгли бы лимит разом.
       for (const chunk of chunks) {
         if (cancelRef.current) break; // отмена во время отправки порций
+        // Состав порции фиксируем ЗДЕСЬ: статусы строк не зависят от того,
+        // что пользователь выберет (или отменит) после старта.
+        const rowIds = chunk.length === 0 ? current.rows.map(r => r.id) : chunk;
         const res = await api("/latency-scan", {
           method: "POST",
           body: JSON.stringify({
@@ -536,14 +564,14 @@ export function Subnets() {
           const msg = typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`;
           toast(msg, "error");
           if (parts.length === 0) { setScanStatus(null); setScanBusy(false); return; }
-          parts.push({ reqIds: [], status: "error" });
+          parts.push({ reqIds: [], rowIds, status: "error" });
           continue;
         }
         const got: string[] = [];
         if (Array.isArray(d.jobs)) for (const j of d.jobs) if (j?.req_id) got.push(j.req_id);
         if (!got.length && d.req_id) got.push(d.req_id);
-        parts.push(got.length ? { reqIds: got, status: "pending" }
-                             : { reqIds: [], status: "error" });
+        parts.push(got.length ? { reqIds: got, rowIds, status: "pending" }
+                             : { reqIds: [], rowIds, status: "error" });
       }
       if (cancelRef.current) {
         if (parts.length) setScanParts(parts); // чтобы «Отменить» мог дослать cancel
@@ -881,21 +909,37 @@ export function Subnets() {
                       Пусто — добавьте подсеть ниже.
                     </td></tr>
                   )}
-                  {grouped ? groups.map(g => (
-                    <Fragment key={g.id}>
-                      <tr data-testid={`subnets-group-${g.id}`} onClick={() => toggleGroup(g.id)}
-                        style={{ background: "var(--bg1)", cursor: "pointer" }}>
-                        <td colSpan={current.columns.length + (scanOpen ? 2 : 1)}>
-                          <span className="flex items-center gap-1.5 font-semibold"
-                            style={{ fontSize: 11, color: "var(--t-hi)" }}>
-                            {collapsedGroups.has(g.id) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                            <span>{g.label} ({g.rows.length})</span>
-                          </span>
-                        </td>
-                      </tr>
-                      {!collapsedGroups.has(g.id) && g.rows.map(renderRow)}
-                    </Fragment>
-                  )) : current.rows.map(renderRow)}
+                  {grouped ? groups.map(g => {
+                    const gids = g.rows.map(r => r.id);
+                    const allPicked = gids.length > 0 && gids.every(id => picked.includes(id));
+                    const somePicked = gids.some(id => picked.includes(id));
+                    return (
+                      <Fragment key={g.id}>
+                        <tr data-testid={`subnets-group-${g.id}`} onClick={() => toggleGroup(g.id)}
+                          style={{ background: "var(--bg1)", cursor: "pointer" }}>
+                          <td colSpan={current.columns.length + (scanOpen ? 2 : 1)}>
+                            <span className="flex items-center gap-1.5 font-semibold"
+                              style={{ fontSize: 11, color: "var(--t-hi)" }}>
+                              {scanOpen && (
+                                // Чекбокс «выбрать все строки группы»: клик не
+                                // сворачивает группу (stopPropagation).
+                                <input type="checkbox"
+                                  data-testid={`latency-pick-group-${g.id}`}
+                                  aria-label={`Выбрать все строки группы ${g.label}`}
+                                  checked={allPicked}
+                                  ref={el => { if (el) el.indeterminate = somePicked && !allPicked; }}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={() => toggleGroupPick(g.id)} />
+                              )}
+                              {collapsedGroups.has(g.id) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                              <span>{g.label} ({g.rows.length})</span>
+                            </span>
+                          </td>
+                        </tr>
+                        {!collapsedGroups.has(g.id) && g.rows.map(renderRow)}
+                      </Fragment>
+                    );
+                  }) : current.rows.map(renderRow)}
                 </tbody>
               </table>
             </div>

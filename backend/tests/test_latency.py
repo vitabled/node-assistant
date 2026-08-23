@@ -224,6 +224,72 @@ def test_scan_with_operator_does_per_subnet_calls(monkeypatch):
     assert _Fake.calls[0]["json"]["operator"] == "t2"
 
 
+def test_scan_excludes_host_32_from_multiscan(monkeypatch):
+    """Host-адреса /32 мультискан не распознаёт («не удалось распознать
+    сеть») — они не идут в text мультискана и помечаются понятной ошибкой,
+    обычные сети сканируются как раньше."""
+    a = _auth()
+    _configure(a)
+    pid, lid, rows = _mk_rows(a, ["203.0.113.0/24", "195.239.193.161/32"])
+    _patch(monkeypatch, {"/api/lab/multiscan":
+                         {"ok": True, "req_id": "req-net", "status": "pending"}})
+    r = client.post("/api/subnets/latency-scan", headers=a,
+                    json={"provider_id": pid, "list_id": lid,
+                          "row_ids": rows, "async_": True})
+    assert r.status_code == 200
+    body = r.json()
+    assert len(_Fake.calls) == 1  # только мультискан сетей
+    assert _Fake.calls[0]["json"]["text"] == "203.0.113.0/24"
+    assert body["jobs"][0]["targets"] == ["203.0.113.0/24"]
+    # /32 — отдельная понятная ошибка, а не «не удалось распознать сеть»
+    assert body["errors"] and any(
+        "195.239.193.161/32" in e and "оператора" in e for e in body["errors"])
+
+
+def test_scan_only_hosts_without_operator_is_400(monkeypatch):
+    """Только host-адреса и нет оператора — поштучный скан невозможен:
+    400 с понятным текстом вместо 502 «не удалось распознать сеть»."""
+    a = _auth()
+    _configure(a)
+    pid, lid, rows = _mk_rows(a, ["195.239.193.161/32"])
+    _patch(monkeypatch, {"/api/lab/multiscan":
+                         {"ok": True, "req_id": "req", "status": "pending"}})
+    r = client.post("/api/subnets/latency-scan", headers=a,
+                    json={"provider_id": pid, "list_id": lid, "row_ids": rows})
+    assert r.status_code == 400
+    assert "оператора" in r.json()["detail"]
+    assert _Fake.calls == []  # внешний сервис не дёргали
+
+
+def test_scan_host_32_with_operator_goes_subnet_scan(monkeypatch):
+    """С оператором /32 уходит поштучным subnet-scan'ом (он принимает
+    /23…/32) — скан не падает на host-адресах."""
+    a = _auth()
+    _configure(a)
+    pid, lid, rows = _mk_rows(a, ["203.0.113.0/24", "195.239.193.161/32"])
+    _patch(monkeypatch, {"/api/lab/subnet-scan":
+                         {"ok": True, "req_id": "req-s", "status": "pending"}})
+    r = client.post("/api/subnets/latency-scan", headers=a,
+                    json={"provider_id": pid, "list_id": lid,
+                          "row_ids": rows, "operator": "tele2", "async_": True})
+    assert r.status_code == 200
+    assert r.json()["mode"] == "subnet-scan"
+    assert len(_Fake.calls) == 2
+    targets = [c["json"]["target"] for c in _Fake.calls]
+    assert "195.239.193.161/32" in targets and "203.0.113.0/24" in targets
+
+
+def test_split_host_subnets():
+    """Разбиение на сети/host-адреса: /32 (IPv4) и /128 (IPv6) — hosts,
+    остальное — сети; strip и мусор не ломают."""
+    from app.api.subnets import _split_host_subnets
+    nets, hosts = _split_host_subnets(
+        ["203.0.113.0/24", "195.239.193.161/32", " 2001:db8::/32 ",
+         "2001:db8::1/128", "10.0.0.0/8"])
+    assert nets == ["203.0.113.0/24", "2001:db8::/32", "10.0.0.0/8"]
+    assert hosts == ["195.239.193.161/32", "2001:db8::1/128"]
+
+
 def test_scan_limit_750(monkeypatch):
     """Потолок пачки: 751 подсеть → 400 ещё до внешнего запроса, 750 → ок.
 
@@ -389,6 +455,34 @@ def test_job_status_and_cancel(monkeypatch):
                     json={"req_id": "req-1"})
     assert r.status_code == 200 and r.json()["result"]["cancelled"] is True
     assert _Fake.calls[-1]["json"] == {"req_id": "req-1"}
+
+
+def test_normalize_job_status_maps_synonyms():
+    """Синонимы Latency Lab → канонические статусы поллинга панели."""
+    assert latency_lab.normalize_job_status("success") == "done"
+    assert latency_lab.normalize_job_status("completed") == "done"
+    assert latency_lab.normalize_job_status("finished") == "done"
+    assert latency_lab.normalize_job_status("ok") == "done"
+    assert latency_lab.normalize_job_status("failed") == "error"
+    assert latency_lab.normalize_job_status("cancelled") == "cancelled"
+    assert latency_lab.normalize_job_status("running") == "pending"
+    assert latency_lab.normalize_job_status("") == "pending"
+
+
+def test_job_status_normalizes_synonyms(monkeypatch):
+    """GET /latency-scan/{id} отдаёт канонический статус: «success» → done,
+    «failed» → error. Иначе поллинг с одной подсетью ждал бы «done» вечно."""
+    a = _auth()
+    _configure(a)
+    for raw, want in (("success", "done"), ("completed", "done"),
+                      ("finished", "done"), ("ok", "done"),
+                      ("failed", "error"), ("cancelled", "cancelled"),
+                      ("running", "pending")):
+        _patch(monkeypatch, {"/api/lab/job/": {"ok": True, "status": raw,
+                                               "result": {"alive_count": 1}}})
+        r = client.get("/api/subnets/latency-scan/req-1", headers=a)
+        assert r.status_code == 200, raw
+        assert r.json()["status"] == want, raw
 
 
 def test_service_error_surfaces_as_502(monkeypatch):

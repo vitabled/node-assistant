@@ -331,6 +331,28 @@ def _collect_subnets(provider_id: str, list_id: str, row_ids: list[str],
     return out
 
 
+def _split_host_subnets(subnets: list[str]) -> tuple[list[str], list[str]]:
+    """(сети, host-адреса). Мультискан Latency Lab не распознаёт host-адреса
+    /32 (IPv4) и /128 (IPv6) — «не удалось распознать сеть»; поштучный
+    subnet-scan их принимает (/23…/32). Мусор не роняет: strip, без пустых."""
+    networks: list[str] = []
+    hosts: list[str] = []
+    for s in subnets:
+        s = s.strip()
+        if not s:
+            continue
+        try:
+            ip_str, prefix = s.split("/", 1)
+            is_v6 = ":" in ip_str
+            if (is_v6 and int(prefix) >= 128) or (not is_v6 and int(prefix) >= 32):
+                hosts.append(s)
+            else:
+                networks.append(s)
+        except ValueError:
+            networks.append(s)  # мусор — пусть разбирается сам сервис
+    return networks, hosts
+
+
 def _latency_client():
     """Клиент Latency Lab или 400: ключ обязателен и интеграция включена."""
     cfg = latency_lab.config()
@@ -375,15 +397,28 @@ async def latency_scan(body: LatencyScanBody):
 
     if not operator:
         # Мультискан принимает цели одним текстом — это ровно один запрос
-        # суточного лимита на всю пачку.
-        data, err = await client.multiscan("\n".join(subnets),
-                                           is_async=body.async_)
-        if err:
-            raise HTTPException(502, f"Latency Lab: {err}")
-        data = data or {}
-        jobs.append({"targets": subnets, "req_id": data.get("req_id", ""),
-                     "status": data.get("status", "done"),
-                     "result": data.get("result")})
+        # суточного лимита на всю пачку. Host-адреса /32 (IPv6 — /128)
+        # мультискан НЕ распознаёт («не удалось распознать сеть»): их умеет
+        # только поштучный subnet-scan, а он требует оператора. Без оператора
+        # — понятная ошибка на каждый host-адрес, сети сканируются как раньше.
+        networks, hosts = _split_host_subnets(subnets)
+        if hosts and not networks:
+            raise HTTPException(
+                400, "host-адреса не поддерживаются мультисканом: "
+                     f"{'; '.join(hosts[:5])}{'…' if len(hosts) > 5 else ''}"
+                     " — укажите оператора для поштучного скана")
+        for h in hosts:
+            errors.append(f"{h}: host-адрес /32 не поддерживается мультисканом"
+                          " — укажите оператора для поштучного скана")
+        if networks:
+            data, err = await client.multiscan("\n".join(networks),
+                                               is_async=body.async_)
+            if err:
+                raise HTTPException(502, f"Latency Lab: {err}")
+            data = data or {}
+            jobs.append({"targets": networks, "req_id": data.get("req_id", ""),
+                         "status": data.get("status", "done"),
+                         "result": data.get("result")})
     else:
         for subnet in subnets:
             data, err = await client.subnet_scan(operator, subnet,
@@ -415,7 +450,10 @@ async def latency_scan_status(req_id: str):
     if err:
         return {"ok": False, "error": err, "req_id": req_id}
     data = data or {}
-    return {"ok": True, "req_id": req_id, "status": data.get("status", ""),
+    return {"ok": True, "req_id": req_id,
+            # Статусы-синонимы Latency Lab («success»/«failed») приводим к
+            # каноническим done/error — иначе поллинг ждёт «done» вечно.
+            "status": latency_lab.normalize_job_status(data.get("status", "")),
             "result": data.get("result")}
 
 

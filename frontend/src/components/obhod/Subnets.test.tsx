@@ -348,6 +348,91 @@ describe("Subnets", () => {
     expect(screen.getByTestId("latency-pick-r1")).toBeChecked();
   });
 
+  it("после отмены новые выбранные строки без значка ошибки (состав скана фиксируется на старте)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const calls = installFetch({ latency: enabled, store: GROUP_STORE });
+    await openList();
+    fireEvent.click(await screen.findByTestId("latency-scan-toggle"));
+    await screen.findByTestId("latency-scan-panel");
+    // выбираем r1 и запускаем скан
+    fireEvent.click(screen.getByTestId("latency-pick-r1"));
+    fireEvent.click(screen.getByTestId("latency-start"));
+    await waitFor(() => {
+      const posts = calls.filter(c => c.url === "/api/subnets/latency-scan");
+      expect(posts.length).toBe(1);
+    });
+    // отменяем
+    fireEvent.click(await screen.findByTestId("latency-cancel"));
+    expect(await screen.findByText("Отменено")).toBeInTheDocument();
+    // выбираем ДРУГУЮ строку — она вне скана, значка нет (не error!)
+    fireEvent.click(screen.getByTestId("latency-pick-r2"));
+    expect(screen.getByTestId("scan-icon-r2-none")).toBeInTheDocument();
+    expect(screen.queryByTestId("scan-icon-r2-error")).toBeNull();
+    // и у сканированной r1 после отмены — сброс в none, а не error
+    expect(screen.getByTestId("scan-icon-r1-none")).toBeInTheDocument();
+    expect(screen.queryByTestId("scan-icon-r1-error")).toBeNull();
+  });
+
+  it("статус-синоним Latency Lab «success» нормализуется в done — скан не виснет вечно", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    installFetch({
+      latency: enabled,
+      job: [{ status: "success", result: { rows: [{ row_id: "r1", subnet: "203.0.113.0/24", available: true, alive_count: 2 }] } }],
+    });
+    await openList();
+    fireEvent.click(await screen.findByTestId("latency-scan-toggle"));
+    await screen.findByTestId("latency-scan-panel");
+    fireEvent.click(screen.getByTestId("latency-start"));
+    await vi.advanceTimersByTimeAsync(3500);
+    // «success» → done: результат показан, спиннер ушёл, статус завершён
+    const panel = await screen.findByTestId("latency-result");
+    expect(panel).toHaveTextContent("доступна");
+    expect(screen.getByTestId("scan-icon-r1-ok")).toBeInTheDocument();
+    expect(screen.queryByTestId("latency-progress")).toBeNull();
+  });
+
+  it("статус-синоним Latency Lab «failed» нормализуется в error — скан падает, а не виснет", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    installFetch({ latency: enabled, job: [{ status: "failed" }] });
+    await openList();
+    fireEvent.click(await screen.findByTestId("latency-scan-toggle"));
+    await screen.findByTestId("latency-scan-panel");
+    fireEvent.click(screen.getByTestId("latency-start"));
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(screen.getByText("Ошибка")).toBeInTheDocument();
+    expect(screen.getByTestId("scan-icon-r1-error")).toBeInTheDocument();
+  });
+
+  it("группировка + скан: чекбокс в заголовке группы выбирает все её строки, не сворачивая группу", async () => {
+    installFetch({ latency: enabled, store: GROUP_STORE });
+    await openList();
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    await screen.findByText("RUVDS (2)");
+    fireEvent.click(await screen.findByTestId("latency-scan-toggle"));
+    await screen.findByTestId("latency-scan-panel");
+    const cb = screen.getByTestId("latency-pick-group-RUVDS") as HTMLInputElement;
+    expect(cb).toBeInTheDocument();
+    expect(cb.checked).toBe(false);
+    // клик по чекбоксу → выбраны обе строки группы, группа НЕ свернулась
+    fireEvent.click(cb);
+    expect(screen.getByTestId("latency-pick-r1")).toBeChecked();
+    expect(screen.getByTestId("latency-pick-r4")).toBeChecked();
+    expect(screen.getByText("10.0.0.0/8")).toBeInTheDocument(); // группа раскрыта
+    // снимаем одну строку → чекбокс группы в indeterminate
+    fireEvent.click(screen.getByTestId("latency-pick-r1"));
+    const cb2 = screen.getByTestId("latency-pick-group-RUVDS") as HTMLInputElement;
+    expect(cb2.indeterminate).toBe(true);
+    expect(cb2.checked).toBe(false);
+    // из indeterminate клик выбирает ВСЕ строки группы (стандарт три-стейта)…
+    fireEvent.click(screen.getByTestId("latency-pick-group-RUVDS"));
+    expect(screen.getByTestId("latency-pick-r1")).toBeChecked();
+    expect(screen.getByTestId("latency-pick-r4")).toBeChecked();
+    // …а из полностью выбранного — снимает все
+    fireEvent.click(screen.getByTestId("latency-pick-group-RUVDS"));
+    expect(screen.getByTestId("latency-pick-r1")).not.toBeChecked();
+    expect(screen.getByTestId("latency-pick-r4")).not.toBeChecked();
+  });
+
   // ── Импорт/экспорт ───────────────────────────────────────────
 
   /** jsdom не умеет blob-URL и навигацию по <a> — подменяем обе точки.

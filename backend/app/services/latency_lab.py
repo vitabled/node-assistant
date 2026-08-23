@@ -38,6 +38,27 @@ def normalize_operator(op: str) -> str:
     return OPERATOR_ALIASES.get(op, op)
 
 
+#: Синонимы статусов job'а Latency Lab → канонические значения поллинга.
+_JOB_DONE = {"done", "success", "completed", "finished", "ok"}
+_JOB_ERROR = {"error", "failed"}
+
+
+def normalize_job_status(status: Any) -> str:
+    """Канонический статус job'а: done/error/cancelled/pending.
+
+    Latency Lab местами отдаёт синонимы («success» вместо «done»,
+    «failed» вместо «error») — панель ждёт ровно "done" и иначе
+    крутила бы спиннер вечно (одна подсеть — вечный скан)."""
+    st = str(status or "").strip().lower()
+    if st in _JOB_DONE:
+        return "done"
+    if st in _JOB_ERROR:
+        return "error"
+    if st in ("cancelled", "canceled"):
+        return "cancelled"
+    return "pending"
+
+
 def config(account_id: Optional[str] = None) -> LatencyLabConfig:
     return AppSettings(**storage.load_settings(account_id)).latency
 
