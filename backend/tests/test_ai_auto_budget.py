@@ -186,6 +186,117 @@ def test_auto_tokens_stops_at_ceiling(monkeypatch):
     assert events[-1]["type"] == "done"
 
 
+# ── авто: токенный бюджет = граница СЕГМЕНТА, а не стоп ───────
+def test_auto_continues_past_token_budget_and_finishes(monkeypatch):
+    """Авто-режим не глохнет на исчерпании бюджета — сбрасывает сегмент и идёт."""
+    h, _ = _auth()
+    _configure(h, max_steps=0, auto_token_budget=1_000_000)
+    # 4 продуктивных тёрна по 600k токенов (суммарно 2.4M ≫ 1M бюджета),
+    # затем финальный ответ без инструментов.
+    turns = [_turn(calls=[_call(args={"n": i}, tid=f"b{i}")], usage=600_000)
+             for i in range(4)]
+    turns.append(_turn(text="Импорт завершён: 205 подсетей."))
+    _script(monkeypatch, turns)
+    events = _stream(h)
+    txt = _texts(events)
+
+    # Все 4 шага прошли, несмотря на двукратное превышение бюджета.
+    assert len([e for e in events if e["type"] == "tool_call"]) == 4
+    # Задача доделана самим агентом.
+    assert "Импорт завершён: 205 подсетей." in txt
+    # И никаких просьб жать «Продолжи» из-за бюджета.
+    assert "Продолжи" not in txt and "бюджет" not in txt
+
+    # В стриме видны сегментные сбросы: статус с подсказкой и tokens=0.
+    resets = [e for e in events if e["type"] == "status"
+              and "сегмент" in str(e.get("tool", ""))]
+    assert resets, "должен быть статус о сбросе сегмента"
+    assert all(e["tokens"] == 0 and e["auto"] is True for e in resets)
+    assert events[-1]["type"] == "done"
+
+
+def test_auto_segment_counter_resets_and_reaccumulates(monkeypatch):
+    """После сброса счётчик сегмента копится заново, а не остаётся нулём."""
+    h, _ = _auth()
+    _configure(h, max_steps=0, auto_token_budget=1_000_000)
+    turns = [_turn(calls=[_call(args={"n": i}, tid=f"s{i}")], usage=600_000)
+             for i in range(3)]
+    turns.append(_turn(text="Готово.", usage=600_000))
+    _script(monkeypatch, turns)
+    events = _stream(h)
+    done = [e for e in events if e["type"] == "status" and e["phase"] == "done"]
+    assert done, "должно быть событие done со счётчиком сегмента"
+    # 4 тёрна × 600k = 2.4M. Сброс сработал один раз (после 2-го тёрна, 1.2M),
+    # дальше счётчик копится заново: 600k + 600k = 1.2M, а не 2.4M.
+    assert done[-1]["tokens"] == 1_200_000, done[-1]
+    assert "Готово." in _texts(events)
+
+
+def test_auto_budget_does_not_disable_fail_streak(monkeypatch):
+    """Сегменты не отменяют детектор застоя: 3 ошибки подряд — стоп."""
+    h, _ = _auth()
+    _configure(h, max_steps=0, auto_token_budget=1_000_000)
+    _script(monkeypatch, [
+        _turn(calls=[_call(name="nope", args={"n": i}, tid=f"be{i}")],
+              usage=600_000)
+        for i in range(10)
+    ])
+    events = _stream(h)
+    assert len([e for e in events if e["type"] == "tool_call"]) == \
+        ai_agent.AUTO_FAIL_STREAK
+    assert "не продвигается" in _texts(events) and "ошибкой" in _texts(events)
+    assert events[-1]["type"] == "done"
+
+
+def test_auto_budget_does_not_disable_repeat_streak(monkeypatch):
+    """Сегменты не отменяют детектор зацикливания."""
+    h, _ = _auth()
+    _configure(h, max_steps=0, auto_token_budget=1_000_000)
+    _script(monkeypatch,
+            [_turn(calls=[_call(args={"same": 1}, tid="br")], usage=600_000)])
+    events = _stream(h)
+    assert len([e for e in events if e["type"] == "tool_call"]) == \
+        ai_agent.AUTO_REPEAT_STREAK - 1
+    assert "повторил" in _texts(events)
+    assert events[-1]["type"] == "done"
+
+
+def test_auto_budget_still_bounded_by_step_fuse(monkeypatch):
+    """Не бесконечный цикл: AUTO_MAX_STEPS остаётся жёстким потолком."""
+    h, _ = _auth()
+    _configure(h, max_steps=0, auto_token_budget=1_000_000)
+    monkeypatch.setattr(ai_agent, "AUTO_MAX_STEPS", 5)
+    state = {"n": 0}
+
+    async def fake(config, key, messages, with_tools=True, system="", **kw):
+        state["n"] += 1
+        return _turn(calls=[_call(args={"n": state["n"]}, tid=f"g{state['n']}")],
+                     usage=600_000)
+
+    monkeypatch.setattr(ai_agent, "_provider_turn", fake)
+    events = _stream(h)
+    assert len([e for e in events if e["type"] == "tool_call"]) == 5
+    assert "предохранитель" in _texts(events) and "5 шагов" in _texts(events)
+    assert events[-1]["type"] == "done"
+
+
+def test_manual_mode_still_stops_on_token_budget(monkeypatch):
+    """Ручной режим (max_steps>0) не изменился: бюджет — по-прежнему стоп."""
+    h, _ = _auth()
+    _configure(h, max_steps=12, max_tokens=0, auto_token_budget=1_000_000)
+    _script(monkeypatch, [
+        _turn(calls=[_call(args={"n": i}, tid=f"mb{i}")], usage=600_000)
+        for i in range(12)
+    ])
+    events = _stream(h)
+    txt = _texts(events)
+    # Два тёрна по 600k → 1.2M ≥ 1M → break на втором шаге, а не 12 шагов.
+    assert len([e for e in events if e["type"] == "tool_call"]) == 2
+    assert "израсходован суммарный бюджет" in txt and "Продолжи" in txt
+    assert "сегмент" not in txt
+    assert events[-1]["type"] == "done"
+
+
 # ── ручной режим не изменился ─────────────────────────────────
 def test_manual_mode_reserves_last_step_and_stops(monkeypatch):
     h, _ = _auth()
