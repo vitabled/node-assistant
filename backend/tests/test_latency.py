@@ -5,6 +5,7 @@
 """
 import time
 import uuid as _uuid
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 
@@ -437,6 +438,103 @@ def test_scan_rate_limit_rejects_bad_window(monkeypatch):
     assert _configure(a, scan_window_hours=721).status_code == 422
     assert _configure(a, scan_limit=-1).status_code == 422
     assert _configure(a, scan_window_hours=720).status_code == 200
+
+
+# ── время сброса лимита (reset_at / reset_in_seconds) ────────
+def _public_cfg(a):
+    return client.get("/api/latency/config", headers=a).json()
+
+
+def _reset_ts(got):
+    """reset_at (ISO-8601 UTC) → epoch; сам `got` не трогаем."""
+    return datetime.fromisoformat(got["reset_at"].replace("Z", "+00:00")).timestamp()
+
+
+def test_scan_reset_empty_history():
+    """Пустая история: reset_at ≈ now + окно (24 ч), секунд ≈ 86400."""
+    a, aid = _mk_account()
+    _configure(a, scan_limit=2, scan_window_hours=24)
+    got = _public_cfg(a)
+    assert got["scan_count"] == 0
+    assert "reset_at" in got and "reset_in_seconds" in got
+    now = time.time()
+    assert now + 23.5 * 3600 <= _reset_ts(got) <= now + 24.5 * 3600
+    assert abs(got["reset_in_seconds"] - 86400) <= 60
+
+
+def test_scan_reset_mark_1h_ago():
+    """Метка 1 ч назад → старейшая в окне выпадет через window - 1 ч (23 ч)."""
+    a, aid = _mk_account()
+    _configure(a, scan_limit=2, scan_window_hours=24)
+    _set_history(aid, [time.time() - 3600])
+    got = _public_cfg(a)
+    now = time.time()
+    assert now + 22.5 * 3600 <= _reset_ts(got) <= now + 23.5 * 3600
+    assert abs(got["reset_in_seconds"] - 23 * 3600) <= 60
+
+
+def test_scan_reset_oldest_mark_wins():
+    """Старейшая метка в окне определяет reset: более свежая — не влияет."""
+    a, aid = _mk_account()
+    _configure(a, scan_limit=2, scan_window_hours=24)
+    _set_history(aid, [time.time() - 3600, time.time() - 1800])
+    got = _public_cfg(a)
+    assert abs(got["reset_in_seconds"] - 23 * 3600) <= 60
+
+
+def test_scan_reset_exhausted_limit():
+    """Лимит исчерпан (2 из 2) — reset в момент выпадения старейшей метки."""
+    a, aid = _mk_account()
+    _configure(a, scan_limit=2, scan_window_hours=24)
+    now = time.time()
+    _set_history(aid, [now - 3 * 3600, now - 1 * 3600])
+    got = _public_cfg(a)
+    assert got["scan_count"] == 2
+    assert now + 20.5 * 3600 <= _reset_ts(got) <= now + 21.5 * 3600  # через 21 ч
+    assert abs(got["reset_in_seconds"] - 21 * 3600) <= 60
+
+
+def test_scan_reset_zero_limit():
+    """scan_limit=0 — сбрасывать нечего: reset_at пуст, секунды 0."""
+    a = _auth()
+    _configure(a, scan_limit=0, scan_window_hours=24)
+    got = _public_cfg(a)
+    assert got["scan_limit"] == 0
+    assert got["reset_at"] == ""
+    assert got["reset_in_seconds"] == 0
+
+
+def test_scan_reset_public_contains_fields():
+    """_public отдаёт reset_at/reset_in_seconds и в POST-ответе, и в GET."""
+    a = _auth()
+    r = _configure(a, scan_limit=5, scan_window_hours=12)
+    assert r.status_code == 200
+    assert "reset_at" in r.json() and "reset_in_seconds" in r.json()
+    got = _public_cfg(a)
+    assert "reset_at" in got and "reset_in_seconds" in got
+    assert "scan_history" not in got  # сами метки наружу не уходят
+
+
+def test_scan_reset_helper_formula():
+    """Хелпер напрямую (фиксированный now): reset_ts = старейшая В окне + окно."""
+    from app.models.settings import LatencyLabConfig
+
+    now = 1_700_000_000.0 + 7200
+    cfg = LatencyLabConfig(scan_limit=2, scan_window_hours=24,
+                           scan_history=[1_700_000_000.0, 1_700_000_000.0 + 3600])
+    reset_ts, reset_in = latency_lab.scan_reset(cfg, now=now)
+    assert reset_ts == 1_700_000_000.0 + 24 * 3600  # старейшая (0 ч) + окно
+    assert reset_in == 24 * 3600 - 7200             # через 22 ч
+
+    # Пустое окно → полное окно от now.
+    reset_ts, reset_in = latency_lab.scan_reset(
+        LatencyLabConfig(scan_limit=2, scan_window_hours=24), now=now)
+    assert reset_ts == now + 24 * 3600 and reset_in == 24 * 3600
+
+    # Лимит 0 → нечего сбрасывать.
+    reset_ts, reset_in = latency_lab.scan_reset(
+        LatencyLabConfig(scan_limit=0, scan_window_hours=24), now=now)
+    assert reset_ts == 0.0 and reset_in == 0
 
 
 def test_job_status_and_cancel(monkeypatch):

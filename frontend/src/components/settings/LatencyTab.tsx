@@ -18,6 +18,8 @@ interface LatencyConfig {
   scan_limit: number;
   scan_window_hours: number;
   scan_count: number;
+  reset_at: string;
+  reset_in_seconds: number;
 }
 
 const CFG_INIT: LatencyConfig = {
@@ -29,6 +31,8 @@ const CFG_INIT: LatencyConfig = {
   scan_limit: 0,
   scan_window_hours: 24,
   scan_count: 0,
+  reset_at: "",
+  reset_in_seconds: 0,
 };
 
 function Fld({ label, value, onChange, type = "text", placeholder, hint, min }: {
@@ -43,6 +47,16 @@ function Fld({ label, value, onChange, type = "text", placeholder, hint, min }: 
       {hint && <p className="hint">{hint}</p>}
     </div>
   );
+}
+
+function fmtReset(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  if (h > 0) return m > 0 ? `${h} ч ${m} мин` : `${h} ч`;
+  if (m > 0) return r > 0 ? `${m} мин ${r} с` : `${m} мин`;
+  return `${r} с`;
 }
 
 export function LatencyTab() {
@@ -67,6 +81,8 @@ export function LatencyTab() {
         scan_limit: typeof d.scan_limit === "number" ? d.scan_limit : 0,
         scan_window_hours: typeof d.scan_window_hours === "number" ? d.scan_window_hours : 24,
         scan_count: typeof d.scan_count === "number" ? d.scan_count : 0,
+        reset_at: typeof d.reset_at === "string" ? d.reset_at : "",
+        reset_in_seconds: typeof d.reset_in_seconds === "number" ? d.reset_in_seconds : 0,
       });
     } catch (e) { toast((e as Error).message, "error"); }
     setLoading(false);
@@ -164,6 +180,9 @@ export function LatencyTab() {
           {cfg.scan_limit > 0 && (
             <p className="hint">
               Использовано: {cfg.scan_count} из {cfg.scan_limit} за {cfg.scan_window_hours} ч
+              {cfg.reset_in_seconds > 0 && (
+                <> — Сброс лимита: через {fmtReset(cfg.reset_in_seconds)}</>
+              )}
             </p>
           )}
 

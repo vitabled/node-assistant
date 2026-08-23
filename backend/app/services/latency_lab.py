@@ -101,6 +101,29 @@ def scan_quota(cfg: Optional[LatencyLabConfig] = None,
     return used, limit
 
 
+def scan_reset(cfg: Optional[LatencyLabConfig] = None,
+               now: Optional[float] = None,
+               account_id: Optional[str] = None) -> tuple[float, int]:
+    """(reset_ts, reset_in_seconds) — когда лимит сканов «обнулится».
+
+    Окно скользящее: счётчик уменьшится, когда САМАЯ СТАРАЯ метка в окне
+    выпадет из него — через (oldest + window) - now. Пустое окно → полное
+    окно от now («лимит обновится через N часов»). Лимит 0 → (0.0, 0) —
+    сбрасывать нечего. `now` — только для тестов.
+    """
+    cfg = cfg or config(account_id)
+    limit = int(cfg.scan_limit or 0)
+    window = int(cfg.scan_window_hours or 24) * 3600
+    if limit <= 0:
+        return 0.0, 0
+    now = time.time() if now is None else now
+    marks = [ts for ts in cfg.scan_history
+             if isinstance(ts, (int, float)) and now - window <= ts <= now]
+    oldest = min(marks) if marks else now
+    reset_ts = oldest + window
+    return reset_ts, max(0, int(reset_ts - now))
+
+
 def record_scan(account_id: Optional[str] = None) -> None:
     """Метка успешного запуска скана (scan_history в settings.json).
 

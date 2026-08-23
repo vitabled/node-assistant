@@ -11,6 +11,8 @@ Latency Lab — настройки интеграции и проверка кл
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
@@ -58,6 +60,7 @@ class LatencyConfigBody(BaseModel):
 def _public() -> dict:
     cfg = latency_lab.config()
     used, _ = latency_lab.scan_quota(cfg)
+    reset_ts, reset_in = latency_lab.scan_reset(cfg)
     return {
         "enabled": cfg.enabled,
         "base_url": cfg.base_url,
@@ -67,6 +70,12 @@ def _public() -> dict:
         "scan_window_hours": cfg.scan_window_hours,
         #: Запусков за окно (только счётчик; сами метки наружу не уходят).
         "scan_count": used,
+        #: Момент «обнуления» лимита — когда старейшая метка в окне выпадет
+        #: из него (ISO-8601 UTC; пустая история → now + окно; лимит 0 → "").
+        "reset_at": (datetime.fromtimestamp(reset_ts, timezone.utc)
+                     .isoformat().replace("+00:00", "Z")) if reset_ts else "",
+        #: Секунд до сброса — для «Сброс лимита: через …» на фронте.
+        "reset_in_seconds": reset_in,
         "operators": list(latency_lab.OPERATORS),
         "has_key": bool(cfg.api_key_enc),  # never the key itself
         "key_hint": latency_lab.mask_key(cfg),
