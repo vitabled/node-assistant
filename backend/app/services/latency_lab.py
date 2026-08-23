@@ -15,6 +15,7 @@ profile). Тот же контракт, что у `bedolaga_client`: **ниче�
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 import httpx
@@ -60,6 +61,39 @@ def mask_key(cfg: Optional[LatencyLabConfig] = None,
     if not raw:
         return ""
     return f"…{raw[-4:]}" if len(raw) > 4 else "****"
+
+
+def scan_quota(cfg: Optional[LatencyLabConfig] = None,
+               account_id: Optional[str] = None) -> tuple[int, int]:
+    """(использовано за окно, лимит). Лимит 0 — без лимита.
+
+    Считает метки `scan_history` в окне [now - scan_window_hours*3600, now].
+    """
+    cfg = cfg or config(account_id)
+    limit = int(cfg.scan_limit or 0)
+    if limit <= 0:
+        return 0, 0
+    window = int(cfg.scan_window_hours or 24) * 3600
+    now = time.time()
+    used = sum(1 for ts in cfg.scan_history
+               if isinstance(ts, (int, float)) and now - window <= ts <= now)
+    return used, limit
+
+
+def record_scan(account_id: Optional[str] = None) -> None:
+    """Метка успешного запуска скана (scan_history в settings.json).
+
+    Зовётся только когда Latency Lab ПРИНЯЛ скан — не на ошибке сервиса.
+    История режется до последних 1000 меток.
+    """
+    data = storage.load_settings(account_id)
+    lat = data.setdefault("latency", {})
+    history = lat.get("scan_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(time.time())
+    lat["scan_history"] = history[-1000:]
+    storage.save_settings(data, account_id)
 
 
 class LatencyLabClient:

@@ -30,6 +30,10 @@ class LatencyConfigBody(BaseModel):
     node_id: str = Field("orel", max_length=64)
     default_operator: str = Field("", max_length=32)
     api_key: str | None = None  # write-only; пусто/None — оставить прежний
+    #: Лимит запусков сканов за окно; 0 — без лимита.
+    scan_limit: int = Field(0, ge=0)
+    #: Окно лимита в часах (1…720).
+    scan_window_hours: int = Field(24, ge=1, le=720)
 
     @field_validator("base_url")
     @classmethod
@@ -53,11 +57,16 @@ class LatencyConfigBody(BaseModel):
 
 def _public() -> dict:
     cfg = latency_lab.config()
+    used, _ = latency_lab.scan_quota(cfg)
     return {
         "enabled": cfg.enabled,
         "base_url": cfg.base_url,
         "node_id": cfg.node_id,
         "default_operator": cfg.default_operator,
+        "scan_limit": cfg.scan_limit,
+        "scan_window_hours": cfg.scan_window_hours,
+        #: Запусков за окно (только счётчик; сами метки наружу не уходят).
+        "scan_count": used,
         "operators": list(latency_lab.OPERATORS),
         "has_key": bool(cfg.api_key_enc),  # never the key itself
         "key_hint": latency_lab.mask_key(cfg),
@@ -92,6 +101,8 @@ async def save_config(body: LatencyConfigBody) -> dict:
         "base_url": body.base_url,
         "node_id": body.node_id.strip() or "orel",
         "default_operator": body.default_operator,
+        "scan_limit": body.scan_limit,
+        "scan_window_hours": body.scan_window_hours,
     }
     if body.api_key and body.api_key.strip():
         cfg["api_key_enc"] = latency_lab.encrypt_key(body.api_key.strip())

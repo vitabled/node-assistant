@@ -353,6 +353,12 @@ async def latency_scan(body: LatencyScanBody):
     """
     client = _latency_client()
     cfg = latency_lab.config()
+    used, limit = latency_lab.scan_quota(cfg)
+    if limit and used >= limit:
+        raise HTTPException(
+            429, f"Превышен лимит сканов: {limit} за "
+                 f"{cfg.scan_window_hours} ч. Подождите или измените лимит "
+                 f"в настройках Latency Lab")
     subnets = _collect_subnets(body.provider_id, body.list_id,
                                body.row_ids, body.all)
     if len(subnets) > MAX_SCAN_SUBNETS:
@@ -391,6 +397,10 @@ async def latency_scan(body: LatencyScanBody):
                          "result": data.get("result")})
         if not jobs:
             raise HTTPException(502, "Latency Lab: " + "; ".join(errors[:3]))
+
+    # Лимит «N сканов за M часов»: метка пишется ТОЛЬКО когда Latency Lab
+    # принял скан (дошли сюда без исключения) — ошибка сервиса лимит не тратит.
+    latency_lab.record_scan()
 
     return {"ok": True,
             "mode": "multiscan" if not operator else "subnet-scan",

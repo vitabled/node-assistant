@@ -15,6 +15,9 @@ interface LatencyConfig {
   base_url: string;
   node_id: string;
   default_operator: string;
+  scan_limit: number;
+  scan_window_hours: number;
+  scan_count: number;
 }
 
 const CFG_INIT: LatencyConfig = {
@@ -23,17 +26,20 @@ const CFG_INIT: LatencyConfig = {
   base_url: "",
   node_id: "orel",
   default_operator: "",
+  scan_limit: 0,
+  scan_window_hours: 24,
+  scan_count: 0,
 };
 
-function Fld({ label, value, onChange, type = "text", placeholder, hint }: {
+function Fld({ label, value, onChange, type = "text", placeholder, hint, min }: {
   label: string; value: string; onChange: (v: string) => void;
-  type?: string; placeholder?: string; hint?: string;
+  type?: string; placeholder?: string; hint?: string; min?: number;
 }) {
   return (
     <div className="flex flex-col gap-1">
       <label className="label">{label}</label>
       <input type={type} value={value} onChange={e => onChange(e.target.value)}
-        placeholder={placeholder} autoComplete="off" spellCheck={false} className="input" />
+        placeholder={placeholder} min={min} autoComplete="off" spellCheck={false} className="input" />
       {hint && <p className="hint">{hint}</p>}
     </div>
   );
@@ -58,6 +64,9 @@ export function LatencyTab() {
         base_url: d.base_url ?? "",
         node_id: d.node_id ?? "orel",
         default_operator: d.default_operator ?? "",
+        scan_limit: typeof d.scan_limit === "number" ? d.scan_limit : 0,
+        scan_window_hours: typeof d.scan_window_hours === "number" ? d.scan_window_hours : 24,
+        scan_count: typeof d.scan_count === "number" ? d.scan_count : 0,
       });
     } catch (e) { toast((e as Error).message, "error"); }
     setLoading(false);
@@ -75,6 +84,8 @@ export function LatencyTab() {
           base_url: cfg.base_url.trim(),
           node_id: cfg.node_id.trim(),
           default_operator: cfg.default_operator.trim(),
+          scan_limit: Number(cfg.scan_limit) || 0,
+          scan_window_hours: Number(cfg.scan_window_hours) || 24,
           ...(apiKey ? { api_key: apiKey } : {}),
         }),
       });
@@ -141,6 +152,20 @@ export function LatencyTab() {
           <Fld label="Оператор по умолчанию" value={cfg.default_operator}
             onChange={v => setCfg(c => ({ ...c, default_operator: v }))}
             placeholder="mts" hint="Пусто — сканировать всеми доступными операторами." />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            <Fld label="Лимит сканов (0 — без лимита)" value={String(cfg.scan_limit)}
+              type="number" min={0}
+              onChange={v => setCfg(c => ({ ...c, scan_limit: parseInt(v, 10) || 0 }))} />
+            <Fld label="За N часов" value={String(cfg.scan_window_hours)}
+              type="number" min={1}
+              onChange={v => setCfg(c => ({ ...c, scan_window_hours: parseInt(v, 10) || 24 }))} />
+          </div>
+          {cfg.scan_limit > 0 && (
+            <p className="hint">
+              Использовано: {cfg.scan_count} из {cfg.scan_limit} за {cfg.scan_window_hours} ч
+            </p>
+          )}
 
           <div className="flex items-center gap-2">
             <button onClick={save} disabled={saving} className="btn btn-primary">

@@ -199,6 +199,12 @@ class LatencyLabConfig(BaseModel):
     node_id: str = "orel"
     #: Пусто = мультискан по всем online-операторам (1 запрос к лимиту).
     default_operator: str = ""
+    #: Лимит запусков сканов за окно; 0 — без лимита.
+    scan_limit: int = 0
+    #: Окно лимита в часах (1…720).
+    scan_window_hours: int = 24
+    #: Метки времени (time.time) успешных запусков сканов — счётчик лимита.
+    scan_history: list[float] = Field(default_factory=list)
 
 
 class HaproxyConfig(BaseModel):

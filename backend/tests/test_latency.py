@@ -3,6 +3,7 @@
 Внешний HTTP не трогаем: подменяем `httpx.AsyncClient` в `latency_lab` фейком —
 тот же приём, что в `test_subnets.py::test_enrich_marks_asn`.
 """
+import time
 import uuid as _uuid
 
 from fastapi.testclient import TestClient
@@ -19,6 +20,14 @@ def _auth():
     r = client.post("/api/auth/register",
                     json={"login": f"ll-{_uuid.uuid4().hex[:8]}", "password": "pw"})
     return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+def _mk_account():
+    """Регистрация → (headers, account_id) — id нужен для правки settings.json."""
+    r = client.post("/api/auth/register",
+                    json={"login": f"ll-{_uuid.uuid4().hex[:8]}", "password": "pw"})
+    body = r.json()
+    return {"Authorization": f"Bearer {body['token']}"}, body["id"]
 
 
 def _mk_rows(a, subnets):
@@ -251,6 +260,117 @@ def test_scan_unknown_rows_is_404():
     r = client.post("/api/subnets/latency-scan", headers=a,
                     json={"provider_id": pid, "list_id": lid, "row_ids": ["nope"]})
     assert r.status_code == 404
+
+
+# ── лимит «N сканов за M часов» ──────────────────────────────
+def _scan(a, pid, lid, rows):
+    return client.post("/api/subnets/latency-scan", headers=a,
+                       json={"provider_id": pid, "list_id": lid,
+                             "row_ids": rows})
+
+
+def _set_history(account_id, marks):
+    """Прямая правка scan_history в settings.json аккаунта (API её не отдаёт)."""
+    from app.services import storage
+
+    data = storage.load_settings(account_id)
+    data.setdefault("latency", {})["scan_history"] = marks
+    storage.save_settings(data, account_id)
+
+
+def test_scan_rate_limit_2_per_24h_third_is_429(monkeypatch):
+    """Лимит 2 скана за 24 ч: первый и второй проходят, третий — 429."""
+    a = _auth()
+    _configure(a, scan_limit=2, scan_window_hours=24)
+    pid, lid, rows = _mk_rows(a, ["203.0.113.0/24"])
+    _patch(monkeypatch, {"/api/lab/multiscan":
+                         {"ok": True, "req_id": "req-1", "status": "pending"}})
+
+    for i in range(2):
+        r = _scan(a, pid, lid, rows)
+        assert r.status_code == 200, f"скан {i + 1} должен пройти"
+    got = client.get("/api/latency/config", headers=a).json()
+    assert got["scan_count"] == 2  # метки записались и видны в _public
+
+    r = _scan(a, pid, lid, rows)
+    assert r.status_code == 429
+    detail = r.json()["detail"]
+    assert "лимит" in detail.lower() and "2" in detail and "24" in detail
+
+
+def test_scan_rate_limit_ignores_old_marks(monkeypatch):
+    """Метки старше окна не считаются: 2 метки 48 ч назад не блокируют."""
+    a, aid = _mk_account()
+    _configure(a, scan_limit=2, scan_window_hours=24)
+    _set_history(aid, [time.time() - 48 * 3600, time.time() - 47 * 3600])
+    pid, lid, rows = _mk_rows(a, ["203.0.113.0/24"])
+    _patch(monkeypatch, {"/api/lab/multiscan":
+                         {"ok": True, "req_id": "req-1", "status": "pending"}})
+
+    # Две старые метки + два свежих скана → ок; третий свежий → 429.
+    for i in range(2):
+        r = _scan(a, pid, lid, rows)
+        assert r.status_code == 200, f"скан {i + 1} должен пройти"
+    got = client.get("/api/latency/config", headers=a).json()
+    assert got["scan_count"] == 2  # только свежие
+    assert _scan(a, pid, lid, rows).status_code == 429
+
+
+def test_scan_rate_limit_zero_means_unlimited(monkeypatch):
+    """scan_limit=0 — лимит выключен, сколько угодно запусков."""
+    a = _auth()
+    _configure(a, scan_limit=0, scan_window_hours=24)
+    pid, lid, rows = _mk_rows(a, ["203.0.113.0/24"])
+    _patch(monkeypatch, {"/api/lab/multiscan":
+                         {"ok": True, "req_id": "req-1", "status": "pending"}})
+    for _ in range(4):
+        assert _scan(a, pid, lid, rows).status_code == 200
+
+
+def test_scan_rate_limit_marks_only_on_accepted(monkeypatch):
+    """Ошибка Latency Lab лимит не тратит: метка пишется при приёме скана."""
+    a = _auth()
+    _configure(a, scan_limit=1, scan_window_hours=24)
+    pid, lid, rows = _mk_rows(a, ["203.0.113.0/24"])
+
+    class _Err(_Fake):
+        async def request(self, method, url, headers=None, params=None, json=None):
+            return _Resp({"ok": False, "error": "boom"}, 500)
+
+    monkeypatch.setattr(latency_lab.httpx, "AsyncClient", lambda *a, **k: _Err())
+    assert _scan(a, pid, lid, rows).status_code == 502
+    got = client.get("/api/latency/config", headers=a).json()
+    assert got["scan_count"] == 0  # неуспешный запуск не записан
+
+    # А вот принятый скан метку пишет — и следующий уже 429.
+    _patch(monkeypatch, {"/api/lab/multiscan":
+                         {"ok": True, "req_id": "req-1", "status": "pending"}})
+    assert _scan(a, pid, lid, rows).status_code == 200
+    assert _scan(a, pid, lid, rows).status_code == 429
+
+
+def test_save_config_persists_scan_limit_and_public():
+    """save_config сохраняет лимит; _public отдаёт его + scan_count без меток."""
+    a = _auth()
+    r = _configure(a, scan_limit=5, scan_window_hours=12)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scan_limit"] == 5 and body["scan_window_hours"] == 12
+    assert body["scan_count"] == 0
+
+    got = client.get("/api/latency/config", headers=a).json()
+    assert got["scan_limit"] == 5 and got["scan_window_hours"] == 12
+    assert got["scan_count"] == 0
+    assert "scan_history" not in got  # сами метки наружу не уходят
+
+
+def test_scan_rate_limit_rejects_bad_window(monkeypatch):
+    """Окно лимита ограничено 1…720 ч (и отрицательный лимит не пройдёт)."""
+    a = _auth()
+    assert _configure(a, scan_window_hours=0).status_code == 422
+    assert _configure(a, scan_window_hours=721).status_code == 422
+    assert _configure(a, scan_limit=-1).status_code == 422
+    assert _configure(a, scan_window_hours=720).status_code == 200
 
 
 def test_job_status_and_cancel(monkeypatch):
