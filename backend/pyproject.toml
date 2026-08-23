@@ -1,3 +1,10 @@
+[project]
+name = "node-assistant-backend"
+version = "0.1.0"
+dependencies = [
+    "openpyxl==3.1.5",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

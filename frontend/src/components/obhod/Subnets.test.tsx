@@ -63,12 +63,14 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
     if (url === "/api/subnets/latency-scan") return json({ ok: true, req_id: "req-1", status: "pending" });
     if (url.startsWith("/api/subnets/latency-scan/") && !url.endsWith("/cancel"))
       return json(jobQueue.length > 1 ? jobQueue.shift() : jobQueue[0] ?? { status: "pending" });
-    if (url.startsWith("/api/subnets/export"))
+    if (url.startsWith("/api/subnets/export")) {
+      const fmt = new URLSearchParams(url.split("?")[1] ?? "").get("format") ?? "json";
       return new Response("subnet\n203.0.113.0/24\n", {
         status: 200,
         // только ASCII: заголовки в undici — ByteString, кириллица бросит TypeError
-        headers: { "Content-Disposition": 'attachment; filename="subnets-l1.csv"' },
+        headers: { "Content-Disposition": `attachment; filename="subnets-l1.${fmt}"` },
       });
+    }
     if (url === "/api/subnets/import")
       return json(opts?.imp ?? { ok: true, imported: 2, skipped: 1, errors: [] });
     return new Response("{}", { status: 200 });
@@ -244,8 +246,8 @@ describe("Subnets", () => {
     installFetch();
     await openIo();
     const fmt = screen.getByTestId("export-format") as HTMLSelectElement;
-    expect(fmt.options.length).toBe(3);
-    expect([...fmt.options].map(o => o.value)).toEqual(["json", "csv", "txt"]);
+    expect(fmt.options.length).toBe(4);
+    expect([...fmt.options].map(o => o.value)).toEqual(["json", "csv", "txt", "xlsx"]);
     expect(screen.getByTestId("export-run")).toBeInTheDocument();
     expect(screen.getByTestId("import-run")).toBeDisabled(); // файл не выбран
   });
@@ -266,6 +268,22 @@ describe("Subnets", () => {
     });
     // имя берётся из Content-Disposition
     await waitFor(() => expect(clicked[0]?.download).toBe("subnets-l1.csv"));
+    spy.mockRestore();
+  });
+
+  it("экспорт в Excel шлёт format=xlsx (тот же fetch→blob→download)", async () => {
+    const calls = installFetch();
+    const { clicked, spy } = stubDownload();
+    await openIo();
+    fireEvent.change(screen.getByTestId("export-format"), { target: { value: "xlsx" } });
+    fireEvent.click(screen.getByTestId("export-run"));
+    await waitFor(() => {
+      const c = calls.find(x => x.url.startsWith("/api/subnets/export"));
+      expect(c).toBeTruthy();
+      const q = new URLSearchParams(c!.url.split("?")[1]);
+      expect(q.get("format")).toBe("xlsx");
+    });
+    await waitFor(() => expect(clicked[0]?.download).toBe("subnets-l1.xlsx"));
     spy.mockRestore();
   });
 
@@ -302,5 +320,32 @@ describe("Subnets", () => {
     expect(res).toHaveTextContent("пропущено 2");
     const fd = calls.find(c => c.url === "/api/subnets/import")!.init!.body as FormData;
     expect(fd.get("list_id")).toBeNull();
+  });
+
+  // ── UX: скролл таблицы + сворачивание дерева ─────────────────
+
+  it("таблица: скролл-контейнер с внутренним overflow, шапка sticky", async () => {
+    installFetch();
+    await openList();
+    const scroller = screen.getByTestId("subnets-table-scroll");
+    expect(scroller).toHaveClass("overflow-auto");
+    expect(scroller).toHaveClass("min-h-0");
+    const th = document.querySelector("thead th");
+    expect(th).toBeTruthy();
+    expect(th!.className).toContain("sticky");
+  });
+
+  it("кнопка дерева сворачивает и разворачивает панель провайдеров", async () => {
+    installFetch();
+    await openList();
+    // развёрнуто: провайдер виден
+    expect(screen.getByText("МТС")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("tree-toggle"));
+    // свёрнуто: дерево скрыто, таблица осталась
+    expect(screen.queryByText("МТС")).toBeNull();
+    expect(screen.getByText("203.0.113.0/24")).toBeInTheDocument();
+    // разворачиваем обратно
+    fireEvent.click(screen.getByTestId("tree-toggle"));
+    expect(await screen.findByText("МТС")).toBeInTheDocument();
   });
 });

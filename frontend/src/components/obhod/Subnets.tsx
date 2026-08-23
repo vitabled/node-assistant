@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Activity, Check, Download, FolderKanban, GripVertical, Loader2, Pencil, Plus, Table2,
+  Activity, Check, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, Loader2, Pencil, Plus, Table2,
   Trash2, Upload, X,
 } from "lucide-react";
 import { Page, PageHeader } from "../../theme/ui";
@@ -19,8 +19,8 @@ import { toast } from "../infra/Toast";
  * поллингом статуса и выводом результата.
  *
  * Импорт/экспорт: кнопка «Импорт/экспорт» открывает панель — выгрузка списка
- * в JSON/CSV/TXT (скачивание через fetch→blob, чтобы уехал bearer-токен) и
- * загрузка файла (merge/replace, опционально в новый список) с показом итога.
+ * в JSON/CSV/TXT/Excel (скачивание через fetch→blob, чтобы уехал bearer-токен)
+ * и загрузка файла (merge/replace, опционально в новый список) с показом итога.
  */
 
 interface Col { key: string; title: string }
@@ -37,7 +37,7 @@ interface ScanItem {
 interface ScanResult extends ScanItem { rows?: ScanItem[] }
 type ScanStatus = "pending" | "done" | "cancelled" | "error";
 
-type ExportFormat = "json" | "csv" | "txt";
+type ExportFormat = "json" | "csv" | "txt" | "xlsx";
 type ImportMode = "merge" | "replace";
 interface ImportResult { imported: number; skipped: number; errors: string[] }
 
@@ -52,6 +52,8 @@ export function Subnets() {
   const [newSubnet, setNewSubnet] = useState("");
   const [busy, setBusy] = useState(false);
   const dragCol = useRef<string | null>(null);
+  // UX: рамка дерева провайдеров/списков сворачивается в узкую полоску-переключатель.
+  const [treeOpen, setTreeOpen] = useState(true);
 
   // ── Latency Lab ──
   const [latEnabled, setLatEnabled] = useState(false);
@@ -308,14 +310,25 @@ export function Subnets() {
       <PageHeader icon={<Table2 size={16} />} title="Подсети"
         subtitle="Справочник подсетей/IP по провайдерам — разметка для обходов БС" />
 
-      <div style={{ display: "grid", gap: 14, gridTemplateColumns: "240px 1fr", alignItems: "start" }}>
+      <div style={{ display: "grid", gap: 14, gridTemplateColumns: treeOpen ? "240px 1fr" : "34px 1fr", alignItems: "stretch" }}>
         {/* ── дерево ── */}
-        <div className="card card-p" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className={treeOpen ? "card card-p" : "card"}
+          style={{
+            display: "flex", flexDirection: "column", gap: 6,
+            maxHeight: "max(280px, calc(100vh - 200px))",
+            overflowY: treeOpen ? "auto" : "hidden",
+            ...(treeOpen ? {} : { alignItems: "center", justifyContent: "center" }),
+          }}>
+          {treeOpen ? (
+            <>
           <div className="flex items-center gap-2">
             <FolderKanban size={13} style={{ color: "var(--t-low)" }} />
             <span className="micro">Провайдеры</span>
             <button className="iconbtn" style={{ marginLeft: "auto", width: 22, height: 22 }}
               title="Добавить провайдера" onClick={addProvider}><Plus size={13} /></button>
+            <button className="iconbtn" style={{ width: 22, height: 22 }}
+              title="Свернуть дерево" data-testid="tree-toggle"
+              onClick={() => setTreeOpen(false)}><ChevronLeft size={13} /></button>
           </div>
           {providers.length === 0 && (
             <p className="hint">Создайте провайдера, а в нём — список подсетей.</p>
@@ -348,6 +361,12 @@ export function Subnets() {
               ))}
             </div>
           ))}
+            </>
+          ) : (
+            <button className="iconbtn" style={{ width: 22, height: 22 }}
+              title="Развернуть дерево" data-testid="tree-toggle"
+              onClick={() => setTreeOpen(true)}><ChevronRight size={13} /></button>
+          )}
         </div>
 
         {/* ── таблица ── */}
@@ -356,8 +375,9 @@ export function Subnets() {
             Выберите список слева или создайте нового провайдера.
           </div>
         ) : (
-          <div className="card" style={{ overflow: "hidden" }}>
-            <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: "1px solid var(--line-soft)" }}>
+          <div className="card" style={{ overflow: "hidden", display: "flex", flexDirection: "column",
+            maxHeight: "max(280px, calc(100vh - 200px))", minHeight: 0 }}>
+            <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: "1px solid var(--line-soft)", flex: "none" }}>
               <Table2 size={13} style={{ color: "var(--t-low)" }} />
               <span className="micro">{current.name}</span>
               <span className="text-[10px]" style={{ color: "var(--t-faint)" }}>{current.rows.length} строк</span>
@@ -386,7 +406,7 @@ export function Subnets() {
 
             {ioOpen && (
               <div className="flex flex-col gap-2 px-3 py-2.5" data-testid="subnets-io-panel"
-                style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)" }}>
+                style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)", flex: "none" }}>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="micro" style={{ margin: 0 }}>Экспорт</span>
                   <select className="selectbox text-xs" style={{ width: 120 }}
@@ -395,6 +415,7 @@ export function Subnets() {
                     <option value="json">JSON</option>
                     <option value="csv">CSV</option>
                     <option value="txt">TXT</option>
+                    <option value="xlsx">Excel</option>
                   </select>
                   <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
                     data-testid="export-run" onClick={() => void doExport()}>
@@ -444,7 +465,7 @@ export function Subnets() {
             )}
 
             {editMode && (
-              <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)" }}>
+              <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)", flex: "none" }}>
                 <span className="hint" style={{ margin: 0 }}>Столбцы: перетаскивайте заголовки.</span>
                 <button className="btn btn-soft" style={{ padding: "3px 10px", fontSize: 11 }}
                   onClick={() => {
@@ -458,7 +479,7 @@ export function Subnets() {
 
             {scanOpen && (
               <div className="flex flex-col gap-2 px-3 py-2.5" data-testid="latency-scan-panel"
-                style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)" }}>
+                style={{ borderBottom: "1px solid var(--line-soft)", background: "var(--bg1)", flex: "none" }}>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="micro" style={{ margin: 0 }}>Скан Latency</span>
                   <span className="text-[10px]" style={{ color: "var(--t-faint)" }}>
@@ -526,12 +547,12 @@ export function Subnets() {
               </div>
             )}
 
-            <div style={{ overflowX: "auto" }}>
-              <table className="tbl colborders text-xs">
+            <div className="flex-1 min-h-0 overflow-auto" data-testid="subnets-table-scroll">
+              <table className="tbl colborders text-xs" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
                 <thead>
                   <tr>
                     {scanOpen && (
-                      <th style={{ width: 28 }}>
+                      <th className="sticky top-0 z-10" style={{ width: 28, background: "var(--bg2)" }}>
                         <input type="checkbox" data-testid="latency-pick-all"
                           aria-label="Выбрать все строки"
                           checked={current.rows.length > 0 && picked.length === current.rows.length}
@@ -539,7 +560,7 @@ export function Subnets() {
                       </th>
                     )}
                     {current.columns.map(c => (
-                      <th key={c.key}
+                      <th key={c.key} className="sticky top-0 z-10"
                         draggable={editMode}
                         onDragStart={() => { dragCol.current = c.key; }}
                         onDragOver={editMode ? e => e.preventDefault() : undefined}
@@ -552,7 +573,7 @@ export function Subnets() {
                           order.splice(order.indexOf(c.key), 0, from);
                           void mutate(`/providers/${sel!.pid}/lists/${sel!.lid}/columns-order`, "PUT", { order });
                         } : undefined}
-                        style={{ cursor: editMode ? "grab" : undefined }}>
+                        style={{ cursor: editMode ? "grab" : undefined, background: "var(--bg2)" }}>
                         <span className="flex items-center gap-1">
                           {editMode && <GripVertical size={10} style={{ color: "var(--t-faint)" }} />}
                           {c.title}
@@ -573,7 +594,7 @@ export function Subnets() {
                         </span>
                       </th>
                     ))}
-                    <th style={{ width: 32 }} />
+                    <th className="sticky top-0 z-10" style={{ width: 32, background: "var(--bg2)" }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -635,7 +656,7 @@ export function Subnets() {
               </table>
             </div>
 
-            <div className="flex gap-2 px-3 py-2.5" style={{ borderTop: "1px solid var(--line-soft)" }}>
+            <div className="flex gap-2 px-3 py-2.5" style={{ borderTop: "1px solid var(--line-soft)", flex: "none" }}>
               <textarea className="input font-mono text-xs" rows={1} value={newSubnet}
                 onChange={e => setNewSubnet(e.target.value)}
                 placeholder="203.0.113.0/24 — можно несколько, через запятую или с новой строки"

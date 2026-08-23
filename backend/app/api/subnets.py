@@ -5,8 +5,10 @@ import json
 import time
 
 import httpx
+import openpyxl
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from openpyxl.styles import Font
 from pydantic import BaseModel, Field, model_validator
 
 from app.services import latency_lab
@@ -434,7 +436,8 @@ _CSV_ALIASES = {"version": "ipver", "версия ip": "ipver", "подсеть"
                 "дата": "date", "название asn": "asnname"}
 _MEDIA = {"json": "application/json; charset=utf-8",
           "csv": "text/csv; charset=utf-8",
-          "txt": "text/plain; charset=utf-8"}
+          "txt": "text/plain; charset=utf-8",
+          "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
 
 
 def _pick_list(provider_id: str, list_id: str) -> tuple[dict, dict]:
@@ -486,13 +489,69 @@ def _list_to_txt(lst: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+def _prov_key(row: dict) -> tuple:
+    """Ключ сортировки/группировки по провайдеру: без провайдера — в конец."""
+    prov = ((row.get("values") or {}).get("provider") or "").strip()
+    return (1 if not prov else 0, prov)
+
+
+def _list_to_xlsx(lst: dict) -> bytes:
+    """Список → .xlsx (bytes). Колонки как в CSV (operators → 5 колонок,
+    значения 1/0); строки отсортированы по провайдеру (пустые — в конец,
+    группа «—») и сгруппированы: ws.row_dimensions.group(start, end,
+    outline_level=1) — сворачивание «+/-» в Excel, hidden=False.
+    Заголовок жирный, первая строка закреплена (freeze_panes="A2"),
+    автоширина колонок (cap 40)."""
+    header = _flat_header(lst)
+    op_label = {o["key"]: o["label"] for o in store.OPERATORS}
+    titles = [op_label.get(k[3:], h) if k.startswith("op:") else h
+              for h, k in header]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    name = "".join(c if c not in "[]:*?/\\" else " " for c in (lst.get("name") or ""))
+    ws.title = (name.strip() or "Таблица")[:31]
+    ws.append(titles)
+
+    data = sorted(lst.get("rows") or [], key=_prov_key)
+    run_start = 0
+    for i, row in enumerate(data):
+        # смена провайдера → закрыть предыдущую группу (строки run_start..i)
+        if i > 0 and _prov_key(row) != _prov_key(data[i - 1]):
+            ws.row_dimensions.group(run_start + 2, i + 1, outline_level=1)
+            run_start = i
+        values, ops = row.get("values") or {}, row.get("operators") or {}
+        line = []
+        for _, key in header:
+            if key.startswith("op:"):
+                line.append(1 if ops.get(key[3:], False) else 0)
+            else:
+                line.append(values.get(key) or "")
+        ws.append(line)
+    if data:
+        ws.row_dimensions.group(run_start + 2, len(data) + 1, outline_level=1)
+
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+    for col in ws.columns:
+        letter = col[0].column_letter
+        width = max(len(str(c.value or "")) for c in col)
+        ws.column_dimensions[letter].width = min(max(width + 2, 10), 40)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 @router.get("/export")
 async def export_subnets(provider_id: str = "", list_id: str = "", format: str = "json"):
     fmt = (format or "json").strip().lower()
     if fmt not in _MEDIA:
-        raise HTTPException(400, "Формат должен быть json, csv или txt")
-    if fmt in ("csv", "txt") and not list_id:
-        raise HTTPException(400, "Для формата csv/txt укажите список (list_id)")
+        raise HTTPException(400, "Формат должен быть json, csv, txt или xlsx")
+    if fmt in ("csv", "txt", "xlsx") and not list_id:
+        raise HTTPException(400, "Для формата csv/txt/xlsx укажите список (list_id)")
 
     if list_id:
         provider, lst = _pick_list(provider_id, list_id)
@@ -516,11 +575,14 @@ async def export_subnets(provider_id: str = "", list_id: str = "", format: str =
         body = json.dumps(payload, ensure_ascii=False, indent=1)
     elif fmt == "csv":
         body = _list_to_csv(lst or {})
-    else:
+    elif fmt == "txt":
         body = _list_to_txt(lst or {})
+    else:
+        body = _list_to_xlsx(lst or {})
 
     name = f"subnets_{time.strftime('%Y%m%d-%H%M%S')}.{fmt}"
-    return Response(body.encode("utf-8"), media_type=_MEDIA[fmt],
+    payload = body if isinstance(body, bytes) else body.encode("utf-8")
+    return Response(payload, media_type=_MEDIA[fmt],
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 

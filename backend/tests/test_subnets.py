@@ -1,8 +1,10 @@
 """Wave-5 PR-5 — «Подсети»: провайдеры/списки/строки/столбцы, обогащение,
-импорт/экспорт (json/csv/txt)."""
+импорт/экспорт (json/csv/txt/xlsx)."""
+import io
 import json as _json
 import uuid as _uuid
 
+import openpyxl
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -462,3 +464,96 @@ def test_import_json_skips_duplicates_and_bad_rows():
                        headers=a, json={"rows": []}).status_code == 422
     assert client.post("/api/subnets/providers/nope/lists/nope2/import-json",
                        headers=a, json={"rows": [{"subnet": "1.2.3.0/24"}]}).status_code == 404
+
+
+# ── экспорт xlsx (Excel, группы по провайдеру) ──────────────────
+def _xlsx_list(a, rows):
+    """Список со строками {subnet, provider?, operator?} → (wb, ws)."""
+    pid, lid = _mk_list(a)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows",
+                    headers=a, json={"rows": rows})
+    assert r.status_code == 201, r.text
+    r = client.get("/api/subnets/export", headers=a,
+                   params={"provider_id": pid, "list_id": lid, "format": "xlsx"})
+    assert r.status_code == 200, r.text
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    return wb, wb.active
+
+
+def test_export_xlsx_ok_zip_magic():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"subnets": ["203.0.113.0/24"]})
+    r = client.get("/api/subnets/export", headers=a,
+                   params={"provider_id": pid, "list_id": lid, "format": "xlsx"})
+    assert r.status_code == 200
+    assert "spreadsheetml" in r.headers["content-type"]
+    assert "attachment" in r.headers["content-disposition"]
+    assert ".xlsx" in r.headers["content-disposition"]
+    assert r.content[:4] == b"PK\x03\x04"  # zip-магия xlsx
+    # пустой список тоже валиден: только заголовок, без групп
+    pid2, lid2 = _mk_list(a)
+    r = client.get("/api/subnets/export", headers=a,
+                   params={"list_id": lid2, "format": "xlsx"})
+    assert r.status_code == 200 and r.content[:4] == b"PK\x03\x04"
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    assert wb.active.max_row == 1
+
+
+def test_export_xlsx_requires_list_id():
+    a = _auth()
+    r = client.get("/api/subnets/export", headers=a, params={"format": "xlsx"})
+    assert r.status_code == 400
+    assert "list_id" in r.json()["detail"]
+
+
+def test_export_xlsx_groups_by_provider():
+    a = _auth()
+    rows = [
+        {"subnet": "203.0.113.0/24", "provider": "Ростелеком"},
+        {"subnet": "198.51.100.0/24", "provider": "МТС"},
+        {"subnet": "192.0.2.0/24", "provider": "Билайн"},
+        {"subnet": "10.10.0.0/16", "provider": "МТС"},
+        {"subnet": "2001:db8::/32"},  # без провайдера — в конец
+    ]
+    wb, ws = _xlsx_list(a, rows)
+    # заголовок: табличные колонки, operators → 5 колонок с лейблами
+    head = [ws.cell(1, c).value for c in range(1, 11)]
+    assert head == ["subnet", "ipver", "asn", "asnname", "date",
+                    "MTS", "Beeline", "МегаФон", "Tele2", "T-Mobile"]
+    assert ws["A1"].font.bold
+    assert ws.freeze_panes == "A2"
+    # строки отсортированы по провайдеру: Билайн → МТС → Ростелеком → «—»
+    assert [ws.cell(r, 1).value for r in range(2, 7)] == [
+        "192.0.2.0/24", "198.51.100.0/24", "10.10.0.0/16",
+        "203.0.113.0/24", "2001:db8::/32"]
+    # группы по провайдеру: outline_level=1, hidden=False (сворачивание «+/-»)
+    ranges = [(2, 2), (3, 4), (5, 5), (6, 6)]
+    for start, end in ranges:
+        for r in range(start, end + 1):
+            dim = ws.row_dimensions[r]
+            assert dim.outline_level == 1, f"строка {r} не сгруппирована"
+            assert dim.hidden is False
+    # за пределами данных групп нет
+    assert ws.max_row == 6
+
+
+def test_export_xlsx_values_match_source():
+    a = _auth()
+    rows = [
+        {"subnet": "203.0.113.9/24", "provider": "МТС", "operator": "МТС"},
+        {"subnet": "198.51.100.0/24", "provider": "Билайн",
+         "operator": "Билайн + Tele2"},
+    ]
+    _, ws = _xlsx_list(a, rows)
+    # первая строка данных — группа «Билайн» (сортировка по провайдеру)
+    assert ws["A2"].value == "198.51.100.0/24"
+    assert ws["B2"].value == "IPv4"
+    # операторы: 1/0, как в CSV
+    assert [ws.cell(2, c).value for c in range(6, 11)] == [0, 1, 0, 1, 0]
+    assert [ws.cell(3, c).value for c in range(6, 11)] == [1, 0, 0, 0, 0]
+    # провайдер в колонки таблицы не входит — он виден через группы:
+    # строка 2 — отдельная группа «Билайн», строка 3 — «МТС»
+    assert ws.row_dimensions[2].outline_level == 1
+    assert ws.row_dimensions[3].outline_level == 1
