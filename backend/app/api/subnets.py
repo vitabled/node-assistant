@@ -56,15 +56,16 @@ async def upsert_asn(body: AsnBody):
 
 @router.post("/asns/sync")
 async def sync_asns():
-    """Собрать все уникальные пары (values.asn → values.asnname) из ВСЕХ
-    списков подсетей аккаунта и добавить их в справочник ASN.
+    """Собрать все уникальные значения values.asn из ВСЕХ списков подсетей
+    аккаунта и добавить их в справочник ASN (название — первое непустое
+    values.asnname; если названия нет — запись с пустым name).
 
     Справочник авторитетнее файлов: у существующих записей name НЕ
     перезаписывается (пустое name заполняется из строк). Невалидные asn
     пропускаются, лимит MAX_ASNS соблюдается (что влезло — добавлено).
     Строки подсетей не меняются. Ответ: {ok, added, filled, total}."""
     data = store.get_store()
-    pairs: dict[str, str] = {}  # asn → первое непустое asnname
+    pairs: dict[str, str] = {}  # asn → первое непустое asnname (или "")
     for p in data.get("providers", []):
         for l in p.get("lists", []):
             for row in l.get("rows", []):
@@ -77,7 +78,7 @@ async def sync_asns():
                 except ValueError:
                     continue  # мусор в asn — пропускаем
                 name = str(values.get("asnname") or "").strip()
-                if name and key not in pairs:
+                if key not in pairs:
                     pairs[key] = name
     added, filled = 0, 0
     for key, name in pairs.items():
@@ -88,7 +89,7 @@ async def sync_asns():
             except ValueError:
                 continue  # упёрлись в MAX_ASNS — добавляем сколько можем
             added += 1
-        elif not str(existing.get("name") or "").strip():
+        elif name and not str(existing.get("name") or "").strip():
             # пустое name в справочнике — заполняем из строк (note сохраняем)
             asn_store.upsert_asn(key, name, note=existing.get("note") or "")
             filled += 1

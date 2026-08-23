@@ -133,8 +133,8 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
       return json({ ok: true, asns: asnList });
     }
     if (url === "/api/subnets/asns/sync") {
-      // как backend: уникальные пары (asn → asnname) из строк store →
-      // в asnList (добавить отсутствующие, заполнить пустые name, не
+      // как backend: все уникальные asn из строк store → в asnList (добавить
+      // отсутствующие даже без названия, заполнить пустые name, не
       // перезаписывать непустые; мусорный asn пропустить)
       const st = (opts?.store ?? STORE) as {
         providers?: { lists?: { rows?: { values?: Record<string, string> }[] }[] }[];
@@ -148,13 +148,13 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
             if (!m) continue;
             const name = String(r.values?.asnname ?? "").trim();
             const key = "AS" + m[1];
-            if (name && !pairs.has(key)) pairs.set(key, name);
+            if (!pairs.has(key)) pairs.set(key, name);
           }
       let added = 0, filled = 0;
       for (const [key, name] of pairs) {
         const i = asnList.findIndex(x => x.asn === key);
         if (i < 0) { asnList.push({ asn: key, name, note: "", icon: "" }); added++; }
-        else if (!(asnList[i].name ?? "").trim()) { asnList[i] = { ...asnList[i], name }; filled++; }
+        else if (name && !(asnList[i].name ?? "").trim()) { asnList[i] = { ...asnList[i], name }; filled++; }
       }
       return json({ ok: true, added, filled, total: asnList.length });
     }

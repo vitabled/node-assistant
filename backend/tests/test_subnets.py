@@ -985,12 +985,12 @@ def test_asns_isolated_per_account():
 
 # ── синхронизация справочника из списков подсетей (POST /asns/sync) ──
 def _mk_rows_with_asnname(a, pid, lid):
-    """Строки для sync: 2 валидные пары (asn+asnname), мусорный asn,
-    строка без asn вовсе."""
+    """Строки для sync: валидная пара (asn+asnname), asn без названия,
+    мусорный asn, строка без asn вовсе."""
     r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
                     json={"rows": [
                         {"subnet": "203.0.113.0/24", "asn": "AS12345", "asnname": "Яндекс"},
-                        {"subnet": "198.51.100.0/24", "asn": "AS3261", "asnname": "Ростелеком"},
+                        {"subnet": "198.51.100.0/24", "asn": "AS3261"},
                         {"subnet": "192.0.2.0/24", "asn": "мусор", "asnname": "Мусор"},
                         {"subnet": "10.0.0.0/8"},
                     ]})
@@ -998,9 +998,10 @@ def _mk_rows_with_asnname(a, pid, lid):
 
 
 def test_asns_sync_collects_from_lists_adds_missing():
-    """POST /asns/sync: пары (asn → asnname) из ВСЕХ списков попадают в
-    справочник; мусорный asn и строка без asn пропускаются; повторный sync
-    не дублирует записи (added=0); строки подсетей не меняются."""
+    """POST /asns/sync: ВСЕ уникальные values.asn из ВСЕХ списков попадают в
+    справочник — даже без asnname (запись с пустым name); мусорный asn и
+    строка без asn пропускаются; повторный sync не дублирует записи
+    (added=0); строки подсетей не меняются."""
     a = _auth()
     pid, lid = _mk_list(a)
     _mk_rows_with_asnname(a, pid, lid)
@@ -1019,12 +1020,16 @@ def test_asns_sync_collects_from_lists_adds_missing():
     assert body["added"] == 3 and body["filled"] == 0 and body["total"] == 3
     by_asn = {x["asn"]: x["name"] for x in client.get("/api/subnets/asns",
                                                       headers=a).json()["asns"]}
-    assert by_asn == {"AS12345": "Яндекс", "AS3261": "Ростелеком", "AS999": "Другой"}
+    assert by_asn == {"AS12345": "Яндекс", "AS3261": "", "AS999": "Другой"}
+    # ASN без названия добавлен записью с пустым name
+    rec = next(x for x in client.get("/api/subnets/asns", headers=a).json()["asns"]
+               if x["asn"] == "AS3261")
+    assert rec["name"] == "" and rec["note"] == ""
     # строки подсетей не тронуты: asnname в них остался как был
     fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
     assert fresh["203.0.113.0/24"]["asnname"] == "Яндекс"
 
-    # повторный sync — дубликатов нет
+    # повторный sync — дубликатов нет (и пустое name не перезаполняется)
     r2 = client.post("/api/subnets/asns/sync", headers=a)
     assert r2.json() == {"ok": True, "added": 0, "filled": 0, "total": 3}
 
