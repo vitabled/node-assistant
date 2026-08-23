@@ -43,7 +43,11 @@ class HistoryMsgIn(BaseModel):
     беднее той, что была до чистки браузера.
     """
     role: str = Field("user", max_length=16)
-    content: str = Field("", max_length=ai_chat_store.MAX_CONTENT_CHARS)
+    # ⚠️ Без жёсткого max_length здесь: длинный ответ агента (большой импорт,
+    # разбор файла) легко переваливает 40K символов. Pydantic на лимите отвечал
+    # бы 422, и вся реплика терялась бы — а хранилище и так обрезает
+    # `content[:MAX_CONTENT_CHARS]` в `_norm_msg`. Обрезка — его работа.
+    content: str = Field("", max_length=ai_chat_store.MAX_CONTENT_CHARS * 8)
     ts: int = 0
     files: list[str] = Field(default_factory=list, max_length=20)
     tools: list[dict] = Field(default_factory=list, max_length=50)
