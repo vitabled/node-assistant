@@ -499,6 +499,28 @@ async function readStream(url: string, init: RequestInit,
  *
  *  ⚠️ Зовётся ВНУТРИ `consume`, до его `finally`: иначе тот сбросил бы `busy` в
  *  IDLE, и на время переподключения чат выглядел бы завершённым. */
+async function pullFinalFromHistory(sessionId: string,
+                                    patchLast: PatchLast): Promise<boolean> {
+  // Сервер сохраняет результат сам (server-persist) — берём полный ответ
+  // оттуда и заменяем последнюю (возможно обрывную) реплику.
+  try {
+    const q = encodeURIComponent(sessionId);
+    const res = await fetch(`/api/ai/chat/history?session_id=${q}`);
+    if (!res.ok) return false;
+    const data = await res.json();
+    const msgs: Array<{ role: string; content?: string }> =
+      Array.isArray(data?.messages) ? data.messages : [];
+    const last = msgs[msgs.length - 1];
+    if (last?.role === "assistant" && typeof last.content === "string" && last.content) {
+      patchLast(m => { m.text = last.content!; m.tools = []; });
+      return true;
+    }
+    return false; // истории нет / пустая — даём обычный reconnect-цикл
+  } catch {
+    return false;
+  }
+}
+
 async function attemptAutoReconnect(sessionId: string, controller: AbortController,
                                     patchLast: PatchLast): Promise<boolean> {
   const q = encodeURIComponent(sessionId);
@@ -518,9 +540,11 @@ async function attemptAutoReconnect(sessionId: string, controller: AbortControll
       const res = await fetch(`/api/ai/chat/state?session_id=${q}`,
                               { signal: controller.signal });
       const st = res.ok ? await res.json() : null;
-      // Ответ на сервере уже завершён — это не ошибка. То, что успело дойти,
-      // и есть весь ответ; молча заканчиваем.
-      if (!st?.active) return true;
+      // Ответ на сервере УЖЕ завершён. Это не ошибка сети — просто наш стрим
+      // оборвался (или вкладка была закрыта), а сервер доработал сам.
+      // Подтягиваем готовый ответ из durable-истории, чтобы вернувшийся
+      // человек увидел полный текст, а не огрызок.
+      if (!st?.active) return await pullFinalFromHistory(sessionId, patchLast);
     } catch {
       if (controller.signal.aborted) return true;
       continue; // сеть всё ещё лежит — следующая попытка

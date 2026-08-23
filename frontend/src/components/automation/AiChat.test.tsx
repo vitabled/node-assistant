@@ -718,6 +718,9 @@ describe("AiChat: автопереподключение при обрыве", (
     resume?: (attempt: number) => any;
     /** Идёт ли ответ на сервере, когда мы про это спрашиваем после обрыва. */
     activeOnDrop?: boolean;
+    /** История, которую вернёт GET /api/ai/chat/history при reсonnect-проверке
+     *  (после обрыва сервер мог уже доработать — берём финальный ответ оттуда). */
+    historyMessages?: Array<{ role: string; content: string }>;
   }
 
   function installDropFetch(o: Opts) {
@@ -728,7 +731,10 @@ describe("AiChat: автопереподключение при обрыве", (
       if (u === "/api/ai/config") return { ok: true, json: async () => CONFIG } as any;
       if (u === "/api/ai/tools") return { ok: true, json: async () => TOOLS } as any;
       if (u.startsWith("/api/ai/chat/history"))
-        return { ok: true, json: async () => ({ sessions: [] }) } as any;
+        return { ok: true, json: async () =>
+          o.historyMessages
+            ? { session_id: "s", messages: o.historyMessages }
+            : { sessions: [] } } as any;
       if (u.startsWith("/api/ai/chat/stop"))
         return { ok: true, json: async () => ({ stopped: true }) } as any;
       if (u.startsWith("/api/ai/chat/state"))
@@ -808,17 +814,22 @@ describe("AiChat: автопереподключение при обрыве", (
     await waitFor(() => expect(runner.getRunState().busy).toBe(false));
   });
 
-  it("ответ уже завершился на сервере (active:false) → тихо, без ошибки", async () => {
+  it("ответ уже завершился на сервере (active:false) → подтягивает финальный ответ из истории, без ошибки", async () => {
     const fn = installDropFetch({
       chat: () => droppingStream([{ type: "text", delta: "полный ответ" }]),
       activeOnDrop: false,
+      // Сервер доработал сам (server-persist) — история уже содержит ответ.
+      historyMessages: [
+        { role: "user", content: "вопрос" },
+        { role: "assistant", content: "полный ответ, дописанный сервером" },
+      ],
     });
     render(<AiChat />);
     const input = await screen.findByPlaceholderText(/Сообщение агенту/);
     await ask(input, "вопрос");
 
     await waitFor(() => expect(runner.getRunState().busy).toBe(false));
-    expect(answer()).toBe("полный ответ");
+    expect(answer()).toBe("полный ответ, дописанный сервером");
     expect(answer()).not.toContain("⚠️");
     expect(countOf(fn, "/api/ai/chat/resume")).toBe(0);
   });

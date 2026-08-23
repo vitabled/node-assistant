@@ -526,7 +526,7 @@ export function AiChat() {
                 уходят минутами, и проценты в общем ряду терялись бы среди
                 прочего. Без неё человек видел только «Отправка — 57м». */}
             {status?.phase === "upload" && !!status.upload?.total && (
-              <div className="h-1 w-56 rounded-full overflow-hidden"
+              <div className="h-1 w-full max-w-56 rounded-full overflow-hidden"
                 style={{ background: "var(--bg3)" }} data-testid="ai-upload-bar"
                 role="progressbar" aria-valuemin={0} aria-valuemax={100}
                 aria-valuenow={Math.round((status.upload.loaded / status.upload.total) * 100)}>
