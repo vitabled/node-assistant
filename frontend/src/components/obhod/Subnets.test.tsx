@@ -899,20 +899,31 @@ describe("Subnets", () => {
     expect(screen.getByTestId("subnets-row-r1").style.backgroundColor).toMatch(/^rgba\(/);
   });
 
-  // ── Справочник ASN: рамка-вкладка под деревом, иконки у записей ──
+  // ── Справочник ASN: кнопка «Справочник» под деревом → полная таблица справа ──
 
-  it("ASN: отдельная рамка-вкладка под деревом всегда открыта; добавление через форму", async () => {
+  it("ASN: кнопка «Справочник» (asn-dir-btn) под деревом открывает справа таблицу asn-view с asn-row-*", async () => {
     const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс" }] });
     await openList();
-    // рамка-вкладка видна сразу, без клика: таб ASN + плоский список
-    expect(screen.getByTestId("asn-tab")).toHaveTextContent("ASN");
-    expect(screen.getByTestId("asn-list")).toBeInTheDocument();
-    expect(screen.getByTestId("asn-item-AS12345")).toHaveTextContent("AS12345");
-    expect(screen.getByTestId("asn-item-AS12345")).toHaveTextContent("Яндекс");
-    // старой кнопки-тумблера в шапке и выпадающей панели больше нет
-    expect(screen.queryByTestId("asn-toggle")).toBeNull();
-    expect(screen.queryByTestId("asn-panel")).toBeNull();
-    // добавление: форма (input asn + название) → POST /asns, список обновляется
+    // большая кнопка видна сразу, без клика; старой рамки-вкладки больше нет
+    const dirBtn = screen.getByTestId("asn-dir-btn");
+    expect(dirBtn).toHaveTextContent("Справочник");
+    expect(screen.queryByTestId("asn-tab")).toBeNull();
+    expect(screen.queryByTestId("asn-list")).toBeNull();
+    // клик → справа таблица справочника, строки asn-row-{asn}
+    fireEvent.click(dirBtn);
+    expect(await screen.findByTestId("asn-view")).toBeInTheDocument();
+    const row = screen.getByTestId("asn-row-AS12345");
+    expect(row).toHaveTextContent("AS12345");
+    expect(row).toHaveTextContent("Яндекс");
+    // пока открыт справочник, таблица подсетей скрыта
+    expect(screen.queryByText("203.0.113.0/24")).toBeNull();
+  });
+
+  it("ASN: добавление через asn-add — POST /asns, новая строка появляется в таблице", async () => {
+    const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс" }] });
+    await openList();
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
     fireEvent.change(screen.getByTestId("asn-new-asn"), { target: { value: "99999" } });
     fireEvent.change(screen.getByTestId("asn-new-name"), { target: { value: "Новый" } });
     fireEvent.click(screen.getByTestId("asn-add"));
@@ -921,19 +932,37 @@ describe("Subnets", () => {
       expect(post).toBeTruthy();
       expect(JSON.parse(String(post!.init!.body))).toEqual({ asn: "99999", name: "Новый" });
     });
-    // после мутации — loadAsns() перезагрузил список, новая запись видна
-    expect(await screen.findByTestId("asn-item-AS99999")).toHaveTextContent("Новый");
+    // после мутации — loadAsns() перезагрузил справочник, новая запись видна
+    expect(await screen.findByTestId("asn-row-AS99999")).toHaveTextContent("Новый");
+  });
+
+  it("ASN: asn-back возвращает к подсетям; выбор списка в дереве тоже сбрасывает справочник", async () => {
+    installFetch({ asns: [{ asn: "AS12345", name: "Яндекс" }] });
+    await openList();
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
+    // «Назад» — снова таблица подсетей
+    fireEvent.click(screen.getByTestId("asn-back"));
+    expect(await screen.findByText("203.0.113.0/24")).toBeInTheDocument();
+    expect(screen.queryByTestId("asn-view")).toBeNull();
+    // снова открыли справочник; клик по списку в дереве возвращает к подсетям
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
+    fireEvent.click(screen.getByText("Основной"));
+    expect(await screen.findByText("203.0.113.0/24")).toBeInTheDocument();
+    expect(screen.queryByTestId("asn-view")).toBeNull();
   });
 
   it("ASN: Pencil редактирует (POST upsert), Trash2 удаляет (DELETE /asns/{asn})", async () => {
     const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс", note: "" }] });
     await openList();
-    const item = await screen.findByTestId("asn-item-AS12345");
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    const row = await screen.findByTestId("asn-row-AS12345");
     // редактирование: prompt'ы с текущими значениями → POST
     const promptSpy = vi.spyOn(window, "prompt")
       .mockReturnValueOnce("Яндекс Облако")
       .mockReturnValueOnce("новое примечание");
-    fireEvent.click(item.querySelector('button[title="Изменить"]')!);
+    fireEvent.click(row.querySelector('button[title="Изменить"]')!);
     await waitFor(() => {
       const post = calls.filter(c => c.url === "/api/subnets/asns" && c.init?.method === "POST");
       expect(post.length).toBe(1);
@@ -942,19 +971,21 @@ describe("Subnets", () => {
     promptSpy.mockRestore();
     // удаление: confirm + DELETE
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    fireEvent.click(screen.getByTestId("asn-item-AS12345").querySelector('button[title="Удалить"]')!);
+    fireEvent.click(screen.getByTestId("asn-row-AS12345").querySelector('button[title="Удалить"]')!);
     await waitFor(() => {
       const del = calls.find(c => c.url === "/api/subnets/asns/AS12345" && c.init?.method === "DELETE");
       expect(del).toBeTruthy();
     });
     // после перезагрузки записи нет
-    await waitFor(() => expect(screen.queryByTestId("asn-item-AS12345")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("asn-row-AS12345")).toBeNull());
     confirmSpy.mockRestore();
   });
 
   it("ASN: загрузка иконки записи (asn-icon-upload) шлёт multipart POST /asns/{asn}/icon", async () => {
     const calls = installFetch({ asns: [{ asn: "AS12345", name: "Яндекс" }] });
     await openList();
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
     fireEvent.click(screen.getByTestId("asn-icon-upload-AS12345"));
     const file = new File(["png-bytes"], "icon.png", { type: "image/png" });
     fireEvent.change(screen.getByTestId("subnets-icon-file"), { target: { files: [file] } });
@@ -990,10 +1021,12 @@ describe("Subnets", () => {
     // r2: запись есть, но без icon; r3: asn нет вовсе — иконки нет
     expect(screen.queryByTestId("asn-row-icon-r2")).toBeNull();
     expect(screen.queryByTestId("asn-row-icon-r3")).toBeNull();
-    // у записи в рамке ASN иконка тоже показывается
-    expect(screen.getByTestId("asn-item-AS12345")
+    // в справочнике (asn-view) у записи с иконкой — img, у без иконки — нет
+    fireEvent.click(screen.getByTestId("asn-dir-btn"));
+    await screen.findByTestId("asn-view");
+    expect(screen.getByTestId("asn-row-AS12345")
       .querySelector('img[src="/api/subnets/asns/AS12345/icon"]')).toBeTruthy();
-    expect(screen.getByTestId("asn-item-AS999")
+    expect(screen.getByTestId("asn-row-AS999")
       .querySelector('img[src^="/api/subnets/asns/"]')).toBeNull();
   });
 
