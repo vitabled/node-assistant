@@ -524,19 +524,24 @@ def test_export_xlsx_groups_by_provider():
                     "MTS", "Beeline", "МегаФон", "Tele2", "T-Mobile"]
     assert ws["A1"].font.bold
     assert ws.freeze_panes == "A2"
-    # строки отсортированы по провайдеру: Билайн → МТС → Ростелеком → «—»
-    assert [ws.cell(r, 1).value for r in range(2, 7)] == [
-        "192.0.2.0/24", "198.51.100.0/24", "10.10.0.0/16",
-        "203.0.113.0/24", "2001:db8::/32"]
-    # группы по провайдеру: outline_level=1, hidden=False (сворачивание «+/-»)
-    ranges = [(2, 2), (3, 4), (5, 5), (6, 6)]
-    for start, end in ranges:
-        for r in range(start, end + 1):
-            dim = ws.row_dimensions[r]
-            assert dim.outline_level == 1, f"строка {r} не сгруппирована"
-            assert dim.hidden is False
-    # за пределами данных групп нет
-    assert ws.max_row == 6
+    # Строки сгруппированы по провайдеру: заголовок группы (уровень 0,
+    # bold) + данные (уровень 1). Порядок: Билайн → МТС → Ростелеком → «—».
+    assert [ws.cell(r, 1).value for r in range(2, 11)] == [
+        "Билайн (1)", "192.0.2.0/24",
+        "МТС (2)", "198.51.100.0/24", "10.10.0.0/16",
+        "Ростелеком (1)", "203.0.113.0/24",
+        "— (1)", "2001:db8::/32",
+    ]
+    # заголовки групп — жирные, уровень 0
+    for r in (2, 4, 7, 9):
+        assert ws.cell(r, 1).font.bold, f"заголовок группы строка {r}"
+        assert ws.row_dimensions[r].outline_level == 0
+    # данные групп — уровень 1, hidden=False (сворачивание «+/-»)
+    for r in (3, 5, 6, 8, 10):
+        dim = ws.row_dimensions[r]
+        assert dim.outline_level == 1, f"строка {r} не сгруппирована"
+        assert dim.hidden is False
+    assert ws.max_row == 10
 
 
 def test_export_xlsx_values_match_source():
@@ -547,13 +552,13 @@ def test_export_xlsx_values_match_source():
          "operator": "Билайн + Tele2"},
     ]
     _, ws = _xlsx_list(a, rows)
-    # первая строка данных — группа «Билайн» (сортировка по провайдеру)
-    assert ws["A2"].value == "198.51.100.0/24"
-    assert ws["B2"].value == "IPv4"
+    # первая группа — «Билайн»: заголовок (строка 2), данные (строка 3)
+    assert ws["A2"].value == "Билайн (1)"
+    assert ws["A3"].value == "198.51.100.0/24"
+    assert ws["B3"].value == "IPv4"
     # операторы: 1/0, как в CSV
-    assert [ws.cell(2, c).value for c in range(6, 11)] == [0, 1, 0, 1, 0]
-    assert [ws.cell(3, c).value for c in range(6, 11)] == [1, 0, 0, 0, 0]
-    # провайдер в колонки таблицы не входит — он виден через группы:
-    # строка 2 — отдельная группа «Билайн», строка 3 — «МТС»
-    assert ws.row_dimensions[2].outline_level == 1
+    assert [ws.cell(3, c).value for c in range(6, 11)] == [0, 1, 0, 1, 0]
+    assert [ws.cell(5, c).value for c in range(6, 11)] == [1, 0, 0, 0, 0]
+    # группы: строка 3 (Билайн) и строка 5 (МТС) — данные уровня 1
     assert ws.row_dimensions[3].outline_level == 1
+    assert ws.row_dimensions[5].outline_level == 1

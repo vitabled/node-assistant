@@ -515,22 +515,36 @@ def _list_to_xlsx(lst: dict) -> bytes:
     ws.append(titles)
 
     data = sorted(lst.get("rows") or [], key=_prov_key)
-    run_start = 0
-    for i, row in enumerate(data):
-        # смена провайдера → закрыть предыдущую группу (строки run_start..i)
-        if i > 0 and _prov_key(row) != _prov_key(data[i - 1]):
-            ws.row_dimensions.group(run_start + 2, i + 1, outline_level=1)
-            run_start = i
-        values, ops = row.get("values") or {}, row.get("operators") or {}
-        line = []
-        for _, key in header:
-            if key.startswith("op:"):
-                line.append(1 if ops.get(key[3:], False) else 0)
-            else:
-                line.append(values.get(key) or "")
-        ws.append(line)
-    if data:
-        ws.row_dimensions.group(run_start + 2, len(data) + 1, outline_level=1)
+    # Группировка по провайдеру: заголовок группы (уровень 0) + строки
+    # данных (уровень 1). Без разрыва уровня Excel сливает все строки в
+    # одну гигантскую группу; заголовок уровня 0 между группами даёт
+    # отдельные «+/-» по каждому провайдеру.
+    i = 0
+    while i < len(data):
+        key = _prov_key(data[i])
+        prov = key[1] or "—"
+        # строка-заголовок группы: имя провайдера в первой колонке
+        grp = i
+        while grp < len(data) and _prov_key(data[grp]) == key:
+            grp += 1
+        ws.append([f"{prov} ({grp - i})"] + [""] * (len(header) - 1))
+        hdr_row = ws.max_row
+        for c in ws[hdr_row]:
+            c.font = Font(bold=True)
+        start = ws.max_row + 1
+        for row in data[i:grp]:
+            values, ops = row.get("values") or {}, row.get("operators") or {}
+            line = []
+            for _, key2 in header:
+                if key2.startswith("op:"):
+                    line.append(1 if ops.get(key2[3:], False) else 0)
+                else:
+                    line.append(values.get(key2) or "")
+            ws.append(line)
+        end = ws.max_row
+        if start <= end:
+            ws.row_dimensions.group(start, end, outline_level=1)
+        i = grp
 
     for cell in ws[1]:
         cell.font = Font(bold=True)
