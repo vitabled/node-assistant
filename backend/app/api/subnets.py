@@ -7,7 +7,7 @@ import time
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.services import latency_lab
 from app.services import subnets_store as store
@@ -77,13 +77,23 @@ async def delete_list(provider_id: str, list_id: str):
 
 
 class RowsBody(BaseModel):
-    subnets: list[str] = Field(..., min_length=1)
+    """Строки списка: старый формат {subnets: [...]} или строки с метаданными
+    {rows: [{subnet, ...поля}]}. Хотя бы один из списков непустой."""
+    subnets: list[str] = []
+    rows: list[dict] = []
+
+    @model_validator(mode="after")
+    def _at_least_one(self):
+        if not self.subnets and not self.rows:
+            raise ValueError("Передайте subnets (подсети) или rows (строки с метаданными)")
+        return self
 
 
 @router.post("/providers/{provider_id}/lists/{list_id}/rows", status_code=201)
 async def add_rows(provider_id: str, list_id: str, body: RowsBody):
     try:
-        return store.add_rows(provider_id, list_id, body.subnets)
+        items = body.subnets if body.subnets else body.rows
+        return store.add_rows(provider_id, list_id, items)
     except KeyError as e:
         raise _not_found(e)
 
@@ -107,6 +117,64 @@ async def set_cell(provider_id: str, list_id: str, row_id: str, col_key: str, bo
     except KeyError as e:
         raise _not_found(e)
     return {"ok": True}
+
+
+# ── пакетное обновление ячеек ──────────────────────────────────
+MAX_BATCH_UPDATES = 500
+
+
+class CellUpdateBody(BaseModel):
+    row_id: str
+    col: str
+    value: str = ""
+
+
+class BatchCellsBody(BaseModel):
+    updates: list[CellUpdateBody] = Field(..., min_length=1, max_length=MAX_BATCH_UPDATES)
+
+
+@router.patch("/providers/{provider_id}/lists/{list_id}/rows/batch")
+async def batch_update_cells(provider_id: str, list_id: str, body: BatchCellsBody):
+    """Пакетное обновление ячеек. Битые апдейты (нет строки/пустой col)
+    не убивают batch: считаются в skipped и перечисляются в errors."""
+    _pick_list(provider_id, list_id)  # 404, если списка нет
+    updated, skipped = 0, 0
+    errors: list[str] = []
+    for u in body.updates:
+        if not (u.row_id or "").strip() or not (u.col or "").strip():
+            skipped += 1
+            errors.append("row_id/col не могут быть пустыми")
+            continue
+        try:
+            store.set_cell(provider_id, list_id, u.row_id, u.col, u.value)
+            updated += 1
+        except KeyError as e:
+            skipped += 1
+            errors.append(f"row {u.row_id}: не найдена ({e})")
+        except Exception as e:  # битая строка не убивает batch
+            skipped += 1
+            errors.append(str(e))
+    return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
+
+
+# ── JSON-импорт строк с метаданными ────────────────────────────
+class ImportJsonBody(BaseModel):
+    rows: list[dict] = Field(..., min_length=1)
+
+
+@router.post("/providers/{provider_id}/lists/{list_id}/import-json")
+async def import_json_rows(provider_id: str, list_id: str, body: ImportJsonBody):
+    """Импорт строк {subnet, ...метаданные}. Колонки автоматически НЕ
+    создаются — метаданные лежат в values строк, колонки заводит агент
+    через POST /columns. Дубликаты подсетей — skip."""
+    if len(body.rows) > MAX_IMPORT_ROWS:
+        raise HTTPException(400, f"За раз не больше {MAX_IMPORT_ROWS} строк "
+                                 f"(получено {len(body.rows)})")
+    try:
+        res = store.import_flat_rows(provider_id, list_id, body.rows)
+    except KeyError:
+        raise HTTPException(404, "Список не найден")
+    return {"ok": True, **res}
 
 
 class OperatorBody(BaseModel):

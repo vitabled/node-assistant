@@ -288,3 +288,177 @@ def test_import_limit_5000_rows_400():
                     files={"file": ("big.txt", big.encode(), "text/plain")},
                     data={"provider_id": pid, "list_id": lid})
     assert r.status_code == 400 and "5000" in r.json()["detail"]
+
+
+# ── rows с метаданными / batch-ячейки / import-json ────────────
+def test_rows_with_metadata():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                    json={"rows": [
+                        {"subnet": "203.0.113.9/24", "operator": "mts",
+                         "country": "RU", "asn": "AS64500"},
+                        {"subnet": "198.51.100.0/24", "operators": {"beeline": False},
+                         "comment": "офис"},
+                    ]})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["added"] == ["203.0.113.0/24", "198.51.100.0/24"]
+    assert body["errors"] == []
+    rows = _rows(a)
+    row = next(x for x in rows if x["values"]["subnet"] == "203.0.113.0/24")
+    assert row["values"]["country"] == "RU"
+    assert row["values"]["asn"] == "AS64500"
+    assert row["operators"]["mts"] is True
+    row2 = next(x for x in rows if x["values"]["subnet"] == "198.51.100.0/24")
+    assert row2["operators"]["beeline"] is False
+    assert row2["values"]["comment"] == "офис"
+    # колонки автоматически не создаются
+    lst = client.get("/api/subnets", headers=a).json()["providers"][0]["lists"][0]
+    assert [c["key"] for c in lst["columns"]] == ["subnet", "ipver", "asn", "asnname", "date", "operators"]
+
+
+def test_rows_old_format_still_works():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                    json={"subnets": ["203.0.113.9/24", "2001:db8::/32", "мусор"]})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["added"] == ["203.0.113.0/24", "2001:db8::/32"]
+    assert len(body["errors"]) == 1
+    row = _rows(a)[0]
+    assert row["values"]["subnet"] == "203.0.113.0/24"
+    assert row["values"]["ipver"] == "IPv4"
+
+
+def test_rows_body_requires_subnets_or_rows():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a, json={})
+    assert r.status_code == 422
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                    json={"subnets": [], "rows": []})
+    assert r.status_code == 422
+
+
+def test_rows_unknown_operator_kept_as_is():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                    json={"rows": [{"subnet": "203.0.113.0/24", "operator": "yota"}]})
+    assert r.status_code == 201
+    row = _rows(a)[0]
+    assert row["values"]["operator"] == "yota"  # как есть, без падения
+    assert row["operators"]["mts"] is True
+    # битая строка в пачке не убивает остальные
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                    json={"rows": [{"subnet": "мусор", "country": "XX"},
+                                   {"subnet": "198.51.100.0/24"}]})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["added"] == ["198.51.100.0/24"] and len(body["errors"]) == 1
+
+
+def test_batch_update_cells():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"subnets": ["203.0.113.0/24", "198.51.100.0/24", "10.0.0.0/8"]})
+    rows = _rows(a)
+    r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch", headers=a,
+                     json={"updates": [
+                         {"row_id": rows[0]["id"], "col": "asn", "value": "AS64500"},
+                         {"row_id": rows[1]["id"], "col": "asnname", "value": "Example"},
+                         {"row_id": rows[2]["id"], "col": "date", "value": "2026-08-23"},
+                     ]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["updated"] == 3 and body["skipped"] == 0
+    assert body["errors"] == []
+    fresh = _rows(a)
+    by_id = {x["id"]: x for x in fresh}
+    assert by_id[rows[0]["id"]]["values"]["asn"] == "AS64500"
+    assert by_id[rows[1]["id"]]["values"]["asnname"] == "Example"
+    assert by_id[rows[2]["id"]]["values"]["date"] == "2026-08-23"
+
+
+def test_batch_update_broken_row_does_not_kill():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"subnets": ["203.0.113.0/24"]})
+    rid = _rows(a)[0]["id"]
+    r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch", headers=a,
+                     json={"updates": [
+                         {"row_id": "nope", "col": "asn", "value": "X"},
+                         {"row_id": rid, "col": "asn", "value": "AS1"},
+                         {"row_id": rid, "col": "", "value": "Y"},
+                     ]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["updated"] == 1 and body["skipped"] == 2 and len(body["errors"]) == 2
+    assert _rows(a)[0]["values"]["asn"] == "AS1"
+
+
+def test_batch_update_limits_and_404():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    updates = [{"row_id": f"r{i}", "col": "asn", "value": "x"} for i in range(501)]
+    r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch",
+                     headers=a, json={"updates": updates})
+    assert r.status_code == 422  # больше 500
+    r = client.patch(f"/api/subnets/providers/{pid}/lists/{lid}/rows/batch",
+                     headers=a, json={"updates": []})
+    assert r.status_code == 422  # пусто
+    r = client.patch("/api/subnets/providers/nope/lists/nope2/rows/batch",
+                     headers=a, json={"updates": [{"row_id": "r", "col": "c"}]})
+    assert r.status_code == 404
+
+
+def test_import_json_rows_with_metadata():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    rows = [{"subnet": f"10.{i}.0.0/24", "country": "RU", "asn": f"AS{1000 + i}"}
+            for i in range(10)]
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/import-json", headers=a,
+                    json={"rows": rows})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["added"] == 10 and body["skipped"] == 0
+    fresh = _rows(a)
+    assert len(fresh) == 10
+    assert fresh[0]["values"]["country"] == "RU"
+    assert fresh[0]["values"]["asn"] == "AS1000"
+    # колонки автоматически не создаются
+    lst = client.get("/api/subnets", headers=a).json()["providers"][0]["lists"][0]
+    assert [c["key"] for c in lst["columns"]] == ["subnet", "ipver", "asn", "asnname", "date", "operators"]
+
+
+def test_import_json_skips_duplicates_and_bad_rows():
+    a = _auth()
+    pid, lid = _mk_list(a)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/import-json", headers=a,
+                    json={"rows": [
+                        {"subnet": "203.0.113.0/24", "country": "RU"},
+                        {"subnet": "203.0.113.0/24", "country": "DE"},  # дубль
+                        {"subnet": "мусор"},                            # битая
+                        {"subnet": "198.51.100.0/24", "asnname": "Example"},
+                    ]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["added"] == 2 and body["skipped"] == 2
+    assert len(body["errors"]) == 1
+    fresh = _rows(a)
+    by_subnet = {x["values"]["subnet"]: x for x in fresh}
+    assert set(by_subnet) == {"203.0.113.0/24", "198.51.100.0/24"}
+    assert by_subnet["198.51.100.0/24"]["values"]["asnname"] == "Example"
+    # дубль против уже существующих строк
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/import-json", headers=a,
+                    json={"rows": [{"subnet": "203.0.113.0/24"}]})
+    assert r.json()["added"] == 0 and r.json()["skipped"] == 1
+    # пустой rows — 422, нет списка — 404
+    assert client.post(f"/api/subnets/providers/{pid}/lists/{lid}/import-json",
+                       headers=a, json={"rows": []}).status_code == 422
+    assert client.post("/api/subnets/providers/nope/lists/nope2/import-json",
+                       headers=a, json={"rows": [{"subnet": "1.2.3.0/24"}]}).status_code == 404

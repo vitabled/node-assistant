@@ -211,34 +211,120 @@ def parse_subnet(raw: str) -> tuple[str, str]:
         raise ValueError(f"Некорректная подсеть/IP: {s}") from None
 
 
-def add_rows(provider_id: str, list_id: str, subnets: list[str],
+def _row_from_dict(raw: dict, op_keys: set) -> tuple[Optional[dict], Optional[str]]:
+    """Плоский dict строки → (строка хранилища, ошибка|None).
+
+    `subnet` обязателен и валидируется. Известные операторы (OPERATORS)
+    ложатся в `operators`; неизвестный оператор и прочие метаданные —
+    в `values` как есть (не падает, колонки не создаются).
+    """
+    subnet_raw = raw.get("subnet")
+    if subnet_raw is None or str(subnet_raw).strip() == "":
+        return None, "Нет поля subnet"
+    try:
+        subnet, ipver = parse_subnet(str(subnet_raw))
+    except ValueError as exc:
+        return None, str(exc)
+    values = {"subnet": subnet, "ipver": ipver,
+              "date": time.strftime("%Y-%m-%d")}
+    operators = {k: True for k in op_keys}
+    for k, v in raw.items():
+        if k in ("subnet", "id", "values") or v is None or v == "":
+            continue
+        if k == "operator":
+            key = str(v).strip().lower()
+            if key in op_keys:
+                operators[key] = True
+            else:
+                values[k] = str(v)  # неизвестный оператор — сохранить как есть
+        elif k == "operators" and isinstance(v, dict):
+            for ok, ov in v.items():
+                if ok in op_keys:
+                    operators[ok] = bool(ov)
+                else:
+                    values[ok] = str(ov)
+        elif k in op_keys:
+            operators[k] = bool(v)
+        else:
+            values[k] = str(v)
+    return {"id": uuid.uuid4().hex[:10], "values": values,
+            "operators": operators}, None
+
+
+def add_rows(provider_id: str, list_id: str, items: list,
              account_id: Optional[str] = None) -> dict:
-    """Добавить строки по подсетям (пакетно). Обогащение ASN — отдельно
-    (enrich_rows); здесь только нормализация подсети и версии IP."""
+    """Добавить строки (пакетно). Элемент — подсеть (str) или dict
+    {subnet, ...метаданные}: метаданные ложатся в values строки, известные
+    операторы — в operators. Обогащение ASN — отдельно (enrich_rows)."""
     data = _load(account_id)
     lst = _find_list(data, provider_id, list_id)
     if not lst:
         raise KeyError(list_id)
     rows = lst.setdefault("rows", [])
+    op_keys = {o["key"] for o in OPERATORS}
     added, errors = [], []
-    for raw in subnets:
-        try:
-            subnet, ipver = parse_subnet(raw)
-        except ValueError as exc:
-            errors.append(str(exc))
-            continue
+    for raw in items:
+        if isinstance(raw, dict):
+            row, err = _row_from_dict(raw, op_keys)
+            if err:
+                errors.append(err)
+                continue
+            assert row is not None
+        else:
+            try:
+                subnet, ipver = parse_subnet(str(raw))
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            row = {
+                "id": uuid.uuid4().hex[:10],
+                "values": {"subnet": subnet, "ipver": ipver,
+                           "date": time.strftime("%Y-%m-%d")},
+                "operators": {k: True for k in op_keys},
+            }
         if len(rows) >= MAX_ROWS:
             errors.append(f"Лимит {MAX_ROWS} строк")
             break
-        rows.append({
-            "id": uuid.uuid4().hex[:10],
-            "values": {"subnet": subnet, "ipver": ipver,
-                       "date": time.strftime("%Y-%m-%d")},
-            "operators": {o["key"]: True for o in OPERATORS},
-        })
-        added.append(subnet)
+        rows.append(row)
+        added.append(row["values"]["subnet"])
     _save(data, account_id)
     return {"added": added, "errors": errors}
+
+
+def import_flat_rows(provider_id: str, list_id: str, items: list[dict],
+                     account_id: Optional[str] = None) -> dict:
+    """Импорт плоских dict-строк {subnet, ...метаданные}.
+
+    Дубликаты подсетей — skip. Колонки НЕ создаются: метаданные остаются
+    в values строки (колонки заводит агент через add_column)."""
+    data = _load(account_id)
+    lst = _find_list(data, provider_id, list_id)
+    if not lst:
+        raise KeyError(list_id)
+    rows = lst.setdefault("rows", [])
+    seen = {(r.get("values") or {}).get("subnet") for r in rows}
+    op_keys = {o["key"] for o in OPERATORS}
+    added, skipped, errors = 0, 0, []
+    for raw in items:
+        row, err = _row_from_dict(raw, op_keys)
+        if err:
+            skipped += 1
+            errors.append(err)
+            continue
+        assert row is not None
+        subnet = row["values"]["subnet"]
+        if subnet in seen:
+            skipped += 1
+            continue
+        if len(rows) >= MAX_ROWS:
+            errors.append(f"Лимит {MAX_ROWS} строк в списке")
+            skipped += 1
+            break
+        rows.append(row)
+        seen.add(subnet)
+        added += 1
+    _save(data, account_id)
+    return {"added": added, "skipped": skipped, "errors": errors}
 
 
 def delete_row(provider_id: str, list_id: str, row_id: str,
