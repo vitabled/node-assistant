@@ -38,6 +38,25 @@ const LAT_OPS = {
   online: ["mts"],
 };
 
+/** Строки с разными провайдерами (и без него) — для тестов группировки. */
+const GROUP_STORE = {
+  providers: [{
+    id: "p1", name: "МТС",
+    lists: [{
+      id: "l1", name: "Основной",
+      columns: [{ key: "subnet", title: "Подсеть" }],
+      rows: [
+        { id: "r1", values: { subnet: "10.0.0.0/8", provider: "RUVDS" }, operators: {} },
+        { id: "r2", values: { subnet: "11.0.0.0/8", provider: "" }, operators: {} },
+        { id: "r3", values: { subnet: "12.0.0.0/8", provider: "Beeline" }, operators: {} },
+        { id: "r4", values: { subnet: "13.0.0.0/8", provider: "RUVDS" }, operators: {} },
+        { id: "r5", values: { subnet: "14.0.0.0/8", provider: "Аврора" }, operators: {} },
+      ],
+    }],
+  }],
+  operators: [],
+};
+
 const SCAN_RESULT = {
   status: "done",
   result: {
@@ -49,15 +68,16 @@ const SCAN_RESULT = {
   },
 };
 
-/** `latency` — конфиг интеграции; `job` — очередь ответов GET /latency-scan/{id}. */
-function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown }) {
+/** `latency` — конфиг интеграции; `job` — очередь ответов GET /latency-scan/{id};
+ *  `store` — ответ GET /api/subnets (по умолчанию STORE). */
+function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown }) {
   const calls: { url: string; init?: RequestInit }[] = [];
   const jobQueue = [...(opts?.job ?? [])];
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.url;
     calls.push({ url, init });
     const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
-    if (url === "/api/subnets") return json(STORE);
+    if (url === "/api/subnets") return json(opts?.store ?? STORE);
     if (url === "/api/latency/config") return json(opts?.latency ?? { enabled: false, has_key: false });
     if (url === "/api/latency/operators") return json(LAT_OPS);
     if (url === "/api/subnets/latency-scan") return json({ ok: true, req_id: "req-1", status: "pending" });
@@ -347,5 +367,76 @@ describe("Subnets", () => {
     // разворачиваем обратно
     fireEvent.click(screen.getByTestId("tree-toggle"));
     expect(await screen.findByText("МТС")).toBeInTheDocument();
+  });
+
+  // ── Группировка строк по провайдеру ─────────────────────────
+
+  it("toggle «Группировать»: дефолт — плоский список; включение группирует, выключение возвращает", async () => {
+    installFetch({ store: GROUP_STORE });
+    await openList();
+    // дефолт: плоский список, заголовков групп нет
+    const toggle = screen.getByTestId("group-toggle");
+    expect(toggle).toHaveTextContent("Выкл");
+    expect(screen.queryByText(/Без провайдера/)).toBeNull();
+    expect(screen.getByText("10.0.0.0/8")).toBeInTheDocument();
+    // включаем → появляются заголовки групп, строки на месте
+    fireEvent.click(toggle);
+    expect(await screen.findByText("RUVDS (2)")).toBeInTheDocument();
+    expect(screen.getByText("Без провайдера (1)")).toBeInTheDocument();
+    expect(screen.getByText("10.0.0.0/8")).toBeInTheDocument();
+    // выключаем → снова плоский список
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    expect(screen.queryByText("RUVDS (2)")).toBeNull();
+    expect(screen.getByText("10.0.0.0/8")).toBeInTheDocument();
+  });
+
+  it("заголовки групп: имя провайдера + счётчик, порядок ru, «Без провайдера» последней", async () => {
+    installFetch({ store: GROUP_STORE });
+    await openList();
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    const heads = await screen.findAllByTestId(/^subnets-group-/);
+    expect(heads.map(h => h.getAttribute("data-testid"))).toEqual([
+      "subnets-group-Аврора",
+      "subnets-group-Beeline",
+      "subnets-group-RUVDS",
+      "subnets-group-__none__",
+    ]);
+    expect(heads[2]).toHaveTextContent("RUVDS (2)");
+    expect(heads[3]).toHaveTextContent("Без провайдера (1)");
+  });
+
+  it("клик по заголовку сворачивает и разворачивает группу", async () => {
+    installFetch({ store: GROUP_STORE });
+    await openList();
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    await screen.findByText("RUVDS (2)");
+    // развёрнуто: строки RUVDS видны
+    expect(screen.getByText("10.0.0.0/8")).toBeInTheDocument();
+    expect(screen.getByText("13.0.0.0/8")).toBeInTheDocument();
+    // сворачиваем RUVDS → его строки скрыты, другие группы не тронуты
+    fireEvent.click(screen.getByTestId("subnets-group-RUVDS"));
+    expect(screen.queryByText("10.0.0.0/8")).toBeNull();
+    expect(screen.queryByText("13.0.0.0/8")).toBeNull();
+    expect(screen.getByText("11.0.0.0/8")).toBeInTheDocument(); // «Без провайдера»
+    expect(screen.getByText("12.0.0.0/8")).toBeInTheDocument(); // Beeline
+    // разворачиваем обратно
+    fireEvent.click(screen.getByTestId("subnets-group-RUVDS"));
+    expect(await screen.findByText("10.0.0.0/8")).toBeInTheDocument();
+  });
+
+  it("в режиме правки группировка игнорируется (плоский список)", async () => {
+    installFetch({ store: GROUP_STORE });
+    await openList();
+    fireEvent.click(screen.getByTestId("group-toggle"));
+    await screen.findByText("RUVDS (2)");
+    // переходим в правку → заголовки групп исчезли, все строки видны
+    fireEvent.click(screen.getByTestId("table-edit-toggle"));
+    expect(screen.queryByTestId("subnets-group-RUVDS")).toBeNull();
+    expect(screen.getByText("10.0.0.0/8")).toBeInTheDocument();
+    expect(screen.getByText("13.0.0.0/8")).toBeInTheDocument();
+    expect(screen.getByText("11.0.0.0/8")).toBeInTheDocument();
+    // выходим из правки → группировка вернулась
+    fireEvent.click(screen.getByTestId("table-edit-toggle"));
+    expect(await screen.findByText("RUVDS (2)")).toBeInTheDocument();
   });
 });

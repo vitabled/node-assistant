@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
-  Activity, Check, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, Loader2, Pencil, Plus, Table2,
+  Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, Loader2, Pencil, Plus, Table2,
   Trash2, Upload, X,
 } from "lucide-react";
 import { Page, PageHeader } from "../../theme/ui";
@@ -44,6 +44,28 @@ interface ImportResult { imported: number; skipped: number; errors: string[] }
 const api = (path: string, init?: RequestInit) =>
   fetch(`/api/subnets${path}`, init ? { headers: { "Content-Type": "application/json" }, ...init } : init);
 
+const NO_PROVIDER_KEY = "__none__";
+
+/** Группирует строки по провайдеру (row.values.provider): сортировка по
+ *  имени (ru), пустой/отсутствующий провайдер — «Без провайдера» последней. */
+function groupRows(rows: Row[]) {
+  const byProvider = new Map<string, Row[]>();
+  for (const r of rows) {
+    const p = (r.values?.provider ?? "").trim();
+    const key = p || NO_PROVIDER_KEY;
+    const arr = byProvider.get(key);
+    if (arr) arr.push(r);
+    else byProvider.set(key, [r]);
+  }
+  return [...byProvider.entries()]
+    .map(([id, rs]) => ({ id, label: id === NO_PROVIDER_KEY ? "Без провайдера" : id, rows: rs }))
+    .sort((a, b) => {
+      if (a.id === NO_PROVIDER_KEY) return 1;
+      if (b.id === NO_PROVIDER_KEY) return -1;
+      return a.label.localeCompare(b.label, "ru");
+    });
+}
+
 export function Subnets() {
   const [providers, setProviders] = useState<Prov[]>([]);
   const [operators, setOperators] = useState<Op[]>([]);
@@ -54,6 +76,10 @@ export function Subnets() {
   const dragCol = useRef<string | null>(null);
   // UX: рамка дерева провайдеров/списков сворачивается в узкую полоску-переключатель.
   const [treeOpen, setTreeOpen] = useState(true);
+  // Группировка строк таблицы по провайдеру (по умолчанию выключена —
+  // плоский список). Свёрнутые группы: Set id'ов, по умолчанию всё развёрнуто.
+  const [groupByProvider, setGroupByProvider] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   // ── Latency Lab ──
   const [latEnabled, setLatEnabled] = useState(false);
@@ -95,6 +121,70 @@ export function Subnets() {
   const current: Lst | null = sel
     ? providers.find(p => p.id === sel.pid)?.lists.find(l => l.id === sel.lid) ?? null
     : null;
+
+  // В режиме правки группировка игнорируется — правка строк идёт по плоскому
+  // списку как раньше; toggle на шапке при этом заблокирован.
+  const grouped = groupByProvider && !editMode;
+  const groups = grouped ? groupRows(current?.rows ?? []) : [];
+
+  const toggleGroup = (id: string) =>
+    setCollapsedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  // Строка таблицы — общая для плоского списка и групп (группы — только
+  // визуальная обёртка: добавление/выделение/редактирование не меняются).
+  const renderRow = (r: Row) => (
+    <tr key={r.id}>
+      {scanOpen && (
+        <td>
+          <input type="checkbox" data-testid={`latency-pick-${r.id}`}
+            aria-label={`Выбрать ${r.values?.subnet ?? r.id}`}
+            checked={picked.includes(r.id)}
+            onChange={() => togglePick(r.id)} />
+        </td>
+      )}
+      {current!.columns.map(c => (
+        <td key={c.key}>
+          {c.key === "operators" ? (
+            <span className="flex items-center gap-1.5">
+              {operators.map(op => (
+                editMode ? (
+                  <label key={op.key} className="flex items-center gap-0.5"
+                    title={`${op.label}: показывать иконку`}
+                    style={{ cursor: "pointer" }}>
+                    <input type="checkbox"
+                      checked={r.operators?.[op.key] !== false}
+                      onChange={e => void mutate(
+                        `/providers/${sel!.pid}/lists/${sel!.lid}/rows/${r.id}/operator/${op.key}`,
+                        "PATCH", { on: e.target.checked })} />
+                    <OpIcon op={op.key} dim={r.operators?.[op.key] === false} />
+                  </label>
+                ) : (
+                  r.operators?.[op.key] !== false && <OpIcon key={op.key} op={op.key} />
+                )
+              ))}
+            </span>
+          ) : (
+            <span className="trunc" title={r.values?.[c.key] || ""}
+              style={{ color: c.key === "subnet" ? "var(--t-hi)" : "var(--t-mid)" }}>
+              {r.values?.[c.key] || "—"}
+            </span>
+          )}
+        </td>
+      ))}
+      <td>
+        <button className="iconbtn danger" title="Удалить строку"
+          onClick={() => void mutate(
+            `/providers/${sel!.pid}/lists/${sel!.lid}/rows/${r.id}`, "DELETE")}>
+          <Trash2 size={12} />
+        </button>
+      </td>
+    </tr>
+  );
 
   const mutate = async (path: string, method: string, body?: unknown, msg?: string) => {
     const res = await api(path, { method, body: body !== undefined ? JSON.stringify(body) : undefined });
@@ -395,6 +485,15 @@ export function Subnets() {
                   <Activity size={11} /> Скан Latency
                 </button>
               )}
+              <button className={`btn btn-sm ${groupByProvider ? "btn-primary" : "btn-soft"}`}
+                style={{ fontSize: 11 }}
+                data-testid="group-toggle"
+                disabled={editMode}
+                title={editMode ? "Недоступно в режиме правки" : "Группировать строки по провайдеру"}
+                onClick={() => setGroupByProvider(g => !g)}>
+                {groupByProvider ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                {groupByProvider ? "Группировать: Провайдер" : "Группировать: Выкл"}
+              </button>
               <button className={`btn btn-sm ${editMode ? "btn-primary" : "btn-soft"}`}
                 style={{ fontSize: 11 }}
                 data-testid="table-edit-toggle"
@@ -604,54 +703,21 @@ export function Subnets() {
                       Пусто — добавьте подсеть ниже.
                     </td></tr>
                   )}
-                  {current.rows.map(r => (
-                    <tr key={r.id}>
-                      {scanOpen && (
-                        <td>
-                          <input type="checkbox" data-testid={`latency-pick-${r.id}`}
-                            aria-label={`Выбрать ${r.values?.subnet ?? r.id}`}
-                            checked={picked.includes(r.id)}
-                            onChange={() => togglePick(r.id)} />
+                  {grouped ? groups.map(g => (
+                    <Fragment key={g.id}>
+                      <tr data-testid={`subnets-group-${g.id}`} onClick={() => toggleGroup(g.id)}
+                        style={{ background: "var(--bg1)", cursor: "pointer" }}>
+                        <td colSpan={current.columns.length + (scanOpen ? 2 : 1)}>
+                          <span className="flex items-center gap-1.5 font-semibold"
+                            style={{ fontSize: 11, color: "var(--t-hi)" }}>
+                            {collapsedGroups.has(g.id) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                            <span>{g.label} ({g.rows.length})</span>
+                          </span>
                         </td>
-                      )}
-                      {current.columns.map(c => (
-                        <td key={c.key}>
-                          {c.key === "operators" ? (
-                            <span className="flex items-center gap-1.5">
-                              {operators.map(op => (
-                                editMode ? (
-                                  <label key={op.key} className="flex items-center gap-0.5"
-                                    title={`${op.label}: показывать иконку`}
-                                    style={{ cursor: "pointer" }}>
-                                    <input type="checkbox"
-                                      checked={r.operators?.[op.key] !== false}
-                                      onChange={e => void mutate(
-                                        `/providers/${sel!.pid}/lists/${sel!.lid}/rows/${r.id}/operator/${op.key}`,
-                                        "PATCH", { on: e.target.checked })} />
-                                    <OpIcon op={op.key} dim={r.operators?.[op.key] === false} />
-                                  </label>
-                                ) : (
-                                  r.operators?.[op.key] !== false && <OpIcon key={op.key} op={op.key} />
-                                )
-                              ))}
-                            </span>
-                          ) : (
-                            <span className="trunc" title={r.values?.[c.key] || ""}
-                              style={{ color: c.key === "subnet" ? "var(--t-hi)" : "var(--t-mid)" }}>
-                              {r.values?.[c.key] || "—"}
-                            </span>
-                          )}
-                        </td>
-                      ))}
-                      <td>
-                        <button className="iconbtn danger" title="Удалить строку"
-                          onClick={() => void mutate(
-                            `/providers/${sel!.pid}/lists/${sel!.lid}/rows/${r.id}`, "DELETE")}>
-                          <Trash2 size={12} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                      </tr>
+                      {!collapsedGroups.has(g.id) && g.rows.map(renderRow)}
+                    </Fragment>
+                  )) : current.rows.map(renderRow)}
                 </tbody>
               </table>
             </div>
