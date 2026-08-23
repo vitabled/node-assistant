@@ -239,6 +239,10 @@ class HttpError extends Error {}
 
 /** Сколько раз пробуем подхватить оборванный ответ, прежде чем сдаться. */
 const AUTO_RECONNECT_ATTEMPTS = 3;
+// Ставится readStream при срабатывании сторожевого таймера (fetch 60s /
+// простой 3 мин). consume в catch не может отличить наш abort от кнопки
+// «Остановить» по одному `signal.aborted`, поэтому запоминаем причину.
+let lastStallFailure: string | null = null;
 
 /** Пауза между попытками. Не константа, чтобы тесты не ждали живые секунды. */
 let reconnectDelayMs = 1800;
@@ -257,7 +261,24 @@ const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 async function readStream(url: string, init: RequestInit,
                           controller: AbortController,
                           patchLast: PatchLast): Promise<void> {
+  // ⚠️ Сторожевые таймеры: без них «Отправка» может висеть вечно. Если
+  // nginx/провайдер рвёт HTTP/2 на середине большого POST (архив 50 МБ),
+  // браузер не получает ни ответа, ни ошибки — fetch висит. Abort по
+  // таймауту превращает это в обычный обрыв → срабатывает автопереподключение.
+  const FETCH_TIMEOUT = 60_000;   // до первого байта ответа
+  const STALL_TIMEOUT = 180_000;  // без единого события (агент думает ≤3 мин)
+  let stale = false;
+  const fail = (why: string) => {
+    stale = true;
+    lastStallFailure = why;   // см. ниже: реконнект по таймауту, а не по abort
+    // Не abort'им controller: attemptAutoReconnect проверяет `aborted` как
+    // признак кнопки «Остановить». Висящий fetch закроет сам сервер/nginx;
+    // главное — читатель уже выброшен, а реконнект пойдёт новым запросом.
+    throw new Error(why);
+  };
+  const fetchTimer = setTimeout(() => fail("Сервер не ответил за 60 секунд."), FETCH_TIMEOUT);
   const res = await fetch(url, { ...init, signal: controller.signal });
+  clearTimeout(fetchTimer);
   if (!res.ok) {
     // Не «Ошибка соединения» — сервер ответил, но отказал (413 файл велик,
     // 422 валидация, 503 провайдер). Читаем реальную причину из тела.
@@ -273,9 +294,16 @@ async function readStream(url: string, init: RequestInit,
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+  const resetStall = () => {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => fail("Нет данных от агента 3 минуты."), STALL_TIMEOUT);
+  };
+  resetStall();
   for (;;) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) { if (stallTimer) clearTimeout(stallTimer); break; }
+    resetStall();
     buf += dec.decode(value, { stream: true });
     const lines = buf.split("\n");
     buf = lines.pop() ?? "";
@@ -402,6 +430,16 @@ async function consume(url: string, init: RequestInit,
   try {
     await readStream(url, init, controller, patchLast);
   } catch (e) {
+    // Таймаут (нет ответа / агент молчит) — это НЕ пользовательская отмена:
+    // пробуем подхватить ответ через resume, как при обычном обрыве сети.
+    const stall = lastStallFailure;
+    lastStallFailure = null;
+    if (stall) {
+      if (!await attemptAutoReconnect(sessionId, controller, patchLast)) {
+        patchLast(a => { a.text += `\n⚠️ ${stall}`; });
+      }
+      return;
+    }
     // Остановил пользователь — молчим: он и так знает, что прервал ответ.
     if (!controller.signal.aborted) {
       if (e instanceof HttpError) {

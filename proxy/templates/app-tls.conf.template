@@ -23,7 +23,13 @@ server {
 server {
     listen      443 ssl default_server;
     listen      [::]:443 ssl default_server;
-    http2       on;
+    # ⚠️ HTTP/2 отключён намеренно: большой POST (архив до 50 МБ → тело ~67 МБ)
+    # через HTTP/2 рвётся на середине у клиентов за VPN/провайдерами —
+    # nginx видел `SSL_read() failed: bad record mac`, запрос уходил в 400,
+    # фронт вечно висел на «Отправка». HTTP/1.1 передаёт большие тела
+    # надёжнее (одно соединение = один запрос, нет мультиплексирования,
+    # которое и ломается). SPA-нагрузка при этом не страдает заметно.
+    # http2       on;
     server_name ${PROXY_DOMAIN};
 
     ssl_certificate     /etc/letsencrypt/live/${PROXY_DOMAIN}/fullchain.pem;
