@@ -117,6 +117,139 @@ def test_enrich_marks_asn(monkeypatch):
     assert "Google" in row["values"]["asnname"]
 
 
+class _EnrichResp:
+    """Ответ ip-api: полный набор полей (org/country — для провайдера и страны)."""
+
+    def json(self):
+        return {"status": "success", "as": "AS15169 Google LLC", "asname": "Google",
+                "org": "Google LLC", "country": "US"}
+
+
+class _EnrichClient:
+    """Фейк ip-api: журнал запросов (url, params) — для проверки пачек и fields."""
+
+    calls: list = []
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        pass
+
+    async def get(self, url, params=None):
+        _EnrichClient.calls.append((url, dict(params or {})))
+        return _EnrichResp()
+
+
+def _patch_ip_api(monkeypatch):
+    import app.api.subnets as api
+    _EnrichClient.calls = []
+    monkeypatch.setattr(api.httpx, "AsyncClient", lambda *a, **k: _EnrichClient())
+    return api
+
+
+def test_enrich_rows_fills_provider_country_keeps_existing(monkeypatch):
+    """Расширенный enrich_rows: ip-api просит country, пустые строки получают
+    provider (из org) и country, уже заполненные поля НЕ перезаписываются."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "8.8.8.0/24"},
+                    {"subnet": "9.9.9.0/24", "provider": "RUVDS", "country": "DE",
+                     "asn": "AS64500", "asnname": "Старое"},
+                ]})
+    by_subnet = {r["values"]["subnet"]: r for r in _rows(a)}
+    api = _patch_ip_api(monkeypatch)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/enrich", headers=a,
+                    json={"row_ids": [by_subnet["8.8.8.0/24"]["id"],
+                                      by_subnet["9.9.9.0/24"]["id"]]})
+    assert r.status_code == 200 and r.json()["updated"] == 2
+    # запрос ip-api просит и страну
+    assert "country" in _EnrichClient.calls[0][1]["fields"].split(",")
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    # пустая строка — заполнилась полностью
+    assert fresh["8.8.8.0/24"]["provider"] == "Google LLC"
+    assert fresh["8.8.8.0/24"]["country"] == "US"
+    assert fresh["8.8.8.0/24"]["asn"] == "AS15169"
+    # уже заполненная — НЕ перезаписана
+    assert fresh["9.9.9.0/24"]["provider"] == "RUVDS"
+    assert fresh["9.9.9.0/24"]["country"] == "DE"
+    assert fresh["9.9.9.0/24"]["asn"] == "AS64500"
+    assert fresh["9.9.9.0/24"]["asnname"] == "Старое"
+
+
+def test_enrich_missing_fills_unmarked_and_keeps_marked(monkeypatch):
+    """enrich-missing: обогащает ВСЕ строки без провайдера ({updated, of,
+    skipped}), размеченная строка не тронута, запросы уходят только по
+    неразмеченным."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"rows": [
+                    {"subnet": "8.8.8.0/24"},
+                    {"subnet": "9.9.9.0/24"},
+                    {"subnet": "10.0.0.0/24", "provider": "RUVDS"},
+                ]})
+    _patch_ip_api(monkeypatch)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/enrich-missing", headers=a)
+    assert r.status_code == 200
+    assert r.json() == {"updated": 2, "of": 2, "skipped": 0}
+    fresh = {x["values"]["subnet"]: x["values"] for x in _rows(a)}
+    assert fresh["8.8.8.0/24"]["provider"] == "Google LLC"
+    assert fresh["9.9.9.0/24"]["country"] == "US"
+    assert fresh["10.0.0.0/24"]["provider"] == "RUVDS"  # размеченная не тронута
+    assert len(_EnrichClient.calls) == 2  # ровно по неразмеченным
+
+
+def test_enrich_missing_batches_with_sleep(monkeypatch):
+    """45 строк без провайдера → пачки 40 + 5: 45 запросов, одна пауза
+    ENRICH_BATCH_SLEEP между пачками (не словить 429 ip-api)."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    subnets = [f"10.{i // 256}.{i % 256}.0/24" for i in range(45)]
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"subnets": subnets})
+    api = _patch_ip_api(monkeypatch)
+    sleeps: list[float] = []
+
+    async def _sleep(secs):
+        sleeps.append(secs)
+
+    monkeypatch.setattr(api.asyncio, "sleep", _sleep)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/enrich-missing", headers=a)
+    assert r.status_code == 200
+    assert r.json()["updated"] == 45
+    assert len(_EnrichClient.calls) == 45
+    assert sleeps == [api.ENRICH_BATCH_SLEEP]
+
+
+def test_enrich_missing_limit_1000(monkeypatch):
+    """Лимит 1000 строк за вызов: 1001 без провайдера → обработаны 1000,
+    ответ {updated: 1000, of: 1001, skipped: 1}, за лимит не ходили."""
+    a = _auth()
+    pid, lid = _mk_list(a)
+    subnets = [f"10.{i // 256}.{i % 256}.0/24" for i in range(1001)]
+    client.post(f"/api/subnets/providers/{pid}/lists/{lid}/rows", headers=a,
+                json={"subnets": subnets})
+    api = _patch_ip_api(monkeypatch)
+    sleeps: list[float] = []
+
+    async def _sleep(secs):
+        sleeps.append(secs)
+
+    monkeypatch.setattr(api.asyncio, "sleep", _sleep)
+    r = client.post(f"/api/subnets/providers/{pid}/lists/{lid}/enrich-missing", headers=a)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["updated"] == 1000 and body["of"] == 1001 and body["skipped"] == 1
+    assert len(_EnrichClient.calls) == 1000
+    assert len(sleeps) == 24  # 1000/40 = 25 пачек → 24 паузы
+
+
 # ── импорт/экспорт (json/csv/txt) ─────────────────────────────
 def _rows(a, pid=0, lid=0):
     data = client.get("/api/subnets", headers=a).json()

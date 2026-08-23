@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { Subnets } from "./Subnets";
+import { aggregateSubnet, Subnets } from "./Subnets";
 
 // Wave-5 PR-5: «Подсети» — дерево, таблица, режим редактирования.
 // Latency Lab: кнопка скана, выбор строк/оператора, поллинг job'а, результат.
@@ -70,8 +70,9 @@ const SCAN_RESULT = {
 
 /** `latency` — конфиг интеграции; `job` — очередь ответов GET /latency-scan/{id};
  *  `store` — ответ GET /api/subnets (по умолчанию STORE);
+ *  `enrich` — ответ POST …/enrich-missing;
  *  `reqIds` — очередь req_id из POST /latency-scan (по умолчанию ["req-1"]). */
-function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[] }) {
+function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[]; imp?: unknown; store?: unknown; reqIds?: string[]; enrich?: unknown }) {
   const calls: { url: string; init?: RequestInit }[] = [];
   const jobQueue = [...(opts?.job ?? [])];
   const reqIdQueue = [...(opts?.reqIds ?? ["req-1"])];
@@ -98,6 +99,8 @@ function installFetch(opts?: { latency?: Record<string, unknown>; job?: unknown[
     }
     if (url === "/api/subnets/import")
       return json(opts?.imp ?? { ok: true, imported: 2, skipped: 1, errors: [] });
+    if (url.endsWith("/enrich-missing"))
+      return json(opts?.enrich ?? { updated: 0, of: 0, skipped: 0 });
     return new Response("{}", { status: 200 });
   });
   vi.stubGlobal("fetch", fn);
@@ -123,6 +126,31 @@ async function openList() {
   render(<Subnets />);
   fireEvent.click(await screen.findByText("Основной"));
 }
+
+describe("aggregateSubnet", () => {
+  it("минимальная CIDR-подсеть по живым IP (первый отличающийся бит)", () => {
+    // 10.0.0.1..10.0.0.10: отличается 4-й октет (биты 0-3) → /28
+    expect(aggregateSubnet(["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4",
+      "10.0.0.5", "10.0.0.6", "10.0.0.7", "10.0.0.8", "10.0.0.9", "10.0.0.10"]))
+      .toBe("10.0.0.0/28");
+    // разные третий октет → /23
+    expect(aggregateSubnet(["10.0.0.1", "10.0.1.1"])).toBe("10.0.0.0/23");
+    // жива только половина /24 → /25 вместо /24
+    expect(aggregateSubnet(["91.109.200.1", "91.109.200.2", "91.109.200.126"]))
+      .toBe("91.109.200.0/25");
+    expect(aggregateSubnet(["203.0.113.1", "203.0.113.7"])).toBe("203.0.113.0/29");
+    // один IP — сам как /32
+    expect(aggregateSubnet(["10.0.0.5"])).toBe("10.0.0.5/32");
+  });
+
+  it("пусто / IPv6 / смесь версий / мусор → null", () => {
+    expect(aggregateSubnet([])).toBeNull();
+    expect(aggregateSubnet(["2001:db8::1", "2001:db8::2"])).toBeNull();
+    expect(aggregateSubnet(["10.0.0.1", "2001:db8::1"])).toBeNull();
+    expect(aggregateSubnet(["не-ip"])).toBeNull();
+    expect(aggregateSubnet(["10.0.0.300"])).toBeNull();
+  });
+});
 
 describe("Subnets", () => {
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -239,6 +267,35 @@ describe("Subnets", () => {
     expect(panel).toHaveTextContent("живых IP: 3");
     expect(panel).toHaveTextContent("доступна");
     expect(panel).toHaveTextContent("203.0.113.1");
+  });
+
+  it("результат скана: живые IP → минимальная подсеть (/29 из /24), точечный IP — отдельной записью с chip /32", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    installFetch({
+      latency: enabled,
+      job: [{
+        status: "done",
+        result: { rows: [
+          { row_id: "r1", subnet: "203.0.113.0/24", operator: "mts", alive_count: 2, available: true,
+            reachable_ips: ["203.0.113.1", "203.0.113.7"] },
+          // точечный IP: subnet без маски — запись host'а, не сеть
+          { row_id: "r9", subnet: "195.239.193.161", alive_count: 1, available: true,
+            reachable_ips: ["195.239.193.161"] },
+        ]},
+      }],
+    });
+    await openList();
+    fireEvent.click(await screen.findByTestId("latency-scan-toggle"));
+    await screen.findByTestId("latency-scan-panel");
+    fireEvent.click(screen.getByTestId("latency-start"));
+    await vi.advanceTimersByTimeAsync(3500);
+    const panel = await screen.findByTestId("latency-result");
+    // сеть: вместо /24 показывается агрегированная /29 + подпись «из /24»
+    expect(panel).toHaveTextContent("203.0.113.0/29");
+    expect(screen.getByTestId("scan-agg-r1")).toHaveTextContent("из 203.0.113.0/24");
+    // точечный IP — отдельная запись с чипом /32
+    expect(panel).toHaveTextContent("195.239.193.161");
+    expect(screen.getByTestId("scan-host-r9")).toHaveTextContent("/32");
   });
 
   it("отмена шлёт req_id на /latency-scan/cancel", async () => {
@@ -535,6 +592,21 @@ describe("Subnets", () => {
     expect(res).toHaveTextContent("пропущено 2");
     const fd = calls.find(c => c.url === "/api/subnets/import")!.init!.body as FormData;
     expect(fd.get("list_id")).toBeNull();
+  });
+
+  it("«Разметить провайдеров» зовёт enrich-missing и показывает итог", async () => {
+    const calls = installFetch({ enrich: { updated: 3, of: 5, skipped: 2 } });
+    await openIo();
+    fireEvent.click(screen.getByTestId("enrich-missing-run"));
+    await waitFor(() => {
+      const post = calls.find(c => c.url.endsWith("/enrich-missing"));
+      expect(post).toBeTruthy();
+      expect(post!.init!.method).toBe("POST");
+      expect(JSON.parse(String(post!.init!.body))).toEqual({});
+    });
+    const chip = await screen.findByTestId("enrich-missing-result");
+    expect(chip).toHaveTextContent("Обновлено: 3 из 5");
+    expect(chip).toHaveTextContent("пропущено 2");
   });
 
   // ── UX: скролл таблицы + сворачивание дерева ─────────────────

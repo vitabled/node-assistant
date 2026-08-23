@@ -382,8 +382,12 @@ def toggle_operator(provider_id: str, list_id: str, row_id: str, op_key: str, on
 
 
 def update_row_asn(provider_id: str, list_id: str, row_id: str, asn: str, asnname: str,
+                   provider: str = "", country: str = "",
                    account_id: Optional[str] = None) -> None:
-    """Записать обогащение ASN (вызывается после внешнего lookup'а)."""
+    """Записать обогащение строки (вызывается после внешнего lookup'а ip-api).
+
+    Заполняет asn/asnname/provider/country. Уже заполненные поля НЕ
+    перезаписываются — дозаполняются только пустые."""
     data = _load(account_id)
     lst = _find_list(data, provider_id, list_id)
     if not lst:
@@ -391,8 +395,11 @@ def update_row_asn(provider_id: str, list_id: str, row_id: str, asn: str, asnnam
     row = next((r for r in lst.get("rows", []) if r.get("id") == row_id), None)
     if not row:
         return
-    row.setdefault("values", {})["asn"] = asn
-    row["values"]["asnname"] = asnname
+    values = row.setdefault("values", {})
+    for key, val in (("asn", asn), ("asnname", asnname),
+                     ("provider", provider), ("country", country)):
+        if val and not str(values.get(key) or "").strip():
+            values[key] = val
     _save(data, account_id)
 
 

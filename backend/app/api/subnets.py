@@ -1,4 +1,5 @@
 """API «Подсети» (Обходы БС, Wave-5 PR-5). Хранилище — services/subnets_store."""
+import asyncio
 import csv
 import io
 import json
@@ -241,14 +242,23 @@ async def reorder_columns(provider_id: str, list_id: str, body: ColOrderBody):
     return {"ok": True}
 
 
-# ── обогащение ASN (ip-api, как в «Анализе подписки») ─────────
+# ── обогащение ASN/провайдера (ip-api, как в «Анализе подписки») ─
+IP_API_FIELDS = "status,as,asname,org,country"
+# ip-api без ключа: 45 запросов/мин. Неразмеченные строки обогащаем пачками
+# по 40 с паузой между пачками, чтобы не словить 429.
+ENRICH_MISSING_LIMIT = 1000
+ENRICH_BATCH_SIZE = 40
+ENRICH_BATCH_SLEEP = 1.8
+
+
 class EnrichBody(BaseModel):
     row_ids: list[str] = Field(..., min_length=1)
 
 
 @router.post("/providers/{provider_id}/lists/{list_id}/enrich")
 async def enrich_rows(provider_id: str, list_id: str, body: EnrichBody):
-    """ASN/название ASN для строк по подсети (ip-api по сетевому адресу)."""
+    """Обогащение строк по подсети (ip-api по сетевому адресу): заполняет
+    asn/asnname/provider/country. Уже заполненные поля НЕ перезаписываются."""
     from app.services.subscription_analyze import _parse_as_field
 
     data = store.get_store()
@@ -268,7 +278,7 @@ async def enrich_rows(provider_id: str, list_id: str, body: EnrichBody):
             try:
                 r = await client.get(
                     f"http://ip-api.com/json/{ip}",
-                    params={"fields": "status,as,asname,org"},
+                    params={"fields": IP_API_FIELDS},
                 )
                 d = r.json()
             except Exception:
@@ -277,10 +287,75 @@ async def enrich_rows(provider_id: str, list_id: str, body: EnrichBody):
                 continue
             num, name = _parse_as_field(str(d.get("as") or ""))
             asnname = str(d.get("asname") or name or d.get("org") or "")
+            org = str(d.get("org") or "")
             store.update_row_asn(provider_id, list_id, row["id"],
-                                 f"AS{num}" if num else "", asnname)
+                                 f"AS{num}" if num else "", asnname,
+                                 provider=org or asnname,
+                                 country=str(d.get("country") or ""))
             updated += 1
     return {"updated": updated, "of": len(rows)}
+
+
+class EnrichMissingBody(BaseModel):
+    # Поля, по которым ищутся «неразмеченные» строки. Пусто → provider.
+    fields: list[str] = Field(default_factory=list)
+
+
+@router.post("/providers/{provider_id}/lists/{list_id}/enrich-missing")
+async def enrich_missing(provider_id: str, list_id: str,
+                         body: EnrichMissingBody | None = None):
+    """Обогатить ВСЕ неразмеченные строки списка одним действием.
+
+    Кандидаты — строки, у которых пусто хотя бы одно из body.fields
+    (по умолчанию provider). Заполняются пустые asn/asnname/provider/country;
+    уже заполненные поля не трогаются. Из-за лимита ip-api (45 req/min) —
+    пачками по ENRICH_BATCH_SIZE с паузой между ними; за вызов не больше
+    ENRICH_MISSING_LIMIT строк. Ответ: {updated, of, skipped}."""
+    from app.services.subscription_analyze import _parse_as_field
+
+    data = store.get_store()
+    lst = next((l for p in data["providers"] if p["id"] == provider_id
+                for l in p.get("lists", []) if l["id"] == list_id), None)
+    if not lst:
+        raise HTTPException(404, "Список не найден")
+    wanted = (body.fields if body and body.fields else ["provider"])
+
+    def _missing(row: dict) -> bool:
+        values = row.get("values") or {}
+        return any(not str(values.get(f) or "").strip() for f in wanted)
+
+    targets = [r for r in lst.get("rows", []) if _missing(r)]
+    of = len(targets)
+    targets = targets[:ENRICH_MISSING_LIMIT]
+
+    updated = 0
+    async with httpx.AsyncClient(timeout=8) as client:
+        for i in range(0, len(targets), ENRICH_BATCH_SIZE):
+            batch = targets[i:i + ENRICH_BATCH_SIZE]
+            for row in batch:
+                subnet = row.get("values", {}).get("subnet", "")
+                ip = subnet.split("/")[0]
+                try:
+                    r = await client.get(
+                        f"http://ip-api.com/json/{ip}",
+                        params={"fields": IP_API_FIELDS},
+                    )
+                    d = r.json()
+                except Exception:
+                    continue
+                if not isinstance(d, dict) or d.get("status") != "success":
+                    continue
+                num, name = _parse_as_field(str(d.get("as") or ""))
+                asnname = str(d.get("asname") or name or d.get("org") or "")
+                org = str(d.get("org") or "")
+                store.update_row_asn(provider_id, list_id, row["id"],
+                                     f"AS{num}" if num else "", asnname,
+                                     provider=org or asnname,
+                                     country=str(d.get("country") or ""))
+                updated += 1
+            if i + ENRICH_BATCH_SIZE < len(targets):
+                await asyncio.sleep(ENRICH_BATCH_SLEEP)
+    return {"updated": updated, "of": of, "skipped": of - updated}
 
 
 # ── Latency Lab: замер подсетей списка ────────────────────────

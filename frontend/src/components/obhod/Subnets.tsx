@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, Loader2, Pencil, Plus, Table2,
+  Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Download, FolderKanban, GripVertical, Loader2, Pencil, Plus, Sparkles, Table2,
   Trash2, Upload, X,
 } from "lucide-react";
 import { Page, PageHeader } from "../../theme/ui";
@@ -71,6 +71,56 @@ function scanChunks(rows: Row[], picked: string[]): string[][] {
 }
 
 const ICON_BOX = { width: 12, height: 12, flex: "none" } as const;
+
+/** IPv4 → uint32 (беззнаковый) или null (IPv6/мусор). */
+function ipv4ToUint32(ip: string): number | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec((ip ?? "").trim());
+  if (!m) return null;
+  const o = m.slice(1).map(Number);
+  if (o.some(x => x > 255)) return null;
+  return ((((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3])) >>> 0);
+}
+
+/** uint32 → «a.b.c.d». */
+function uint32ToIpv4(n: number): string {
+  return `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`;
+}
+
+/** Минимальная CIDR-подсеть, покрывающая все переданные IP (агрегация живых
+ *  адресов результата скана). IPv4: uint32 + первый отличающийся бит
+ *  (Math.clz32(xor) = общий префикс). IPv6, смесь версий или пусто → null.
+ *  Примеры: [10.0.0.1, 10.0.0.10] → 10.0.0.0/28; [10.0.0.1, 10.0.1.1] →
+ *  10.0.0.0/23; один IP → сам как /32. */
+export function aggregateSubnet(ips: string[]): string | null {
+  if (!Array.isArray(ips) || ips.length === 0) return null;
+  let min = 0xFFFFFFFF;
+  let max = 0;
+  for (const ip of ips) {
+    const n = ipv4ToUint32(ip);
+    if (n === null) return null; // IPv6 или мусор — агрегировать не умеем
+    if (n < min) min = n;
+    if (n > max) max = n;
+  }
+  const diff = (min ^ max) >>> 0;
+  const prefix = diff === 0 ? 32 : Math.clz32(diff);
+  const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+  return `${uint32ToIpv4((min & mask) >>> 0)}/${prefix}`;
+}
+
+/** Подсеть строки результата скана для показа:
+ *  - точечный IP (subnet без «/N») — как есть, с пометкой host (/32);
+ *  - сеть с живыми IP — минимальная CIDR-агрегация reachable_ips, если она
+ *    уже исходной (жива половина /24 → показываем /25). Данные не меняются —
+ *    только отображение результата скана. */
+function scanSubnetDisplay(it: ScanItem, fallback: string):
+  { label: string; host: boolean; orig: string } {
+  const orig = it.subnet ?? fallback ?? "";
+  const host = !!orig && !orig.includes("/");
+  if (host) return { label: orig, host: true, orig };
+  const agg = Array.isArray(it.reachable_ips) && it.reachable_ips.length > 0
+    ? aggregateSubnet(it.reachable_ips) : null;
+  return { label: agg && agg !== orig ? agg : orig, host: false, orig };
+}
 
 /** Канонический статус job'а Latency Lab: API местами отдаёт синонимы
  *  («success» вместо «done», «failed» вместо «error») — поллинг ждёт ровно
@@ -165,6 +215,9 @@ export function Subnets() {
   const [impBusy, setImpBusy] = useState(false);
   const [impResult, setImpResult] = useState<ImportResult | null>(null);
   const filePick = useRef<HTMLInputElement | null>(null);
+  // «Разметить провайдеров»: обогащение всех неразмеченных строк списка.
+  const [enrichBusy, setEnrichBusy] = useState(false);
+  const [enrichResult, setEnrichResult] = useState<{ updated: number; of: number; skipped: number } | null>(null);
 
   const load = useCallback(() => {
     api("").then(r => r.json()).then(d => {
@@ -415,6 +468,32 @@ export function Subnets() {
     } catch (e) {
       toast((e as Error).message, "error");
     } finally { setImpBusy(false); }
+  };
+
+  // Обогащение неразмеченных: одним действием заполнить provider/country/asn
+  // у всех строк списка без провайдера (backend пачками по 40 с паузой).
+  const doEnrichMissing = async () => {
+    if (!sel) return;
+    setEnrichBusy(true);
+    setEnrichResult(null);
+    try {
+      const res = await api(`/providers/${sel.pid}/lists/${sel.lid}/enrich-missing`, {
+        method: "POST", body: JSON.stringify({}),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(typeof d.detail === "string" ? d.detail : `HTTP ${res.status}`, "error");
+        return;
+      }
+      const upd = Number(d.updated ?? 0);
+      const of = Number(d.of ?? 0);
+      const skipped = Number(d.skipped ?? 0);
+      setEnrichResult({ updated: upd, of, skipped });
+      toast(`Обновлено: ${upd}${skipped ? ` (пропущено ${skipped})` : ""}`, "success");
+      load();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally { setEnrichBusy(false); }
   };
 
   // ── Latency-скан ──────────────────────────────────────────────
@@ -749,6 +828,22 @@ export function Subnets() {
                   </button>
                 </div>
 
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="micro" style={{ margin: 0 }}>Разметка</span>
+                  <button className="btn btn-soft btn-sm" style={{ fontSize: 11 }}
+                    data-testid="enrich-missing-run" onClick={() => void doEnrichMissing()}
+                    disabled={enrichBusy}
+                    title="Заполнить провайдера/страну/ASN у всех строк списка без провайдера (ip-api, пачками)">
+                    {enrichBusy ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />} Разметить провайдеров
+                  </button>
+                  {enrichResult && (
+                    <span className="chip ok" style={{ fontSize: 10 }} data-testid="enrich-missing-result">
+                      Обновлено: {enrichResult.updated} из {enrichResult.of}
+                      {enrichResult.skipped > 0 ? ` (пропущено ${enrichResult.skipped})` : ""}
+                    </span>
+                  )}
+                </div>
+
                 {impResult && (
                   <div className="flex items-center gap-2 flex-wrap text-xs" data-testid="import-result"
                     style={{ color: "var(--t-mid)" }}>
@@ -827,12 +922,29 @@ export function Subnets() {
 
                 {scanStatus === "done" && (
                   <div data-testid="latency-result" className="flex flex-col gap-1">
-                    {(scanResult?.rows?.length ? scanResult.rows : scanResult ? [scanResult] : []).map((it, i) => (
+                    {(scanResult?.rows?.length ? scanResult.rows : scanResult ? [scanResult] : []).map((it, i) => {
+                      const disp = scanSubnetDisplay(it,
+                        current.rows.find(r => r.id === it.row_id)?.values?.subnet ?? "");
+                      return (
                       <div key={it.row_id ?? i} className="flex items-center gap-2 flex-wrap text-xs"
                         style={{ color: "var(--t-mid)" }}>
-                        <span style={{ color: "var(--t-hi)" }}>
-                          {it.subnet ?? current.rows.find(r => r.id === it.row_id)?.values?.subnet ?? "—"}
-                        </span>
+                        {disp.host ? (
+                          // Точечный IP (subnet без маски) — отдельная запись с чипом /32.
+                          <span className="flex items-center gap-1.5" style={{ color: "var(--t-hi)" }}>
+                            {disp.label || "—"}
+                            <span className="chip neutral" style={{ fontSize: 10 }}
+                              data-testid={`scan-host-${it.row_id ?? i}`}>/32</span>
+                          </span>
+                        ) : (
+                          <span style={{ color: "var(--t-hi)" }}>{disp.label || "—"}</span>
+                        )}
+                        {/* Живые IP агрегированы в минимальную подсеть (например /25 из /24). */}
+                        {!disp.host && disp.label !== disp.orig && (
+                          <span className="chip neutral" style={{ fontSize: 10 }}
+                            data-testid={`scan-agg-${it.row_id ?? i}`}>
+                            из {disp.orig}
+                          </span>
+                        )}
                         {it.operator && <span className="chip neutral" style={{ fontSize: 10 }}>{it.operator}</span>}
                         <span className={`chip ${it.available ? "ok" : "err"}`} style={{ fontSize: 10 }}>
                           {it.available ? "доступна" : "недоступна"}
@@ -846,7 +958,8 @@ export function Subnets() {
                           </span>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
