@@ -377,7 +377,7 @@ export function Subnets() {
         ) : (
           <div className="card" style={{ overflow: "hidden", display: "flex", flexDirection: "column",
             maxHeight: "max(280px, calc(100vh - 200px))", minHeight: 0 }}>
-            <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: "1px solid var(--line-soft)", flex: "none" }}>
+            <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap" style={{ borderBottom: "1px solid var(--line-soft)", flex: "none" }}>
               <Table2 size={13} style={{ color: "var(--t-low)" }} />
               <span className="micro">{current.name}</span>
               <span className="text-[10px]" style={{ color: "var(--t-faint)" }}>{current.rows.length} строк</span>
