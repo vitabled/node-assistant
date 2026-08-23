@@ -63,6 +63,31 @@ def _gzip_bytes(payload: bytes = b"1.2.3.0/24\n4.5.6.0/24\n") -> bytes:
     return buf.getvalue()
 
 
+def _meta_path(aid, upload_id):
+    from app.services import accounts
+    return accounts.data_dir(aid) / "ai_uploads" / f"{upload_id}.json"
+
+
+def _patch_meta(aid, upload_id, **over):
+    """Подправить метаданные загрузки. `session_id=None` — снять ключ вовсе,
+    т.е. сделать файл СИРОТОЙ: ровно так выглядят загрузки, залитые до
+    привязки к разговору, и только они подпадают под TTL/вытеснение."""
+    p = _meta_path(aid, upload_id)
+    info = json.loads(p.read_text(encoding="utf-8"))
+    for k, v in over.items():
+        if v is None:
+            info.pop(k, None)
+        else:
+            info[k] = v
+    p.write_text(json.dumps(info), encoding="utf-8")
+    return info
+
+
+def _orphan(aid, upload_id, age_seconds=0.0):
+    return _patch_meta(aid, upload_id, session_id=None,
+                       ts=time.time() - age_seconds)
+
+
 # ── ручка загрузки ───────────────────────────────────────────
 def test_upload_returns_id_name_mime_size():
     h, _ = _auth()
@@ -217,6 +242,105 @@ def test_chat_too_many_files_rejected(monkeypatch):
     assert r.status_code == 400
 
 
+# ── привязка к разговору ─────────────────────────────────────
+def test_upload_stores_session_id():
+    """A: файл принадлежит РАЗГОВОРУ — иначе его нечем удерживать и нечем
+    удалять вместе с чатом."""
+    h, aid = _auth()
+    up = _upload(h, "a.txt", "text/plain", b"payload", session_id="sess-42").json()
+    meta = json.loads(_meta_path(aid, up["upload_id"]).read_text(encoding="utf-8"))
+    assert meta["session_id"] == "sess-42"
+
+
+def test_upload_without_session_id_gets_default():
+    """C: разговор по умолчанию — тоже разговор, а не «файл ничей»."""
+    h, aid = _auth()
+    r = client.post("/api/ai/chat/upload", headers=h,
+                    files={"file": ("a.txt", io.BytesIO(b"payload"), "text/plain")})
+    up = r.json()
+    meta = json.loads(_meta_path(aid, up["upload_id"]).read_text(encoding="utf-8"))
+    assert meta["session_id"] == "default"
+
+
+def test_session_file_survives_ttl():
+    """B: главное требование. Файл разговора не протухает — ни через сутки, ни
+    через три дня: именно так пользователь и потерял свой .tsv."""
+    h, aid = _auth()
+    up = _upload(h, "data.tsv", "text/plain", b"a\tb\n", session_id="s1").json()
+    _patch_meta(aid, up["upload_id"], ts=time.time() - 3 * 24 * 3600)
+    assert ai_uploads.purge(aid) == 0
+    assert ai_uploads.get(up["upload_id"], aid) is not None
+    assert ai_uploads.to_attachment(up["upload_id"], aid) is not None
+
+
+def test_default_session_file_survives_ttl():
+    """C: у файлов default-сессии судьба та же, что у именованных."""
+    h, aid = _auth()
+    up = _upload(h, "a.txt", "text/plain", b"payload", session_id="").json()
+    _patch_meta(aid, up["upload_id"], ts=time.time() - 3 * 24 * 3600)
+    ai_uploads.purge(aid)
+    assert ai_uploads.get(up["upload_id"], aid) is not None
+
+
+def test_purge_drops_orphan_over_ttl():
+    """TTL остался — но только для сирот, иначе каталог рос бы вечно."""
+    h, aid = _auth()
+    up = _upload(h, "old.txt", "text/plain", b"old").json()
+    _orphan(aid, up["upload_id"], ai_uploads.TTL_SECONDS + 60)
+    assert ai_uploads.purge(aid) == 1
+    assert ai_uploads.get(up["upload_id"], aid) is None
+
+
+# ── удаление вместе с разговором ─────────────────────────────
+def test_purge_session_is_selective():
+    """Удалили один разговор — соседний со своими файлами не пострадал."""
+    h, aid = _auth()
+    a = _upload(h, "a.txt", "text/plain", b"a", session_id="sess-a").json()
+    b = _upload(h, "b.txt", "text/plain", b"b", session_id="sess-b").json()
+    assert ai_uploads.purge_session(aid, "sess-a") == 1
+    assert ai_uploads.get(a["upload_id"], aid) is None
+    assert ai_uploads.get(b["upload_id"], aid) is not None
+
+
+def test_purge_session_default_matches_empty_id():
+    h, aid = _auth()
+    up = _upload(h, "a.txt", "text/plain", b"a", session_id="").json()
+    assert ai_uploads.purge_session(aid, "default") == 1
+    assert ai_uploads.get(up["upload_id"], aid) is None
+
+
+def test_delete_history_removes_session_uploads():
+    """Связка целиком: удалил чат — файл ушёл вместе с ним и только он."""
+    h, aid = _auth()
+    gone = _upload(h, "gone.txt", "text/plain", b"x", session_id="s1").json()
+    kept = _upload(h, "kept.txt", "text/plain", b"y", session_id="s2").json()
+    r = client.delete("/api/ai/chat/history", headers=h, params={"session_id": "s1"})
+    assert r.status_code == 200, r.text
+    assert ai_uploads.get(gone["upload_id"], aid) is None
+    assert ai_uploads.get(kept["upload_id"], aid) is not None
+
+
+def test_delete_all_history_wipes_uploads():
+    h, aid = _auth()
+    a = _upload(h, "a.txt", "text/plain", b"a", session_id="s1").json()
+    b = _upload(h, "b.txt", "text/plain", b"b", session_id="s2").json()
+    r = client.delete("/api/ai/chat/history", headers=h,
+                      params={"all_sessions": True})
+    assert r.status_code == 200, r.text
+    assert ai_uploads.get(a["upload_id"], aid) is None
+    assert ai_uploads.get(b["upload_id"], aid) is None
+
+
+def test_delete_history_does_not_touch_other_account():
+    h1, aid1 = _auth()
+    h2, aid2 = _auth()
+    mine = _upload(h1, "a.txt", "text/plain", b"a", session_id="s1").json()
+    theirs = _upload(h2, "b.txt", "text/plain", b"b", session_id="s1").json()
+    client.delete("/api/ai/chat/history", headers=h1, params={"session_id": "s1"})
+    assert ai_uploads.get(mine["upload_id"], aid1) is None
+    assert ai_uploads.get(theirs["upload_id"], aid2) is not None
+
+
 # ── хранение: путь, TTL, вытеснение ──────────────────────────
 def test_stored_under_account_ai_uploads_dir():
     from app.services import accounts
@@ -229,14 +353,12 @@ def test_stored_under_account_ai_uploads_dir():
 
 
 def test_expired_upload_is_gone(monkeypatch):
-    from app.services import accounts
     h, aid = _auth()
     up = _upload(h, "a.txt", "text/plain", b"payload").json()
+    from app.services import accounts
     d = accounts.data_dir(aid) / "ai_uploads"
-    p = d / f"{up['upload_id']}.json"
-    info = json.loads(p.read_text(encoding="utf-8"))
-    info["ts"] = time.time() - ai_uploads.TTL_SECONDS - 60
-    p.write_text(json.dumps(info), encoding="utf-8")
+    # Протухают только СИРОТЫ: у файла разговора владелец — сам разговор.
+    _orphan(aid, up["upload_id"], ai_uploads.TTL_SECONDS + 60)
     assert ai_uploads.get(up["upload_id"], aid) is None
     assert not (d / f"{up['upload_id']}.bin").exists()
 
@@ -246,29 +368,41 @@ def test_purge_drops_expired_on_next_upload(monkeypatch):
     h, aid = _auth()
     old = _upload(h, "old.txt", "text/plain", b"old").json()
     d = accounts.data_dir(aid) / "ai_uploads"
-    p = d / f"{old['upload_id']}.json"
-    info = json.loads(p.read_text(encoding="utf-8"))
-    info["ts"] = time.time() - ai_uploads.TTL_SECONDS - 60
-    p.write_text(json.dumps(info), encoding="utf-8")
+    _orphan(aid, old["upload_id"], ai_uploads.TTL_SECONDS + 60)
     _upload(h, "new.txt", "text/plain", b"new")
     assert not (d / f"{old['upload_id']}.bin").exists()
 
 
 def test_per_account_cap_evicts_oldest(monkeypatch):
-    from app.services import accounts
     h, aid = _auth()
     monkeypatch.setattr(ai_uploads, "MAX_FILES_PER_ACCOUNT", 3)
     ids = []
     for i in range(5):
         ids.append(_upload(h, f"f{i}.txt", "text/plain", f"d{i}".encode()).json()["upload_id"])
-        # Метки времени должны различаться, иначе «самый старый» не определён.
-        p = accounts.data_dir(aid) / "ai_uploads" / f"{ids[-1]}.json"
-        info = json.loads(p.read_text(encoding="utf-8"))
-        info["ts"] = time.time() - (100 - i)
-        p.write_text(json.dumps(info), encoding="utf-8")
+        # Вытесняются только сироты; метки времени должны различаться, иначе
+        # «самый старый» не определён.
+        _orphan(aid, ids[-1], 100 - i)
     ai_uploads.purge(aid)
     assert ai_uploads.get(ids[0], aid) is None
     assert ai_uploads.get(ids[-1], aid) is not None
+
+
+def test_cap_does_not_evict_session_files(monkeypatch):
+    """B: лимит считается по сиротам; файлы живых разговоров не вытесняются."""
+    h, aid = _auth()
+    monkeypatch.setattr(ai_uploads, "MAX_FILES_PER_ACCOUNT", 2)
+    kept = [_upload(h, f"s{i}.txt", "text/plain", f"s{i}".encode(),
+                    session_id="s1").json()["upload_id"] for i in range(5)]
+    for i, uid in enumerate(kept):
+        _patch_meta(aid, uid, ts=time.time() - (100 - i))
+    orphans = [_upload(h, f"o{i}.txt", "text/plain", f"o{i}".encode()).json()["upload_id"]
+               for i in range(4)]
+    for i, uid in enumerate(orphans):
+        _orphan(aid, uid, 50 - i)
+    ai_uploads.purge(aid)
+    assert all(ai_uploads.get(uid, aid) is not None for uid in kept)
+    assert ai_uploads.get(orphans[0], aid) is None
+    assert ai_uploads.get(orphans[-1], aid) is not None
 
 
 def test_traversal_id_rejected():

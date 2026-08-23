@@ -18,9 +18,14 @@
 тогда «Загрузка 100%» заканчивалась бы отказом «файл не найден». Плюс 50 МБ на
 вкладку в памяти процесса — это способ уронить бэкенд пятью вкладками.
 
-Границы: потолок на файл, TTL 24 часа, потолок числа файлов на аккаунт. Без них
-каталог растёт вечно: чат — не файловое хранилище, и оставленные загрузки
-никто никогда не удалит руками.
+Границы. Раньше их было три (потолок на файл, TTL 24 часа, потолок числа файлов
+на аккаунт) — и вторая с третьей ломали ровно то, ради чего человек прикладывал
+файл: приложил .tsv к разговору, агент разобрал половину, назавтра вернулся —
+файла нет ни в чате, ни где-либо ещё. Теперь загрузка привязана к РАЗГОВОРУ
+(`session_id`) и живёт столько же, сколько он: удаляется только вместе с ним
+(`purge_session` из `DELETE /api/ai/chat/history`). TTL и вытеснение остались
+только для СИРОТ — загрузок без сессии (старые файлы до этого изменения и
+диагностические заходы мимо чата), иначе каталог рос бы вечно.
 """
 from __future__ import annotations
 
@@ -36,14 +41,21 @@ from app.services import accounts, ai_archives
 #: Потолок на ОДИН файл. Тот же, что у фронта (`MAX_ARCHIVE_BYTES` в AiChat).
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
-#: Сколько живёт незабранная загрузка. Сутки — чтобы пережить «приложил, ушёл,
-#: вернулся завтра дописать вопрос», но не превратиться в архив на годы.
+#: Сколько живёт СИРОТСКАЯ загрузка — та, у которой нет `session_id` (файлы,
+#: залитые до привязки к разговору, и диагностические заходы мимо чата). Файлы
+#: разговора этим TTL не трогаются вообще: их удаляет только удаление чата.
 TTL_SECONDS = 24 * 60 * 60
 
-#: Сколько загрузок держим на аккаунт. Дальше вытесняем самые старые: пять
-#: файлов — потолок вложений одного сообщения (`ai_agent.MAX_ATTACHMENTS`),
-#: двадцать даёт запас на несколько разговоров.
-MAX_FILES_PER_ACCOUNT = 20
+#: Сколько СИРОТСКИХ загрузок держим на аккаунт. Файлы разговоров не вытесняются
+#: (у них есть владелец, который их удалит), поэтому лимит считается только по
+#: сиротам — и поднят с 20 до 50: раньше он делил место с файлами чатов.
+MAX_FILES_PER_ACCOUNT = 50
+
+#: Идентификатор разговора по умолчанию. Пустой `session_id` — это НЕ «файл
+#: ничей»: у клиента до первого «Новый чат» никакого id нет, а разговор есть.
+#: Тот же приём и та же строка, что в `ai_chat_store._clean_id`.
+DEFAULT_SESSION = "default"
+MAX_SESSION_ID = 64
 
 #: Картиночные mime — их фронт тоже умеет прикладывать.
 _IMAGE_MIME = {"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -51,6 +63,22 @@ _IMAGE_MIME = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 class UploadError(ValueError):
     """Файл не приняли. Текст показывается человеку дословно."""
+
+
+def norm_session(session_id: Optional[str]) -> str:
+    """`""` → `"default"`: разговор по умолчанию — полноценный разговор."""
+    return (session_id or "").strip()[:MAX_SESSION_ID] or DEFAULT_SESSION
+
+
+def _session_of(info: dict) -> str:
+    """Сессия загрузки по её метаданным. `""` — сирота (ключа нет вовсе).
+
+    ⚠️ Ключ ОТСУТСТВУЕТ только у файлов, залитых до привязки к разговору. Новые
+    загрузки всегда несут сессию (минимум `default`), поэтому «пусто» здесь
+    честно значит «владельца нет» — такой файл и подпадает под TTL.
+    """
+    sid = info.get("session_id")
+    return sid.strip() if isinstance(sid, str) else ""
 
 
 def _dir(account_id: Optional[str]) -> Path:
@@ -103,8 +131,13 @@ def _drop(d: Path, upload_id: str) -> None:
 
 
 def purge(account_id: Optional[str] = None) -> int:
-    """Снести протухшее и лишнее. Зовётся на каждой загрузке — отдельного
-    планировщика тут не нужно: каталог растёт только при записи в него."""
+    """Снести протухшее и лишнее СРЕДИ СИРОТ. Зовётся на каждой загрузке —
+    отдельного планировщика тут не нужно: каталог растёт только при записи.
+
+    ⚠️ Файлы с `session_id` не трогаются ни по TTL, ни по лимиту: их судьбу
+    решает пользователь, удаляя разговор (`purge_session`). Иначе повторялся бы
+    исходный симптом — вложение исчезало из живого чата само по себе.
+    """
     d = _dir(account_id)
     if not d.exists():
         return 0
@@ -120,6 +153,8 @@ def purge(account_id: Optional[str] = None) -> int:
             _drop(d, uid)
             killed += 1
             continue
+        if _session_of(info):
+            continue          # файл разговора: не протухает и не вытесняется
         if now - ts > TTL_SECONDS:
             _drop(d, uid)
             killed += 1
@@ -132,9 +167,47 @@ def purge(account_id: Optional[str] = None) -> int:
     return killed
 
 
+def purge_session(account_id: Optional[str], session_id: str) -> int:
+    """Снести загрузки ОДНОГО разговора. Зовётся из `DELETE /chat/history`.
+
+    Это единственный штатный способ потерять вложение чата: пользователь удалил
+    разговор — вместе с ним ушли и его файлы.
+    """
+    sid = norm_session(session_id)
+    d = _dir(account_id)
+    if not d.exists():
+        return 0
+    killed = 0
+    for meta in sorted(d.glob("*.json")):
+        try:
+            info = json.loads(meta.read_text(encoding="utf-8"))
+        except Exception:
+            continue          # мусор разберёт purge(), тут не наша сессия
+        if _session_of(info) == sid:
+            _drop(d, meta.stem)
+            killed += 1
+    return killed
+
+
+def wipe_account(account_id: Optional[str] = None) -> int:
+    """Снести ВСЕ загрузки аккаунта — для «удалить все разговоры»."""
+    d = _dir(account_id)
+    if not d.exists():
+        return 0
+    killed = 0
+    for meta in sorted(d.glob("*.json")):
+        _drop(d, meta.stem)
+        killed += 1
+    return killed
+
+
 def save(name: str, mime: str, content: bytes,
-         account_id: Optional[str] = None) -> dict:
-    """Положить файл и вернуть его паспорт `{upload_id, name, mime, size}`."""
+         account_id: Optional[str] = None, session_id: str = "") -> dict:
+    """Положить файл и вернуть его паспорт `{upload_id, name, mime, size}`.
+
+    `session_id` — разговор-владелец: пока он жив, жив и файл. Пустой означает
+    разговор по умолчанию, а не «ничей» (см. `norm_session`).
+    """
     name = (name or "файл").strip()[:200] or "файл"
     mime = (mime or "application/octet-stream").strip()[:100]
     if not content:
@@ -152,7 +225,8 @@ def save(name: str, mime: str, content: bytes,
     upload_id = uuid.uuid4().hex
     _bin_path(d, upload_id).write_bytes(content)
     info = {"upload_id": upload_id, "name": name, "mime": mime,
-            "size": len(content), "ts": time.time()}
+            "size": len(content), "ts": time.time(),
+            "session_id": norm_session(session_id)}
     tmp = _meta_path(d, upload_id).with_suffix(".json.tmp")
     tmp.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
     tmp.replace(_meta_path(d, upload_id))
@@ -175,7 +249,8 @@ def get(upload_id: str, account_id: Optional[str] = None) -> Optional[dict]:
         info = json.loads(meta.read_text(encoding="utf-8"))
     except Exception:
         return None
-    if time.time() - float(info.get("ts") or 0) > TTL_SECONDS:
+    # TTL — только для сирот: файл разговора не должен исчезать из живого чата.
+    if not _session_of(info) and time.time() - float(info.get("ts") or 0) > TTL_SECONDS:
         _drop(d, uid.lower())
         return None
     return info

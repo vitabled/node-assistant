@@ -254,15 +254,17 @@ async def chat_upload(file: UploadFile = File(...),
     `fetch`. Здесь тело запроса — сам файл, и XHR на фронте показывает
     `upload.onprogress` честными процентами.
 
-    `session_id` пока только для диагностики: файл принадлежит АККАУНТУ, и
-    привязывать его к разговору незачем — чат уже умеет держать вложение весь
-    разговор (`ai_attachments`).
+    `session_id` — ВЛАДЕЛЕЦ файла. Раньше загрузка принадлежала аккаунту и
+    протухала через сутки: человек приложил .tsv, агент разобрал половину, а
+    назавтра файла не стало ни в чате, ни где-либо ещё. Теперь файл живёт
+    столько же, сколько разговор, и уходит только вместе с ним
+    (`DELETE /api/ai/chat/history` → `ai_uploads.purge_session`).
     """
     content = await file.read()
     try:
         return ai_uploads.save(file.filename or "файл",
                                file.content_type or "application/octet-stream",
-                               content)
+                               content, session_id=session_id)
     except ai_uploads.UploadError as exc:
         raise HTTPException(400, str(exc))
 
@@ -287,15 +289,16 @@ async def chat(body: ChatBody) -> StreamingResponse:
 
     # Файлы, уехавшие отдельным запросом, разворачиваем в обычные вложения:
     # дальше по коду про двухфазную отправку никто знать не должен. Пропавшая
-    # загрузка (TTL, чужой аккаунт, опечатка) — отказ ДО запуска: молча
-    # ответить без файла значит заставить агента выдумывать его содержимое.
+    # загрузка (удалённый разговор, чужой аккаунт, опечатка) — отказ ДО
+    # запуска: молча ответить без файла значит заставить агента выдумывать его
+    # содержимое.
     attachments = [a.model_dump() for a in body.attachments]
     for uid in body.upload_ids:
         item = ai_uploads.to_attachment(uid)
         if item is None:
             raise HTTPException(
-                400, "Загруженный файл не найден — возможно, истёк срок хранения "
-                     "(24 часа). Приложите его заново.")
+                400, "Загруженный файл не найден — возможно, разговор с ним был "
+                     "удалён. Приложите файл заново.")
         attachments.append(item)
     if len(attachments) > ai_agent.MAX_ATTACHMENTS:
         raise HTTPException(400, f"Не больше {ai_agent.MAX_ATTACHMENTS} файлов.")

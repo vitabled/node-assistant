@@ -20,7 +20,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from app.services import accounts, ai_chat_store
+from app.services import accounts, ai_chat_store, ai_uploads
 
 router = APIRouter(prefix="/api/ai")
 
@@ -106,9 +106,18 @@ async def save_history(body: HistoryBody) -> dict:
 async def delete_history(session_id: str = "", all_sessions: bool = False) -> dict:
     """Забыть разговор. Пустой `session_id` — это `default`, а НЕ «все»:
     стереть всю историю опечаткой в запросе было бы слишком легко.
+
+    ⚠️ Вместе с репликами уходят и ВЛОЖЕНИЯ разговора (`ai_uploads`): они живут
+    ровно столько же, сколько он. Это единственное место, где загрузка чата
+    удаляется штатно — TTL их больше не трогает (см. `services/ai_uploads`).
     """
     aid = _account()
     if all_sessions:
         ai_chat_store.clear_all(aid)
+        ai_uploads.wipe_account(aid)
         return {"cleared": True}
-    return {"cleared": ai_chat_store.clear_session(aid, session_id)}
+    cleared = ai_chat_store.clear_session(aid, session_id)
+    # Файлы сносим ДАЖЕ если записи разговора не было: вложение могли
+    # приложить, ничего не отправив, — и тогда оно осталось бы навсегда.
+    ai_uploads.purge_session(aid, session_id)
+    return {"cleared": cleared}
