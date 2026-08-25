@@ -200,12 +200,18 @@ def test_scan_collects_subnets_into_one_multiscan(monkeypatch):
                           "row_ids": rows, "async_": True})
     assert r.status_code == 200
     body = r.json()
-    assert body["mode"] == "multiscan" and body["jobs"][0]["req_id"] == "req-1"
-    assert body["jobs"][0]["targets"] == ["203.0.113.0/24", "198.51.100.0/24"]
-    # Мультискан — РОВНО один внешний запрос на всю пачку (1 запрос лимита).
-    assert len(_Fake.calls) == 1
+    assert body["mode"] == "multiscan"
+    # Latency Lab принимает ровно ОДНУ цель на мультискан (live 2026-08-24:
+    # «\n»-пачка → «Не удалось распознать цель»), поэтому на каждую подсеть
+    # свой внешний запрос; record_scan всё равно один на всю пачку.
+    assert len(body["jobs"]) == 2
+    assert [j["req_id"] for j in body["jobs"]] == ["req-1", "req-1"]
+    assert body["jobs"][0]["targets"] == ["203.0.113.0/24"]
+    assert body["jobs"][1]["targets"] == ["198.51.100.0/24"]
+    assert len(_Fake.calls) == 2
     sent = _Fake.calls[0]["json"]
-    assert sent["text"] == "203.0.113.0/24\n198.51.100.0/24"
+    assert sent["text"] == "203.0.113.0/24"
+    assert _Fake.calls[1]["json"]["text"] == "198.51.100.0/24"
     assert sent["async"] is True and sent["node_id"] == "orel"
 
 
@@ -262,6 +268,44 @@ def test_scan_only_hosts_without_operator_is_400(monkeypatch):
     assert _Fake.calls == []  # внешний сервис не дёргали
 
 
+def test_normalize_scan_result_multiscan_aggregates_operators():
+    """multiscan отдаёт `result.results` ПО ОПЕРАТОРАМ — нормализация
+    схлопывает в одну строку на подсеть с суммарным alive и уникальными IP
+    (иначе фронт показывал «живых IP 0» на любой подсети)."""
+    from app.services.latency_lab import normalize_scan_result
+    raw = {
+        "kind": "subnet", "target": "8.8.8.0/24",
+        "results": [
+            {"operator": "mts", "alive_count": 2,
+             "reachable_ips": ["8.8.8.8", "8.8.8.9"]},
+            {"operator": "t2", "alive_count": 1,
+             "reachable_ips": ["8.8.8.8"]},  # дубль не должен удвоиться
+        ],
+    }
+    out = normalize_scan_result(raw)
+    assert out["rows"] and len(out["rows"]) == 1
+    row = out["rows"][0]
+    assert row["subnet"] == "8.8.8.0/24"
+    assert row["alive_count"] == 3
+    assert row["reachable_ips"] == ["8.8.8.8", "8.8.8.9"]
+    assert row["available"] is True and row["status_text"] == "OK"
+
+
+def test_normalize_scan_result_subnet_scan_passthrough():
+    """subnet-scan отдаёт ОДИН объект — оборачивается в rows как есть."""
+    from app.services.latency_lab import normalize_scan_result
+    raw = {"operator": "t2", "target": "10.0.0.0/24", "alive_count": 5,
+           "reachable_ips": ["10.0.0.1"]}
+    out = normalize_scan_result(raw)
+    assert out["rows"] == [raw]
+
+
+def test_normalize_scan_result_garbage_is_empty():
+    from app.services.latency_lab import normalize_scan_result
+    assert normalize_scan_result(None) == {"rows": []}
+    assert normalize_scan_result("oops") == {"rows": []}
+
+
 def test_scan_host_32_with_operator_goes_subnet_scan(monkeypatch):
     """С оператором /32 уходит поштучным subnet-scan'ом (он принимает
     /23…/32) — скан не падает на host-адресах."""
@@ -316,8 +360,11 @@ def test_scan_limit_750(monkeypatch):
                     json={"provider_id": pid, "list_id": lid, "row_ids": rows})
     assert r.status_code == 200
     assert r.json()["jobs"][0]["req_id"] == "req-big"
-    assert len(_Fake.calls) == 1  # ровно один мультискан на всю пачку
-    assert len(_Fake.calls[0]["json"]["text"].split("\n")) == 750
+    # Мультискан принимает ровно одну цель → 750 внешних запросов (по одной
+    # подсети), но record_scan — один на всю пачку.
+    assert len(_Fake.calls) == 750
+    assert _Fake.calls[0]["json"]["text"] == subnets[0]
+    assert _Fake.calls[749]["json"]["text"] == subnets[749]
 
 
 def test_scan_unknown_rows_is_404():
@@ -547,7 +594,8 @@ def test_job_status_and_cancel(monkeypatch):
     r = client.get("/api/subnets/latency-scan/req-1", headers=a)
     assert r.status_code == 200
     assert r.json()["status"] == "done"
-    assert r.json()["result"]["alive_count"] == 12
+    # результат нормализован в {rows: [...]}; subnet-scan-объект — passthrough
+    assert r.json()["result"]["rows"] == [{"alive_count": 12}]
 
     r = client.post("/api/subnets/latency-scan/cancel", headers=a,
                     json={"req_id": "req-1"})

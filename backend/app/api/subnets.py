@@ -793,11 +793,14 @@ async def latency_scan(body: LatencyScanBody):
     errors: list[str] = []
 
     if not operator:
-        # Мультискан принимает цели одним текстом — это ровно один запрос
-        # суточного лимита на всю пачку. Host-адреса /32 (IPv6 — /128)
-        # мультискан НЕ распознаёт («не удалось распознать сеть»): их умеет
-        # только поштучный subnet-scan, а он требует оператора. Без оператора
-        # — понятная ошибка на каждый host-адрес, сети сканируются как раньше.
+        # Мультискан принимает РОВНО одну цель (проверено live 2026-08-24:
+        # «8.8.8.0/24\n1.1.1.0/24» → «Не удалось распознать цель»). Поэтому
+        # пачку шлём по одной подсети за вызов — каждый мультискан всё ещё
+        # один запрос суточного лимита на всю пачку (record_scan ниже).
+        # Host-адреса /32 (IPv6 — /128) мультискан НЕ распознаёт
+        # («не удалось распознать сеть»): их умеет только поштучный
+        # subnet-scan, а он требует оператора. Без оператора — понятная
+        # ошибка на каждый host-адрес, сети сканируются как раньше.
         networks, hosts = _split_host_subnets(subnets)
         if hosts and not networks:
             raise HTTPException(
@@ -807,15 +810,18 @@ async def latency_scan(body: LatencyScanBody):
         for h in hosts:
             errors.append(f"{h}: host-адрес /32 не поддерживается мультисканом"
                           " — укажите оператора для поштучного скана")
-        if networks:
-            data, err = await client.multiscan("\n".join(networks),
+        for network in networks:
+            data, err = await client.multiscan(network,
                                                is_async=body.async_)
             if err:
-                raise HTTPException(502, f"Latency Lab: {err}")
+                errors.append(f"{network}: {err}")
+                continue
             data = data or {}
-            jobs.append({"targets": networks, "req_id": data.get("req_id", ""),
+            jobs.append({"targets": [network], "req_id": data.get("req_id", ""),
                          "status": data.get("status", "done"),
                          "result": data.get("result")})
+        if not jobs and networks:
+            raise HTTPException(502, "Latency Lab: " + "; ".join(errors[:3]))
     else:
         for subnet in subnets:
             data, err = await client.subnet_scan(operator, subnet,
@@ -851,7 +857,7 @@ async def latency_scan_status(req_id: str):
             # Статусы-синонимы Latency Lab («success»/«failed») приводим к
             # каноническим done/error — иначе поллинг ждёт «done» вечно.
             "status": latency_lab.normalize_job_status(data.get("status", "")),
-            "result": data.get("result")}
+            "result": latency_lab.normalize_scan_result(data.get("result"))}
 
 
 class LatencyCancelBody(BaseModel):

@@ -59,6 +59,49 @@ def normalize_job_status(status: Any) -> str:
     return "pending"
 
 
+def normalize_scan_result(result: Any) -> dict:
+    """Ответ Latency Lab → единый формат `{rows: [...]}` для панели.
+
+    Реальный сервис (проверено live 2026-08-24) отдаёт РАЗНЫЕ формы:
+      * multiscan:   `{kind, target, operators: [...], results: [ {operator,
+                     alive_count, reachable_ips, ...}, ... ]}` — массив ПО
+                     ОПЕРАТОРАМ;
+      * subnet-scan: `{operator, target, alive_count, reachable_ips, ...}`
+                     — ОДИН объект (без `results`).
+    Фронт (Subnets.tsx) ждёт `result.rows` — массив по подсетям; без этой
+    нормализации он брал `[result]` как одну строку без `alive_count` →
+    «живых IP 0 на любой подсети». Здесь multiscan схлопывается в одну
+    строку на подсеть: alive_count = сумма по операторам, reachable_ips —
+    объединение (уникальные).
+    """
+    if not isinstance(result, dict):
+        return {"rows": []}
+    results = result.get("results")
+    if isinstance(results, list) and results:
+        # multiscan: агрегируем по операторам
+        alive = 0
+        ips: list[str] = []
+        for op in results:
+            if not isinstance(op, dict):
+                continue
+            alive += int(op.get("alive_count") or 0)
+            for ip in op.get("reachable_ips") or []:
+                if ip and ip not in ips:
+                    ips.append(ip)
+        row = {
+            "subnet": result.get("target") or "",
+            "operator": ",".join(str(o.get("operator", "")) for o in results
+                                 if isinstance(o, dict) and o.get("operator")),
+            "alive_count": alive,
+            "available": bool(ips),
+            "status_text": "OK" if ips else "недоступна",
+            "reachable_ips": ips,
+        }
+        return {"rows": [row]}
+    # subnet-scan: один объект уже в нужной форме
+    return {"rows": [result]}
+
+
 def config(account_id: Optional[str] = None) -> LatencyLabConfig:
     return AppSettings(**storage.load_settings(account_id)).latency
 
