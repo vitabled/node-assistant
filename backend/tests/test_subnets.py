@@ -40,7 +40,7 @@ def test_provider_list_row_flow():
     row = lst["rows"][0]
     assert row["values"]["subnet"] == "203.0.113.0/24"
     assert row["values"]["ipver"] == "IPv4"
-    assert row["operators"]["mts"] is True
+    assert row["operators"]["mts"] is False  # без скана операторы не горят
     assert data["operators"][1]["key"] == "beeline"
 
 
@@ -81,7 +81,7 @@ def test_column_ops_and_operator_toggle():
     data = client.get("/api/subnets", headers=a).json()
     row = data["providers"][0]["lists"][0]["rows"][0]
     assert row["operators"]["beeline"] is False
-    assert row["operators"]["mts"] is True
+    assert row["operators"]["mts"] is False  # не тогглился, дефолт False
 
 
 def test_enrich_marks_asn(monkeypatch):

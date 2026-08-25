@@ -413,7 +413,8 @@ def add_rows(provider_id: str, list_id: str, items: list,
                 "id": uuid.uuid4().hex[:10],
                 "values": {"subnet": subnet, "ipver": ipver,
                            "date": time.strftime("%Y-%m-%d")},
-                "operators": {k: True for k in op_keys},
+                # операторы не «горят» до реального скана: дефолт False
+                "operators": {k: False for k in op_keys},
             }
         if len(rows) >= MAX_ROWS:
             errors.append(f"Лимит {MAX_ROWS} строк")
@@ -692,7 +693,7 @@ def import_rows(provider_id: str, list_id: str, items: list[dict],
             if v in (None, ""):
                 continue
             values[_column_key(lst, title)] = str(v)
-        operators = {k: True for k in op_keys}
+        operators = {k: False for k in op_keys}
         for k, v in (item.get("operators") or {}).items():
             if k in op_keys:
                 operators[k] = bool(v)
