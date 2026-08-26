@@ -365,8 +365,7 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
           <Server size={17} />
         </span>
         <div style={{ minWidth: 0 }}>
-          <p style={{ fontSize: 13, fontWeight: 700, color: "var(--t-hi)", lineHeight: 1.2 }}>Node Installer</p>
-          <p style={{ fontSize: 10, color: "var(--t-low)", letterSpacing: ".04em" }}>remnawave ops</p>
+          <p style={{ fontSize: 13, fontWeight: 700, color: "var(--t-hi)", lineHeight: 1.2 }}>Node Assistant</p>
         </div>
         {/* Режим перестановки разделов (Wave-5 PR-3): карандаш → dnd,
             сохранение — дискета на его месте. */}

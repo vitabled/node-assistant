@@ -168,7 +168,7 @@ describe("Sidebar permission gate", () => {
     expect(screen.queryByText("Дашборд")).toBeNull();
     expect(screen.queryByText("Управление")).toBeNull();
     // бренд остаётся — иначе колонка выглядит как сбой отрисовки
-    expect(screen.getByText("Node Installer")).toBeInTheDocument();
+    expect(screen.getByText("Node Assistant")).toBeInTheDocument();
   });
 
   // Одна и та же таблица кормит сайдбар и откат недоступной вкладки в App.

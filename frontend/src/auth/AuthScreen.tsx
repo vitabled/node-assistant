@@ -70,11 +70,10 @@ export function AuthScreen({ overlay, onClose }: { overlay?: boolean; onClose?: 
   const shell = (
     <div className="w-full max-w-sm">
       <div className="flex flex-col items-center gap-2 mb-6">
-        <span className="w-11 h-11 rounded-2xl bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#ec4899] text-white grid place-items-center shadow-lg shadow-violet-900/40">
-          <Server size={22} />
+        <span className="w-16 h-16 rounded-2xl bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#ec4899] text-white grid place-items-center shadow-lg shadow-violet-900/40">
+          <Server size={32} />
         </span>
-        <p className="text-[15px] font-semibold text-white">Node Installer</p>
-        <p className="text-[11px] text-gray-500 tracking-wide">remnawave ops</p>
+        <p className="text-2xl font-bold text-white mt-1">Node Assistant</p>
       </div>
 
       {bootstrap === null && (
