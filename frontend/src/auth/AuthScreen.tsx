@@ -8,11 +8,11 @@ import { addAccount, switchTo, forget, generatePassword, type DeviceAccount } fr
 
 const inputCls =
   "w-full bg-gray-900/80 border border-gray-700/80 rounded-md px-3 py-2 text-sm text-gray-100 " +
-  "placeholder:text-gray-700 focus:outline-none focus:ring-1 focus:border-blue-500/70 focus:ring-blue-500/20";
+  "placeholder:text-gray-700 focus:outline-none focus:ring-1 focus:border-violet-500/70 focus:ring-violet-500/20";
 
 const btnPrimary =
-  "flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium " +
-  "bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50 transition-colors";
+  "flex items-center justify-center gap-2 px-5 py-2 rounded-full text-sm font-semibold " +
+  "bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#ec4899] text-white hover:brightness-110 disabled:opacity-50 transition-[filter,opacity]";
 
 // Зеркалит `users._MIN_PASSWORD`: пусть человек узнаёт о требовании до запроса.
 const MIN_PASSWORD = 10;
@@ -70,7 +70,7 @@ export function AuthScreen({ overlay, onClose }: { overlay?: boolean; onClose?: 
   const shell = (
     <div className="w-full max-w-sm">
       <div className="flex flex-col items-center gap-2 mb-6">
-        <span className="w-11 h-11 rounded-xl bg-blue-600 text-white grid place-items-center shadow-lg shadow-blue-900/40">
+        <span className="w-11 h-11 rounded-2xl bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#ec4899] text-white grid place-items-center shadow-lg shadow-violet-900/40">
           <Server size={22} />
         </span>
         <p className="text-[15px] font-semibold text-white">Node Installer</p>
@@ -139,7 +139,7 @@ function Chooser({ accounts, onPick, onForget, onAdd, onClose }: {
       {accounts.map(a => (
         <div key={a.id} className="group flex items-center gap-3 rounded-lg border border-gray-800 hover:border-gray-600 bg-gray-950/40 px-3 py-2.5 transition-colors">
           <button onClick={() => onPick(a.id)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
-            <span className="w-8 h-8 rounded-full bg-blue-600/20 text-blue-300 grid place-items-center text-sm font-semibold flex-none">
+            <span className="w-8 h-8 rounded-full bg-violet-500/20 text-violet-300 grid place-items-center text-sm font-semibold flex-none">
               {a.login.slice(0, 1).toUpperCase()}
             </span>
             <span className="text-sm text-gray-100 truncate">{a.login}</span>
@@ -151,7 +151,7 @@ function Chooser({ accounts, onPick, onForget, onAdd, onClose }: {
         </div>
       ))}
       <button onClick={onAdd}
-        className="flex items-center gap-2 rounded-lg border border-dashed border-gray-700 hover:border-blue-500/60 px-3 py-2.5 text-sm text-gray-400 hover:text-blue-300 transition-colors">
+        className="flex items-center gap-2 rounded-lg border border-dashed border-gray-700 hover:border-violet-500/60 px-3 py-2.5 text-sm text-gray-400 hover:text-violet-300 transition-colors">
         <LogIn size={15} /> Войти другим пользователем
       </button>
       {onClose && (
@@ -260,7 +260,7 @@ function BootstrapForm({ onDone }: { onDone: (a: DeviceAccount) => void }) {
             {copied ? <Check size={15} className="text-green-400" /> : <Copy size={15} />}
           </button>
         </div>
-        <button onClick={gen} className="self-start flex items-center gap-1.5 text-xs text-gray-500 hover:text-blue-300">
+        <button onClick={gen} className="self-start flex items-center gap-1.5 text-xs text-gray-500 hover:text-violet-300">
           <KeyRound size={12} /> Сгенерировать пароль
         </button>
         {generated && (
@@ -280,7 +280,7 @@ function BootstrapForm({ onDone }: { onDone: (a: DeviceAccount) => void }) {
           onKeyDown={e => e.key === "Enter" && submit()} />
       ) : (
         <button onClick={() => setTokenOpen(true)}
-          className="self-start flex items-center gap-1.5 text-xs text-gray-500 hover:text-blue-300">
+          className="self-start flex items-center gap-1.5 text-xs text-gray-500 hover:text-violet-300">
           <ShieldCheck size={12} /> Установка защищена токеном
         </button>
       )}
