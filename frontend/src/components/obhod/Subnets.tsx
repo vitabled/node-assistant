@@ -990,11 +990,14 @@ export function Subnets() {
           style={{
             display: "flex", flexDirection: "column", gap: 6,
             maxHeight: treeOpen ? "max(240px, calc(100vh - 460px))" : undefined,
-            overflowY: treeOpen ? "auto" : "hidden",
+            overflow: "hidden",
             ...(treeOpen ? {} : { alignItems: "center", justifyContent: "center" }),
           }}>
           {treeOpen ? (
-            <>
+            <div style={{
+              overflowY: "auto", paddingRight: 8, marginRight: -8,
+              display: "flex", flexDirection: "column", gap: 6, minHeight: 0,
+            }}>
           <div className="flex items-center gap-2">
             <FolderKanban size={13} style={{ color: "var(--t-low)" }} />
             <span className="micro">Провайдеры</span>
@@ -1035,7 +1038,7 @@ export function Subnets() {
               ))}
             </div>
           ))}
-            </>
+            </div>
           ) : (
             <button className="iconbtn" style={{ width: 22, height: 22 }}
               title="Развернуть дерево" data-testid="tree-toggle"
