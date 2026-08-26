@@ -73,8 +73,8 @@ strong{color:var(--t-hi);font-weight:600}
   border:1px solid transparent;white-space:nowrap;font-family:var(--font);cursor:pointer}
 .btn:focus-visible{outline:2px solid var(--accent-line);outline-offset:1px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
-.btn-primary{background-color:var(--accent);background-image:var(--gradient);background-size:100% 100%;color:#fff;border:0;border-radius:999px}
-.btn-primary:hover:not(:disabled){filter:brightness(1.08)}
+.btn-primary{background-color:#fff;background-image:none;color:#000;border:0;border-radius:999px}
+.btn-primary:hover:not(:disabled){background-color:#e6e6e6}
 .btn-soft{background:transparent;color:#fff;border-color:var(--line);border-radius:999px}
 .btn-soft:hover:not(:disabled){background:var(--bg3);color:var(--t-hi)}
 .btn-ghost{color:var(--t-low);border-radius:999px}

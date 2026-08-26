@@ -12,7 +12,7 @@ const inputCls =
 
 const btnPrimary =
   "flex items-center justify-center gap-2 px-5 py-2 rounded-full text-sm font-semibold " +
-  "bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#ec4899] text-white hover:brightness-110 disabled:opacity-50 transition-[filter,opacity]";
+  "bg-white text-black hover:bg-gray-200 disabled:opacity-50 transition-colors";
 
 // Зеркалит `users._MIN_PASSWORD`: пусть человек узнаёт о требовании до запроса.
 const MIN_PASSWORD = 10;
