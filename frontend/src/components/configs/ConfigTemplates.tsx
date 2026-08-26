@@ -111,7 +111,8 @@ export function ConfigTemplates() {
           <PanelPicker value={panelId} onChange={setPanelId} panels={panels} activeId={activeId}
             label="Синхронизация с" />
           {KINDS.map(k => (
-            <button key={k.key} className="btn btn-sm" onClick={() => openNew(k.key)}>
+            <button key={k.key} className="btn btn-sm" onClick={() => openNew(k.key)}
+              style={{ border: "1px solid var(--accent-line)", color: "var(--accent-hi)" }}>
               <Plus size={13} /> {k.label}
             </button>
           ))}

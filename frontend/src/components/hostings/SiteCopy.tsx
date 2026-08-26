@@ -60,7 +60,7 @@ export function SiteCopy() {
           <input className="input" value={url} onChange={e => setUrl(e.target.value)}
             placeholder="https://example.com" disabled={running} spellCheck={false} />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-3 items-end">
           <div>
             <label className="label">Глубина рекурсии</label>
             <select className="selectbox" value={depth} disabled={running}

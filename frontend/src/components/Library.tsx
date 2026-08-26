@@ -269,6 +269,7 @@ export function Library() {
       display: "flex", flexDirection: "column", gap: 10, minHeight: 0,
       maxHeight: narrow ? "46vh" : undefined,
       overflowY: "auto",
+      paddingRight: 8,
     }}>
       <div className="card" style={{ padding: 8 }}>
         {items === null ? (
@@ -356,14 +357,14 @@ export function Library() {
         </div>
         <div className="ni-pagehead-actions" style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
           {narrow && (
-            <button className="btn btn-sm" onClick={() => setTreeOpen(o => !o)}>
+            <button className="btn btn-sm" style={treeOpen ? { border: "1px solid var(--accent-line)", color: "var(--accent-hi)" } : undefined} onClick={() => setTreeOpen(o => !o)}>
               <PanelLeft size={13} /> Заметки
             </button>
           )}
-          <button className="btn btn-sm" onClick={() => { void createNote("Новая заметка", note?.folder || ""); }}>
+          <button className="btn btn-sm btn-primary" onClick={() => { void createNote("Новая заметка", note?.folder || ""); }}>
             <Plus size={13} /> Заметка
           </button>
-          <label className="btn btn-sm" style={{ opacity: busy ? 0.5 : 1, cursor: busy ? "not-allowed" : "pointer" }}>
+          <label className="btn btn-sm" style={{ opacity: busy ? 0.5 : 1, cursor: busy ? "not-allowed" : "pointer", border: "1px solid var(--accent-line)", color: "var(--accent-hi)" }}>
             {busy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} Загрузить
             <input type="file" style={{ display: "none" }} disabled={busy}
               onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f); e.currentTarget.value = ""; }} />
@@ -380,7 +381,7 @@ export function Library() {
 
         <section style={{
           display: "flex", flexDirection: "column", gap: 10, minWidth: 0,
-          minHeight: narrow ? 460 : 0,
+          minHeight: narrow ? 620 : 0,
         }}>
           {viewing ? (
             <FileViewer item={viewing} onClose={() => setViewing(null)}

@@ -1,4 +1,53 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+
+/** True below the lg breakpoint (mobile/small tablet) — used to switch the
+ *  certs tab to a vertical stack with a draggable splitter. */
+function useNarrow() {
+  const [narrow, setNarrow] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+    return window.matchMedia("(max-width: 1023px)").matches;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia("(max-width: 1023px)");
+    const fn = () => setNarrow(mq.matches);
+    mq.addEventListener("change", fn);
+    return () => mq.removeEventListener("change", fn);
+  }, []);
+  return narrow;
+}
+
+/** Draggable horizontal splitter between the cert-deploy pane and the
+ *  domains/terminal pane (mobile only). Pointer events + touch-action:none. */
+function Splitter({ onDrag }: { onDrag: (dy: number) => void }) {
+  const dragging = useRef(false);
+  const lastY = useRef(0);
+  return (
+    <div
+      className="shrink-0 select-none"
+      style={{
+        height: 16, cursor: "ns-resize", touchAction: "none",
+        borderTop: "1px solid var(--line-soft)", borderBottom: "1px solid var(--line-soft)",
+        background: "var(--bg1)", display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+      onPointerDown={e => {
+        dragging.current = true;
+        lastY.current = e.clientY;
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={e => {
+        if (!dragging.current) return;
+        const dy = e.clientY - lastY.current;
+        lastY.current = e.clientY;
+        onDrag(dy);
+      }}
+      onPointerUp={e => { dragging.current = false; (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); }}
+      onPointerCancel={() => { dragging.current = false; }}
+    >
+      <span style={{ fontSize: 9, letterSpacing: ".12em", color: "var(--t-faint)" }}>⋮⋮</span>
+    </div>
+  );
+}
 import {
   CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight,
 } from "lucide-react";
@@ -171,6 +220,8 @@ export const CRUMB: Record<Tab, [string, string]> = {
 };
 
 export default function App() {
+  const narrow = useNarrow();
+  const [certPaneH, setCertPaneH] = useState(300);
   // Restore the last-open tab for THIS account (per-account, survives reload).
   const [tab, setTab] = useState<Tab>(() => {
     try {
@@ -418,8 +469,15 @@ export default function App() {
           )}
 
           {tab === "certs" && (
-            <div className="flex-1 grid grid-cols-1 lg:grid-cols-[360px_1fr] min-h-0" style={{ display: "grid" }}>
-              <div style={{ borderRight: "1px solid var(--line-soft)", display: "flex", flexDirection: "column", overflowY: "auto" }}>
+            <div className="flex-1 min-h-0 flex flex-col lg:flex-row" style={{ minHeight: 0 }}>
+              <div style={{
+                flex: narrow ? "0 0 auto" : "0 0 360px",
+                height: narrow ? certPaneH : undefined,
+                minHeight: narrow ? 160 : undefined,
+                borderRight: narrow ? undefined : "1px solid var(--line-soft)",
+                borderBottom: narrow ? "1px solid var(--line-soft)" : undefined,
+                display: "flex", flexDirection: "column", overflowY: "auto",
+              }}>
                 <div style={{ padding: 20 }}>
                   <CertsForm onSubmit={deployCert} disabled={certIsRunning}
                     onStop={certIsRunning ? stopCert : undefined}
@@ -437,6 +495,9 @@ export default function App() {
                   </div>
                 )}
               </div>
+              {narrow && (
+                <Splitter onDrag={dy => setCertPaneH(h => Math.min(Math.max(h + dy, 160), 0.65 * window.innerHeight))} />
+              )}
               <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
                 <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--line-soft)", display: "flex", alignItems: "center", gap: 8 }}>
                   <TermIcon size={13} style={{ color: "var(--t-low)" }} />

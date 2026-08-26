@@ -112,10 +112,12 @@ export function Notifications() {
 
   return (
     <div className="flex flex-col h-full min-h-0 ni-pagebody">
-      <div className="shrink-0 h-11 border-b border-[var(--line-soft)] px-4 flex items-center gap-3 ni-pagehead">
-        <Bell size={15} className="text-[var(--t-mid)]" />
-        <span className="text-sm font-medium text-[var(--t-hi)]">Уведомления</span>
-        <span className="text-[11px] text-[var(--t-faint)]">Telegram-оповещения о событиях</span>
+      <div className="ni-pagehead flex items-center justify-between mb-5">
+        <div className="flex items-center gap-3 min-w-0">
+          <Bell size={15} className="text-[var(--t-mid)] shrink-0" />
+          <span className="text-base font-semibold text-[var(--t-hi)]">Уведомления</span>
+          <span className="text-[11px] text-[var(--t-faint)]">Telegram-оповещения о событиях</span>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-5 max-w-2xl">

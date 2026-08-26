@@ -407,8 +407,8 @@ export function AiChat() {
         </aside>
       )}
 
-      <div className="flex flex-col flex-1 min-w-0 min-h-0 ni-pagebody">
-      <div className="shrink-0 flex items-center gap-2 h-11 px-4 ni-pagehead">
+      <div className="flex flex-col flex-1 min-w-0 min-h-0 ni-pagebody ni-ai-chat">
+      <div className="shrink-0 flex items-center gap-2 h-11 px-4">
         <button title={panelOpen ? "Скрыть разговоры" : "Показать разговоры"}
           aria-label="Список разговоров" aria-expanded={panelOpen}
           onClick={() => setPanelOpen(o => !o)}

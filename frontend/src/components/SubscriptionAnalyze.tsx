@@ -128,7 +128,7 @@ export function SubscriptionAnalyze() {
           <p className="sub">URL подписки, домен или IP → фактическое и реестровое гео + ASN серверов</p>
         </div>
 
-        <div className="flex items-center gap-2 mb-5">
+        <div className="flex flex-wrap items-center gap-2 mb-5">
           <input value={input} onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") analyze(); }}
             placeholder="https://sub.example.com/… · example.com · 1.2.3.4"

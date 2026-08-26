@@ -434,14 +434,12 @@ export function TrafficRules() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      {/* Header bar */}
-      <div className="shrink-0 h-11 border-b border-[var(--line-soft)] px-4 flex items-center gap-3">
-        <span className="text-sm font-medium text-[var(--t-hi)]">Ограничение трафика</span>
+      {/* Page header */}
+      <div className="ni-pagehead flex items-center justify-between mb-5" style={{ paddingTop: 6 }}>
+        <span className="text-base font-semibold text-[var(--t-hi)]">Ограничение трафика</span>
         <button
           onClick={openCreate}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs
-                     font-medium bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] transition-colors
-                     focus:outline-none focus:ring-2 focus:ring-[var(--accent-line)]"
+          className="btn btn-primary"
         >
           <Plus size={13} /> Создать ограничение
         </button>

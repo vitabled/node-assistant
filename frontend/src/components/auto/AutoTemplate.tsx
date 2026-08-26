@@ -62,7 +62,7 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
     <div className="card card-p" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <span className="micro">{title}</span>
       {children}
-      {hint && <p className="hint">{hint}</p>}
+      {hint && <p className="hint" style={{ marginBottom: 4 }}>{hint}</p>}
     </div>
   );
 }
@@ -201,7 +201,7 @@ export function AutoTemplate() {
           {/* ── remnawave-директива ── */}
           <Section title="Remnawave-директива"
             hint="Объект remnawave обрабатывается панелью и удаляется из итогового конфига (Remnawave ≥ 2.6.3).">
-            <label className="flex items-center gap-2 text-xs" style={{ color: "var(--t-mid)" }}>
+            <label className="flex items-center gap-2 text-xs" style={{ color: "var(--t-mid)", flexWrap: "wrap" }}>
               <input type="checkbox" checked={!!rw.addVirtualHostAsOutbound}
                 onChange={e => set("remnawave.addVirtualHostAsOutbound", e.target.checked)} />
               addVirtualHostAsOutbound — виртуальный хост тоже станет outbound «proxy»
@@ -273,7 +273,7 @@ export function AutoTemplate() {
                   </div>
                 </div>
               ))}
-              <button type="button" className="btn btn-soft" style={{ alignSelf: "flex-start" }}
+              <button type="button" className="btn btn-soft" style={{ alignSelf: "flex-start", marginTop: 4 }}
                 onClick={() => set("remnawave.injectHosts", [...injectHosts, { selector: { type: "uuids", values: [] }, tagPrefix: "proxy" }])}>
                 <Plus size={13} /> Группа injectHosts
               </button>

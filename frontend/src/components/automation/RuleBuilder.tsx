@@ -97,14 +97,14 @@ export function RuleBuilder() {
 
   return (
     <div className="flex flex-col h-full min-h-0 ni-pagebody">
-      <div className="shrink-0 h-11 border-b border-[var(--line-soft)] px-4 flex items-center gap-3 ni-pagehead">
-        <span className="text-sm font-medium text-[var(--t-hi)]">Автоматизация</span>
-        <span className="text-[11px] text-[var(--t-faint)]">если событие → выполнить действия</span>
+      <div className="ni-pagehead flex items-center justify-between mb-5">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="text-base font-semibold text-[var(--t-hi)]">Автоматизация</span>
+          <span className="text-[11px] text-[var(--t-faint)]">если событие → выполнить действия</span>
+        </div>
         <button
           onClick={openCreate}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                     bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] transition-colors
-                     focus:outline-none focus:ring-2 focus:ring-[var(--accent-line)] ni-pagehead-actions"
+          className="btn btn-primary ni-pagehead-actions"
         >
           <Plus size={13} /> Создать правило
         </button>

@@ -331,6 +331,7 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 
 /* ════════ Mobile / touch adaptation (скин-независимо) ════════ */
 .ni-tabbar{display:none}
+.ni-pagehead{padding-bottom:4px}
 @media (max-width:820px){
   /* Список разговоров ассистента: на узком экране ложится ПОВЕРХ чата, иначе
      панель в 224px не оставляет места самому разговору. */
@@ -347,7 +348,11 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
   .ni-main{padding-bottom:calc(58px + var(--safe-b)) !important}
   .ni-topbar{padding-left:max(16px,var(--safe-l)) !important; padding-right:max(16px,var(--safe-r)) !important; gap:8px !important}
   .ni-clock{display:none !important}
-  .ni-pagebody{padding:16px max(16px,var(--safe-r)) 28px max(16px,var(--safe-l)) !important}
+  .ni-pagebody{padding:20px max(16px,var(--safe-r)) 28px max(16px,var(--safe-l)) !important}
+  /* Чат ассистента: своя компактная подложка — рамка лога уезжает от краёв
+     (16px колонки + 16px mx-4 = 32px), а разговор и так узкий на телефоне. */
+  .ni-ai-chat{padding:12px 0 0 0 !important}
+  .ni-ai-sessions{width:11rem !important}
   .ni-pagehead{flex-direction:column; align-items:stretch !important; gap:12px !important}
   .ni-pagehead .ni-pagehead-actions{flex-wrap:wrap; width:100%}
   .btn{min-height:40px}
