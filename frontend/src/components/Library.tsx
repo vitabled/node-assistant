@@ -357,14 +357,14 @@ export function Library() {
         </div>
         <div className="ni-pagehead-actions" style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
           {narrow && (
-            <button className="btn btn-sm" style={treeOpen ? { border: "1px solid var(--accent-line)", color: "var(--accent-hi)" } : undefined} onClick={() => setTreeOpen(o => !o)}>
+            <button className="btn btn-sm btn-primary" onClick={() => setTreeOpen(o => !o)}>
               <PanelLeft size={13} /> Заметки
             </button>
           )}
           <button className="btn btn-sm btn-primary" onClick={() => { void createNote("Новая заметка", note?.folder || ""); }}>
             <Plus size={13} /> Заметка
           </button>
-          <label className="btn btn-sm" style={{ opacity: busy ? 0.5 : 1, cursor: busy ? "not-allowed" : "pointer", border: "1px solid var(--accent-line)", color: "var(--accent-hi)" }}>
+          <label className="btn btn-sm btn-primary" style={{ opacity: busy ? 0.5 : 1, cursor: busy ? "not-allowed" : "pointer" }}>
             {busy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} Загрузить
             <input type="file" style={{ display: "none" }} disabled={busy}
               onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f); e.currentTarget.value = ""; }} />
