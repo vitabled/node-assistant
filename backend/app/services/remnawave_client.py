@@ -528,11 +528,22 @@ class RemnavaveClient:
             return nodes if isinstance(nodes, list) else []
         return []
 
-    async def get_node_users_usage(self, node_uuid: str) -> dict:
-        """GET /api/bandwidth-stats/nodes/{uuid}/users — cumulative top users on a node.
-        Response: { response: { categories, sparklineData, topUsers: [{ username, total }] } }.
+    async def get_node_users_usage(self, node_uuid: str, hours: int = 24) -> dict:
+        """GET /api/bandwidth-stats/nodes/{uuid}/users?start=…&end=… — cumulative top users
+        on a node over the last `hours`. The API REQUIRES start/end (ISO strings);
+        without them it answers 400 Validation failed. Response:
+        { response: { categories, sparklineData, topUsers: [{ username, total }] } }.
         Best-effort user↔node membership (cumulative usage, NOT live-online)."""
-        data = await self._req("GET", f"/api/bandwidth-stats/nodes/{node_uuid}/users")
+        from datetime import datetime, timedelta, timezone
+
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(hours=hours)
+        fmt = "%Y-%m-%d"  # the API validates start/end as date strings (YYYY-MM-DD)
+        data = await self._req(
+            "GET",
+            f"/api/bandwidth-stats/nodes/{node_uuid}/users",
+            params={"start": start.strftime(fmt), "end": end.strftime(fmt)},
+        )
         payload = _unwrap(data)
         return payload if isinstance(payload, dict) else {}
 
