@@ -2,41 +2,42 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ════════ Node Installer · design tokens (redesign) ════════ */
+/* ════════ Node Installer · design tokens (oxalpha dark — Linear×Apple) ════════ */
 :root{
-  --bg0:#090C12;            /* app canvas          */
-  --bg1:#0D1119;            /* sidebar / topbar    */
-  --bg2:#121826;            /* cards, inputs       */
-  --bg3:#1A2233;            /* hover / raised      */
-  --line:#242E42;           /* primary border      */
-  --line-soft:#1A2232;      /* hairline            */
-  --t-hi:#EDF2FB;           /* headings, values    */
-  --t-mid:#B4C0D3;          /* body                */
-  --t-low:#93A1B8;          /* secondary — still readable */
-  --t-faint:#8593AA;        /* muted meta — AA на всех поверхностях (Ф4) */
+  --bg0:#0a0a0a;            /* app canvas          */
+  --bg1:#0e0e0e;            /* sidebar / topbar    */
+  --bg2:#111111;            /* cards, inputs       */
+  --bg3:#161616;            /* hover / raised      */
+  --line:#2a2a2a;           /* primary border      */
+  --line-soft:#222222;      /* hairline            */
+  --t-hi:#ffffff;           /* headings, values    */
+  --t-mid:rgba(255,255,255,.72);  /* body                */
+  --t-low:rgba(255,255,255,.55);  /* secondary           */
+  --t-faint:rgba(255,255,255,.48);/* muted meta — AA ≥4.5 на всех поверхностях */
   --ok:#3ECF8E;   --ok-dim:rgba(62,207,142,.11);   --ok-line:rgba(62,207,142,.32);
   --warn:#F0B054; --warn-dim:rgba(240,176,84,.11); --warn-line:rgba(240,176,84,.32);
   --err:#F0716E;  --err-dim:rgba(240,113,110,.11); --err-line:rgba(240,113,110,.34);
-  --accent:#4C8DFF; --accent-hi:#82AEFF; --accent-dim:rgba(76,141,255,.12);
-  --accent-line:rgba(76,141,255,.38); --accent-ink:#0A0E16;
-  --r-sm:6px; --r-md:9px; --r-lg:13px;
+  --accent:#8b5cf6; --accent-hi:#a78bfa; --accent-dim:rgba(139,92,246,.14);
+  --accent-line:rgba(139,92,246,.40); --accent-ink:#0a0a0a;
+  --gradient:linear-gradient(90deg,#8b5cf6,#3b82f6,#ec4899);
+  --r-sm:10px; --r-md:14px; --r-lg:18px;
   /* density-scaled */
   --row-py:9px; --card-p:18px; --ctl-py:8px; --nav-py:7px;
-  /* themeable surfaces — the Apple theme re-points these, so component CSS
+  /* themeable surfaces — the oxalpha skin re-points these, so component CSS
      references THESE names (not raw hex) to stay theme-agnostic. */
-  --raised:rgba(13,17,25,.6); --row-hover:rgba(26,34,51,.45); --overlay:rgba(4,6,10,.72);
-  --topbar-bg:rgba(13,17,25,.7); --sidebar-bg:var(--bg1); --term-bg:#070A0F; --scroll-thumb:#232C3E;
-  --brand-ink:var(--accent-ink); --nav-active-bg:var(--accent-dim); --nav-active-fg:var(--accent-hi);
+  --raised:rgba(255,255,255,.02); --row-hover:rgba(255,255,255,.04); --overlay:rgba(0,0,0,.72);
+  --topbar-bg:rgba(10,10,10,.72); --sidebar-bg:var(--bg1); --term-bg:#050508; --scroll-thumb:#2a2a2a;
+  --brand-ink:var(--accent-ink); --nav-active-bg:rgba(139,92,246,.14); --nav-active-fg:var(--accent-hi);
   --primary-ink:var(--accent-ink); --glass-blur:8px;
   --safe-b:env(safe-area-inset-bottom,0px); --safe-l:env(safe-area-inset-left,0px); --safe-r:env(safe-area-inset-right,0px);
-  --shadow-pop:0 16px 44px rgba(0,0,0,.5); --shadow-modal:0 24px 70px rgba(0,0,0,.55);
+  --shadow-pop:0 16px 44px rgba(0,0,0,.55); --shadow-modal:0 24px 70px rgba(0,0,0,.65);
   --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
-  --font:var(--mono);
-  /* Glow — inert on apple/console; the neon skin renders it (Wave-5 Plan B). */
-  --glow:none; --accent-glow:transparent;
+  --font:'Inter',system-ui,sans-serif;
+  /* Glow — inert unless the neon skin renders it (--glow:none). */
+  --glow:none; --accent-glow:rgba(139,92,246,.10);
   /* Data-viz ink ramp (charts/bars); the neon skin boosts these. */
-  --viz-1:#4C8DFF; --viz-2:#3ECF8E; --viz-3:#F0B054; --viz-4:#F0716E;
-  --viz-5:#9D7BFF; --viz-6:#38C3D2; --viz-7:#FF4D9D; --viz-8:#B4FF3A;
+  --viz-1:#8b5cf6; --viz-2:#3ECF8E; --viz-3:#F0B054; --viz-4:#F0716E;
+  --viz-5:#a78bfa; --viz-6:#38C3D2; --viz-7:#ec4899; --viz-8:#B4FF3A;
 }
 body[data-density="compact"]{ --row-py:5px; --card-p:13px; --ctl-py:6px; --nav-py:5px; }
 
@@ -47,10 +48,10 @@ body{
   font-size:13px; line-height:1.5; overflow:hidden;
   -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
 }
-::selection{background:rgba(76,141,255,.30); color:#fff}
+::selection{background:rgba(139,92,246,.30); color:#fff}
 ::-webkit-scrollbar{width:9px;height:9px}
 ::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:5px;border:2px solid var(--bg0)}
-::-webkit-scrollbar-thumb:hover{background:#2E3A52}
+::-webkit-scrollbar-thumb:hover{background:#3a3a3a}
 ::-webkit-scrollbar-corner{background:transparent}
 a{color:var(--accent-hi);text-decoration:none}
 a:hover{text-decoration:underline}
@@ -67,24 +68,24 @@ strong{color:var(--t-hi);font-weight:600}
 
 /* ── buttons ── */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
-  border-radius:var(--r-sm);font-weight:600;font-size:12.5px;line-height:1;
-  padding:calc(var(--ctl-py) + 1px) 14px;transition:background .12s,border-color .12s,color .12s,opacity .12s;
+  border-radius:999px;font-weight:600;font-size:12.5px;line-height:1;
+  padding:calc(var(--ctl-py) + 1px) 14px;transition:background .12s,border-color .12s,color .12s,opacity .12s,filter .12s;
   border:1px solid transparent;white-space:nowrap;font-family:var(--font);cursor:pointer}
 .btn:focus-visible{outline:2px solid var(--accent-line);outline-offset:1px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
-.btn-primary{background:var(--accent);color:var(--primary-ink)}
-.btn-primary:hover:not(:disabled){background:var(--accent-hi)}
-.btn-soft{background:var(--bg3);color:var(--t-mid);border-color:var(--line)}
-.btn-soft:hover:not(:disabled){background:#212B40;color:var(--t-hi)}
-.btn-ghost{color:var(--t-low)}
+.btn-primary{background-color:var(--accent);background-image:var(--gradient);background-size:100% 100%;color:#fff;border:0;border-radius:999px}
+.btn-primary:hover:not(:disabled){filter:brightness(1.08)}
+.btn-soft{background:transparent;color:#fff;border-color:var(--line);border-radius:999px}
+.btn-soft:hover:not(:disabled){background:var(--bg3);color:var(--t-hi)}
+.btn-ghost{color:var(--t-low);border-radius:999px}
 .btn-ghost:hover:not(:disabled){color:var(--t-hi);background:var(--bg3)}
 .btn-danger{background:var(--err-dim);color:var(--err);border-color:var(--err-line)}
 .btn-danger:hover:not(:disabled){background:rgba(240,113,110,.2)}
 .btn-warn{background:var(--warn-dim);color:var(--warn);border-color:var(--warn-line)}
 .btn-warn:hover:not(:disabled){background:rgba(240,176,84,.2)}
-.btn-lg{padding:11px 18px;font-size:13px;border-radius:var(--r-md)}
+.btn-lg{padding:11px 18px;font-size:13px;border-radius:999px}
 .iconbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
-  border-radius:var(--r-sm);color:var(--t-low);transition:background .12s,color .12s;cursor:pointer;
+  border-radius:999px;color:var(--t-low);transition:background .12s,color .12s;cursor:pointer;
   background:none;border:none}
 .iconbtn:hover{color:var(--t-hi);background:var(--bg3)}
 .iconbtn:focus-visible{outline:2px solid var(--accent-line)}
@@ -94,7 +95,7 @@ strong{color:var(--t-hi);font-weight:600}
 /* ── inputs ── */
 .label{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--t-low);display:block}
 .input,.selectbox,textarea.input{
-  width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r-sm);
+  width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:12px;
   padding:var(--ctl-py) 11px;font-size:13px;color:var(--t-hi);transition:border-color .12s, box-shadow .12s;
   font-family:var(--font)}
 .input::placeholder{color:var(--t-faint)}
@@ -201,7 +202,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   animation:ni-toastIn .16s ease-out;max-width:360px}
 .toast.ok{background:rgba(13,38,29,.92);border-color:var(--ok-line);color:#8FE6C3}
 .toast.err{background:rgba(44,17,17,.92);border-color:var(--err-line);color:#F5A3A1}
-.toast.info{background:rgba(18,24,38,.94);border-color:var(--line);color:var(--t-mid)}
+.toast.info{background:rgba(22,22,22,.94);border-color:var(--line);color:var(--t-mid)}
 
 /* ── terminal ── */
 .term{background:var(--term-bg);border:1px solid var(--line-soft);border-radius:var(--r-md);
@@ -233,17 +234,20 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
    sets data-theme="light" | "dark" on :root; "system" resolves it from
    prefers-color-scheme (see theme/tweaks.ts). Only the surface/text/state tokens
    flip — the accent is applied inline by applyAccent() and is theme-independent,
-   and --font stays JetBrains Mono in both themes (the console aesthetic). The
-   terminal (--term-bg) intentionally stays dark on light theme. */
+   and --font stays Inter in both themes. The terminal (--term-bg) intentionally
+   stays dark on light theme. */
 :root[data-theme="light"]{
-  --bg0:#ECECEF; --bg1:#F7F7F9; --bg2:#FFFFFF; --bg3:#E7E7EC;
-  --line:#D7D7DD; --line-soft:#E7E7EC;
-  --t-hi:#1D1D1F; --t-mid:#3E3E46; --t-low:#60606A; --t-faint:#676771;
+  --bg0:#f5f5f7; --bg1:#f0f0f2; --bg2:#ffffff; --bg3:#ebebef;
+  --line:#e5e5e5; --line-soft:#ebebef;
+  --t-hi:#1d1d1f; --t-mid:#3e3e46; --t-low:#60606a; --t-faint:#66666f;
   --ok:#1B9E4B; --ok-dim:rgba(40,167,69,.13); --ok-line:rgba(40,167,69,.30);
   --warn:#B25E00; --warn-dim:rgba(178,94,0,.12); --warn-line:rgba(178,94,0,.28);
   --err:#D70015; --err-dim:rgba(215,0,21,.09); --err-line:rgba(215,0,21,.28);
-  --raised:#F1F1F4; --row-hover:rgba(0,0,0,.035); --overlay:rgba(0,0,0,.30);
-  --topbar-bg:rgba(247,247,249,.80); --sidebar-bg:#F0F0F3; --term-bg:#1C1C1E;
+  --accent:#7c3aed; --accent-hi:#8b5cf6; --accent-dim:rgba(124,58,237,.10);
+  --accent-line:rgba(124,58,237,.32); --accent-ink:#ffffff;
+  --gradient:linear-gradient(90deg,#8b5cf6,#3b82f6,#ec4899);
+  --raised:#f0f0f2; --row-hover:rgba(0,0,0,.035); --overlay:rgba(0,0,0,.30);
+  --topbar-bg:rgba(255,255,255,.80); --sidebar-bg:#f0f0f2; --term-bg:#1C1C1E;
   --shadow-pop:0 12px 34px rgba(0,0,0,.14); --shadow-modal:0 20px 60px rgba(0,0,0,.22);
   --scroll-thumb:rgba(0,0,0,.22);
 }
@@ -252,17 +256,16 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 :root[data-theme="light"] .toast.err{background:rgba(253,240,240,.95);color:#C11}
 :root[data-theme="light"] .toast.info{background:rgba(248,248,250,.96);color:var(--t-mid)}
 
-/* ════════ Apple skin (System Settings) — накладывается поверх любого data-theme ════════
-   Вторая ось темы: data-skin="apple" на :root. Структурные правила (шрифт, радиусы,
-   контролы, glass) — theme-независимы; палитры ниже гейтятся по data-theme. Console-скин
-   (base :root + [data-theme="light"]) не трогается. См. theme/tweaks.ts:applySkin. */
+/* ════════ Apple skin (Linear×Apple) — накладывается поверх любого data-theme ════════
+   Вторая ось темы: data-skin="apple" на :root (дефолт приложения). Структурные правила
+   (стекло, контролы) — theme-независимы; палитры ниже гейтятся по data-theme и совпадают
+   с базовой oxalpha-палитрой. См. theme/tweaks.ts:applySkin. */
 :root[data-skin="apple"]{
-  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",system-ui,sans-serif;
-  --r-sm:7px; --r-md:10px; --r-lg:14px;
+  --font:'Inter',system-ui,sans-serif;
+  --r-sm:10px; --r-md:14px; --r-lg:18px;
   /* Чернила на акценте НЕ переопределяем: applyAccent() всегда ставит a.ink —
      он проходит AA на всех семи акцентах, белый не проходит ни на одном
      (измерено, см. theme/contrast.test.ts «ink on accents»). */
-  --nav-active-bg:var(--accent); --nav-active-fg:var(--accent-ink);
   --glass-blur:22px; letter-spacing:-.006em;
 }
 :root[data-skin="apple"] .navitem{font-weight:450;border-radius:8px}
@@ -274,9 +277,8 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
   -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(180%);
   backdrop-filter:blur(var(--glass-blur)) saturate(180%);
 }
-:root[data-skin="apple"] .btn{font-weight:590;border-radius:8px}
+:root[data-skin="apple"] .btn{font-weight:590}
 :root[data-skin="apple"] .btn-primary{box-shadow:0 1px 2px rgba(0,0,0,.14)}
-:root[data-skin="apple"] .iconbtn{border-radius:7px}
 :root[data-skin="apple"] .switch{width:38px;height:22px}
 :root[data-skin="apple"] .switch::after{width:16px;height:16px}
 :root[data-skin="apple"] .switch.on{background:#34C759;border-color:#34C759}
@@ -289,14 +291,17 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 
 /* Apple · Light (палитра поверх console-light) */
 :root[data-skin="apple"][data-theme="light"]{
-  --bg0:#ECECEF; --bg1:#F7F7F9; --bg2:#FFFFFF; --bg3:#E7E7EC;
-  --line:#D7D7DD; --line-soft:#E7E7EC;
-  --t-hi:#1D1D1F; --t-mid:#3E3E46; --t-low:#60606A; --t-faint:#676771;
+  --bg0:#f5f5f7; --bg1:#f0f0f2; --bg2:#ffffff; --bg3:#ebebef;
+  --line:#e5e5e5; --line-soft:#ebebef;
+  --t-hi:#1d1d1f; --t-mid:#3e3e46; --t-low:#60606a; --t-faint:#66666f;
   --ok:#28A745;   --ok-dim:rgba(52,199,89,.13);   --ok-line:rgba(40,167,69,.28);
   --warn:#B25E00; --warn-dim:rgba(255,149,0,.14);  --warn-line:rgba(178,94,0,.26);
   --err:#D70015;  --err-dim:rgba(255,59,48,.10);   --err-line:rgba(215,0,21,.26);
-  --raised:#F1F1F4; --row-hover:rgba(0,0,0,.035); --overlay:rgba(0,0,0,.26);
-  --topbar-bg:rgba(247,247,249,.72); --sidebar-bg:rgba(240,240,243,.72);
+  --accent:#7c3aed; --accent-hi:#8b5cf6; --accent-dim:rgba(124,58,237,.10);
+  --accent-line:rgba(124,58,237,.32); --accent-ink:#ffffff;
+  --gradient:linear-gradient(90deg,#8b5cf6,#3b82f6,#ec4899);
+  --raised:#f0f0f2; --row-hover:rgba(0,0,0,.035); --overlay:rgba(0,0,0,.26);
+  --topbar-bg:rgba(255,255,255,.72); --sidebar-bg:rgba(240,240,243,.72);
   --term-bg:#1C1C1E;
   --shadow-pop:0 12px 34px rgba(0,0,0,.14); --shadow-modal:0 20px 60px rgba(0,0,0,.22);
   --scroll-thumb:rgba(0,0,0,.22);
@@ -308,17 +313,20 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 
 /* Apple · Dark (когда data-theme ≠ light) */
 :root[data-skin="apple"]:not([data-theme="light"]){
-  --bg0:#1C1C1E; --bg1:#232325; --bg2:#2C2C2E; --bg3:#3A3A3C;
-  --line:#3A3A3C; --line-soft:#2E2E30;
-  --t-hi:#F5F5F7; --t-mid:#D0D0D6; --t-low:#BABAC2; --t-faint:#A9A9B1;
+  --bg0:#0a0a0a; --bg1:#0e0e0e; --bg2:#111111; --bg3:#161616;
+  --line:#2a2a2a; --line-soft:#222222;
+  --t-hi:#ffffff; --t-mid:rgba(255,255,255,.72); --t-low:rgba(255,255,255,.55); --t-faint:rgba(255,255,255,.48);
   --ok:#30D158;   --ok-dim:rgba(48,209,88,.15);   --ok-line:rgba(48,209,88,.32);
   --warn:#FF9F0A; --warn-dim:rgba(255,159,10,.15); --warn-line:rgba(255,159,10,.32);
   --err:#FF453B;  --err-dim:rgba(255,69,58,.14);   --err-line:rgba(255,69,58,.34);
-  --raised:rgba(255,255,255,.045); --row-hover:rgba(255,255,255,.05); --overlay:rgba(0,0,0,.55);
-  --topbar-bg:rgba(30,30,32,.72); --sidebar-bg:rgba(35,35,37,.72);
-  --term-bg:#151517;
-  --shadow-pop:0 14px 40px rgba(0,0,0,.5); --shadow-modal:0 24px 64px rgba(0,0,0,.6);
-  --scroll-thumb:rgba(255,255,255,.18);
+  --accent:#8b5cf6; --accent-hi:#a78bfa; --accent-dim:rgba(139,92,246,.14);
+  --accent-line:rgba(139,92,246,.40); --accent-ink:#0a0a0a;
+  --gradient:linear-gradient(90deg,#8b5cf6,#3b82f6,#ec4899);
+  --raised:rgba(255,255,255,.02); --row-hover:rgba(255,255,255,.04); --overlay:rgba(0,0,0,.72);
+  --topbar-bg:rgba(10,10,10,.72); --sidebar-bg:rgba(10,10,10,.72);
+  --term-bg:#050508;
+  --shadow-pop:0 16px 44px rgba(0,0,0,.55); --shadow-modal:0 24px 70px rgba(0,0,0,.65);
+  --scroll-thumb:#2a2a2a;
 }
 
 /* ════════ Mobile / touch adaptation (скин-независимо) ════════ */

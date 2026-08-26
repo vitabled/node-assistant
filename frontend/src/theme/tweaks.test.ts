@@ -103,7 +103,7 @@ describe("accent", () => {
     mockMatchMedia(false);
     applyThemeMode("light");
     applyAccent("blue");
-    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#4C8DFF");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#8b5cf6");
   });
 
   it("resolveAccentForSkin: saved choice wins, nodeflow skin defaults to its green", () => {

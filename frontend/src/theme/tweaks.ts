@@ -33,7 +33,7 @@ interface AccentDef {
 }
 
 export const ACCENTS: Record<AccentKey, AccentDef> = {
-  blue:    { base: "#4C8DFF", hi: "#82AEFF", ink: "#0A0E16" },
+  blue:    { base: "#8b5cf6", hi: "#a78bfa", ink: "#0a0a0a" },
   green:   { base: "#3ECF8E", hi: "#63E0A7", ink: "#04140D" },
   violet:  { base: "#9D7BFF", hi: "#B9A0FF", ink: "#0E0A1A" },
   amber:   { base: "#F0B054", hi: "#F7C77E", ink: "#1A1204" },
