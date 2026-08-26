@@ -170,8 +170,8 @@ export function DeployDashboard() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-base font-semibold text-[var(--t-hi)]">Деплой нод</h1>
-            <p className="text-xs text-[var(--t-faint)] mt-0.5">
+            <h1 className="text-lg font-semibold text-[var(--t-hi)]" style={{ lineHeight: 1.3 }}>Деплой нод</h1>
+            <p className="text-xs text-[var(--t-faint)] mt-1">
               {jobs.length > 0 ? `${jobs.length} задач` : "Нет задач деплоя"}
             </p>
             {/* Карточки лежат в браузере (localStorage), а не на сервере, потому
@@ -179,7 +179,7 @@ export function DeployDashboard() {
                 карточек здесь не увидит, и без этой строки «не вижу ноду,
                 которую задеплоил админ» будут считать багом. Общая картина —
                 серверная: «Доступность серверов» и ноды Remnawave. */}
-            <p className="text-[11px] text-[var(--t-faint)] mt-1">
+            <p className="text-[11.5px] text-[var(--t-faint)] mt-1.5" style={{ lineHeight: 1.55 }}>
               Карточки видны только вам: они хранятся в этом браузере, так как
               содержат SSH-доступы. Общий список — на «Доступности серверов».
             </p>
