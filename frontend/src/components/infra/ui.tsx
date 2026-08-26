@@ -9,12 +9,12 @@ export function PageHeader({ icon, title, subtitle, actions }: {
   icon: ReactNode; title: string; subtitle?: string; actions?: ReactNode;
 }) {
   return (
-    <div className="ni-pagehead flex items-center justify-between mb-5">
-      <div>
+    <div className="ni-pagehead flex items-center justify-between mb-5" style={{ flexWrap: "wrap", gap: 8 }}>
+      <div style={{ minWidth: 0, flex: "1 1 220px" }}>
         <h1 className="text-base font-semibold text-[var(--t-hi)] flex items-center gap-2">{icon} {title}</h1>
         {subtitle && <p className="text-xs text-[var(--t-low)] mt-0.5">{subtitle}</p>}
       </div>
-      {actions && <div className="ni-pagehead-actions flex items-center gap-2">{actions}</div>}
+      {actions && <div className="ni-pagehead-actions flex items-center gap-2" style={{ flexWrap: "wrap" }}>{actions}</div>}
     </div>
   );
 }

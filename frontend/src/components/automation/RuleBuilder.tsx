@@ -97,7 +97,7 @@ export function RuleBuilder() {
 
   return (
     <div className="flex flex-col h-full min-h-0 ni-pagebody">
-      <div className="ni-pagehead flex items-center justify-between mb-5">
+      <div className="ni-pagehead flex items-center justify-between mb-5" style={{ flexWrap: "wrap", gap: 8 }}>
         <div className="flex items-center gap-3 min-w-0">
           <span className="text-base font-semibold text-[var(--t-hi)]">Автоматизация</span>
           <span className="text-[11px] text-[var(--t-faint)]">если событие → выполнить действия</span>

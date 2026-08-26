@@ -435,7 +435,7 @@ export function TrafficRules() {
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Page header */}
-      <div className="ni-pagehead flex items-center justify-between mb-5" style={{ paddingTop: 6 }}>
+      <div className="ni-pagehead flex items-center justify-between mb-5" style={{ flexWrap: "wrap", gap: 8, paddingTop: 6 }}>
         <span className="text-base font-semibold text-[var(--t-hi)]">Ограничение трафика</span>
         <button
           onClick={openCreate}

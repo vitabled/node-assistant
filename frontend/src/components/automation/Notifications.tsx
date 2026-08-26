@@ -112,7 +112,7 @@ export function Notifications() {
 
   return (
     <div className="flex flex-col h-full min-h-0 ni-pagebody">
-      <div className="ni-pagehead flex items-center justify-between mb-5">
+      <div className="ni-pagehead flex items-center justify-between mb-5" style={{ flexWrap: "wrap", gap: 8 }}>
         <div className="flex items-center gap-3 min-w-0">
           <Bell size={15} className="text-[var(--t-mid)] shrink-0" />
           <span className="text-base font-semibold text-[var(--t-hi)]">Уведомления</span>
