@@ -97,7 +97,7 @@ textarea.field-input{resize:vertical;font-family:'SF Mono',Monaco,Consolas,'Libe
 @media(max-width:500px){.field-row{flex-direction:column;gap:0}}
 
 /* Buttons */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 20px;border:none;border-radius:9px;font-size:14px;font-weight:500;cursor:pointer;transition:all .15s;font-family:inherit}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 20px;border:none;border-radius:9px;font-size:15px;font-weight:500;cursor:pointer;transition:all .15s;font-family:inherit}
 .btn-primary{background-color:#ffffff;background-image:none;color:#0a0a0a;border-radius:999px}
 .btn-primary:hover{background-color:#e6e6e6}
 .btn-outline{background:var(--bg-elevated);color:var(--text-muted);border:1.5px solid var(--border)}

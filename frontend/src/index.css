@@ -68,7 +68,7 @@ strong{color:var(--t-hi);font-weight:600}
 
 /* ── buttons ── */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
-  border-radius:999px;font-weight:600;font-size:12.5px;line-height:1;
+  border-radius:999px;font-weight:600;font-size:14px;line-height:1;
   padding:calc(var(--ctl-py) + 1px) 14px;transition:background .12s,border-color .12s,color .12s,opacity .12s,filter .12s;
   border:1px solid transparent;white-space:nowrap;font-family:var(--font);cursor:pointer}
 .btn:focus-visible{outline:2px solid var(--accent-line);outline-offset:1px}
@@ -83,7 +83,7 @@ strong{color:var(--t-hi);font-weight:600}
 .btn-danger:hover:not(:disabled){background:rgba(240,113,110,.2)}
 .btn-warn{background:var(--warn-dim);color:var(--warn);border-color:var(--warn-line)}
 .btn-warn:hover:not(:disabled){background:rgba(240,176,84,.2)}
-.btn-lg{padding:11px 18px;font-size:13px;border-radius:999px}
+.btn-lg{padding:12px 20px;font-size:15px;border-radius:999px}
 .iconbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
   border-radius:999px;color:var(--t-low);transition:background .12s,color .12s;cursor:pointer;
   background:none;border:none}

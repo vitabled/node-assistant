@@ -11,7 +11,7 @@ const inputCls =
   "placeholder:text-gray-700 focus:outline-none focus:ring-1 focus:border-violet-500/70 focus:ring-violet-500/20";
 
 const btnPrimary =
-  "flex items-center justify-center gap-2 px-5 py-2 rounded-full text-sm font-semibold " +
+  "flex items-center justify-center gap-2 px-5 py-2 rounded-full text-[15px] font-semibold " +
   "bg-white text-black hover:bg-gray-200 disabled:opacity-50 transition-colors";
 
 // Зеркалит `users._MIN_PASSWORD`: пусть человек узнаёт о требовании до запроса.
