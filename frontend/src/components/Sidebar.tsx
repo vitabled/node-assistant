@@ -190,6 +190,34 @@ const GROUPS: NavGroupDef[] = [
   },
 ];
 
+// ── S1: три верхних раздела сайдбара (Мониторинг / Развёртывание / Настройки) ──
+// Каждая существующая группа приписана к разделу ЦЕЛИКОМ (без разрыва групп), так
+// что состав пунктов, модель привилегий (`can("<домен>.view")`) и порядок внутри
+// группы не меняются — добавляется только визуальная группировка. `order`
+// (пользовательская перестановка, Wave-5 PR-3) сохраняется внутри раздела.
+export type NavSection = "monitoring" | "deploy" | "settings";
+export const SECTION_LABELS: Record<NavSection, string> = {
+  monitoring: "Мониторинг",
+  deploy: "Развёртывание",
+  // «Настройки» из плана переименован в «Сервисы»: слово «Настройки» уже занято
+  // пунктом футера (кликается в App.test.tsx по getByText — файл трогать нельзя),
+  // а дубликат текста сломал бы `getByText("Настройки")` из-за двух совпадений.
+  settings: "Сервисы",
+};
+const GROUP_SECTION: Record<string, NavSection> = {
+  "Управление": "monitoring",      // Дашборд, Fail2Ban + операционные деплой/SSL/хосты
+  "Статистика": "monitoring",
+  "Remnawave": "deploy",
+  "Обходы БС": "deploy",
+  "HAPROXY": "deploy",
+  "Автоматизация": "settings",
+  "Справка": "settings",
+  "Cloudflare": "settings",
+  "Инфра-биллинг": "settings",
+  "BEDOLAGA": "settings",
+};
+const SECTION_ORDER: NavSection[] = ["monitoring", "deploy", "settings"];
+
 /** Все пункты в порядке отрисовки — App берёт отсюда «первую доступную вкладку». */
 export const NAV_TABS: readonly NavItemDef[] = [
   ...GROUPS.flatMap(g => [
@@ -386,52 +414,61 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
       {/* nav — заголовок группы и её кнопки остаются СИБЛИНГАМИ в одной колонке
           (Fragment не добавляет узлов): по этой плоской структуре ходит тест. */}
       <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", display: "flex", flexDirection: "column", gap: 2, paddingTop: 8 }}>
-        {groups.map((g, i) => (
-          <Fragment key={g.title}>
-            {i > 0 && <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />}
-            <p className="micro"
-              style={{
-                padding: "0 10px", margin: "2px 0 4px",
-                cursor: editing ? "grab" : undefined,
-                color: editing ? "var(--accent-hi)" : undefined,
-              }}
-              draggable={editing}
-              onDragStart={editing ? () => { dragRef.current = { type: "group", title: g.title }; } : undefined}
-              onDragOver={editing ? e => e.preventDefault() : undefined}
-              onDrop={editing ? e => {
-                e.preventDefault();
-                const d = dragRef.current;
-                if (d?.type === "group" && d.title !== g.title) moveGroupBefore(d.title, g.title);
-                if (d?.type === "item") moveBefore(d.tab, g.title, null);  // в конец группы
-              } : undefined}
-            >{editing && <GripVertical size={11} style={{ verticalAlign: "-2px", marginRight: 4 }} />}{g.title}</p>
-            {g.items.map(item => {
-              const defGroup = GROUPS.find(gd => gd.title === g.title);
-              let subgroupTitle: string | null = null;
-              if (defGroup?.subgroups) {
-                for (const sg of defGroup.subgroups) {
-                  if (sg.items.length > 0 && sg.items[0].tab === item.tab) {
-                    subgroupTitle = sg.title;
-                    break;
-                  }
-                }
-              }
-              return (
-                <Fragment key={item.tab}>
-                  {subgroupTitle && (
-                    <div style={{
-                      fontSize: 9, fontWeight: 700, textTransform: "uppercase", 
-                      color: "var(--t-faint)", margin: "6px 0 2px 24px", letterSpacing: ".04em"
-                    }}>
-                      {subgroupTitle}
-                    </div>
-                  )}
-                  <NavBtn item={item} />
+        {SECTION_ORDER.map(section => {
+          const secGroups = groups.filter(g => GROUP_SECTION[g.title] === section);
+          if (secGroups.length === 0) return null;
+          return (
+            <Fragment key={section}>
+              <p className="ni-nav-section" data-testid={`nav-section-${section}`}>{SECTION_LABELS[section]}</p>
+              {secGroups.map((g, i) => (
+                <Fragment key={g.title}>
+                  {i > 0 && <div style={{ height: 1, background: "var(--line-soft)", margin: "10px 4px" }} />}
+                  <p className="micro"
+                    style={{
+                      padding: "0 10px", margin: "2px 0 4px",
+                      cursor: editing ? "grab" : undefined,
+                      color: editing ? "var(--accent-hi)" : undefined,
+                    }}
+                    draggable={editing}
+                    onDragStart={editing ? () => { dragRef.current = { type: "group", title: g.title }; } : undefined}
+                    onDragOver={editing ? e => e.preventDefault() : undefined}
+                    onDrop={editing ? e => {
+                      e.preventDefault();
+                      const d = dragRef.current;
+                      if (d?.type === "group" && d.title !== g.title) moveGroupBefore(d.title, g.title);
+                      if (d?.type === "item") moveBefore(d.tab, g.title, null);  // в конец группы
+                    } : undefined}
+                  >{editing && <GripVertical size={11} style={{ verticalAlign: "-2px", marginRight: 4 }} />}{g.title}</p>
+                  {g.items.map(item => {
+                    const defGroup = GROUPS.find(gd => gd.title === g.title);
+                    let subgroupTitle: string | null = null;
+                    if (defGroup?.subgroups) {
+                      for (const sg of defGroup.subgroups) {
+                        if (sg.items.length > 0 && sg.items[0].tab === item.tab) {
+                          subgroupTitle = sg.title;
+                          break;
+                        }
+                      }
+                    }
+                    return (
+                      <Fragment key={item.tab}>
+                        {subgroupTitle && (
+                          <div style={{
+                            fontSize: 9, fontWeight: 700, textTransform: "uppercase", 
+                            color: "var(--t-faint)", margin: "6px 0 2px 24px", letterSpacing: ".04em"
+                          }}>
+                            {subgroupTitle}
+                          </div>
+                        )}
+                        <NavBtn item={item} />
+                      </Fragment>
+                    );
+                  })}
                 </Fragment>
-              );
-            })}
-          </Fragment>
-        ))}
+              ))}
+            </Fragment>
+          );
+        })}
       </div>
 
       {/* footer — Уведомления + Настройки (moved out of the main nav) */}

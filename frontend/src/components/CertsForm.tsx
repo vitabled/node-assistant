@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Loader2, ShieldCheck, Eye, EyeOff, ScanSearch, Square } from "lucide-react";
+import { Loader2, ShieldCheck, ScanSearch, Square } from "lucide-react";
 import { ScanDomainsModal } from "./ScanDomainsModal";
+import { Field as FieldShell, InputShell, Select, Toggle } from "../theme/ui";
 
 export interface CertsFormData {
   ip:            string;
@@ -67,34 +68,18 @@ interface FieldProps {
 }
 
 function Field({ label, name, value, onChange, error, hint, type = "text", placeholder, disabled, secret }: FieldProps) {
-  const [show, setShow] = useState(false);
-  const inputType = secret ? (show ? "text" : "password") : type;
-
   return (
-    <div className="flex flex-col gap-1">
-      <label className="label">{label}</label>
-      <div className={secret ? "relative" : undefined}>
-        <input
-          type={inputType}
-          value={value}
-          onChange={(e) => onChange(name, e.target.value)}
-          placeholder={placeholder}
-          disabled={disabled}
-          autoComplete="off"
-          spellCheck={false}
-          className={`input ${secret ? "pr-9" : ""} ${error ? "err" : ""}`}
-        />
-        {secret && (
-          <button type="button" tabIndex={-1} onClick={() => setShow(v => !v)}
-            className="absolute inset-y-0 right-0 flex items-center px-2.5
-                       text-[var(--t-faint)] hover:text-[var(--t-mid)] transition-colors">
-            {show ? <EyeOff size={13} /> : <Eye size={13} />}
-          </button>
-        )}
-      </div>
-      {error && <p className="errmsg">{error}</p>}
-      {hint  && !error && <p className="hint">{hint}</p>}
-    </div>
+    <FieldShell label={label} error={error} hint={hint}>
+      <InputShell
+        type={type}
+        value={value}
+        onChange={(e) => onChange(name, e.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        secret={secret}
+        error={!!error}
+      />
+    </FieldShell>
   );
 }
 
@@ -180,17 +165,14 @@ export function CertsForm({ onSubmit, disabled, onDomainsAdded, onStop }: Props)
         Сертификат
       </p>
 
-      <div className="flex flex-col gap-1">
-        <label className="label">Провайдер сертификата</label>
-        <select
+      <FieldShell label="Провайдер сертификата">
+        <Select
           value={form.cert_provider}
-          onChange={e => set("cert_provider", e.target.value)}
+          onChange={v => set("cert_provider", v)}
           disabled={f}
-          className="selectbox transition-colors"
-        >
-          {CERT_PROVIDERS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-        </select>
-      </div>
+          options={CERT_PROVIDERS.map(p => ({ value: p.value, label: p.label }))}
+        />
+      </FieldShell>
 
       {form.cert_provider === "cloudflare" ? (
         <Field label="Cloudflare API токен" name="cf_api_key" value={form.cf_api_key}
@@ -202,17 +184,8 @@ export function CertsForm({ onSubmit, disabled, onDomainsAdded, onStop }: Props)
           hint="Для Let's Encrypt / ZeroSSL — регистрация ACME/EAB" />
       )}
 
-      <label className={`flex items-center gap-2.5 cursor-pointer select-none mt-1 ${f ? "opacity-40 pointer-events-none" : ""}`}>
-        <button type="button" role="switch" aria-checked={form.force}
-          onClick={() => set("force", (!form.force) as unknown as string)}
-          className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none
-                      focus:ring-2 focus:ring-[var(--accent-line)]
-                      ${form.force ? "bg-[var(--accent)]" : "bg-[var(--bg3)]"}`}>
-          <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow
-                            transition-transform duration-200 ${form.force ? "translate-x-4" : "translate-x-0"}`} />
-        </button>
-        <span className="text-sm" style={{ color: "var(--t-low)" }}>Переустановить, даже если серт уже есть</span>
-      </label>
+      <Toggle label="Переустановить, даже если серт уже есть" checked={form.force}
+        onChange={() => set("force", (!form.force) as unknown as string)} disabled={f} />
 
       {form.cert_provider !== "cloudflare" && (
         <div className="px-3 py-2.5 rounded-lg border text-xs leading-relaxed"

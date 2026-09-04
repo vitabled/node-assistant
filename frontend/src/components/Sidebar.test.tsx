@@ -63,6 +63,14 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Sign-in")).not.toBeInTheDocument();
   });
 
+  // S1: три верхних раздела группируют навигацию (состав групп/привилегий не тронут).
+  it("groups navigation under the three top-level sections", () => {
+    renderSidebar();
+    expect(screen.getByTestId("nav-section-monitoring")).toHaveTextContent("Мониторинг");
+    expect(screen.getByTestId("nav-section-deploy")).toHaveTextContent("Развёртывание");
+    expect(screen.getByTestId("nav-section-settings")).toHaveTextContent("Сервисы");
+  });
+
   it("calls onTabChange with the tab id when a nav item is clicked", () => {
     const { onTabChange } = renderSidebar();
     fireEvent.click(screen.getByText("Настройки"));

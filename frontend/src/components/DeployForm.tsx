@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { Rocket, Loader2, Eye, EyeOff, AlertCircle, ChevronDown, Zap, KeyRound, X } from "lucide-react";
+import { Rocket, Loader2, AlertCircle, ChevronDown, Zap, KeyRound, X } from "lucide-react";
+import { Field as FieldShell, InputShell, Select, Toggle } from "../theme/ui";
 import { type SelectOption } from "./MultiSelect";
 import { CountrySelect } from "./CountrySelect";
 import { VaultPicker } from "./vault/VaultPicker";
@@ -248,55 +249,18 @@ interface FieldProps {
 
 function Field({ label, name, value, onChange, error, type = "text",
                  placeholder, disabled, secret, hint }: FieldProps) {
-  const [show, setShow] = useState(false);
-  const inputType = secret ? (show ? "text" : "password") : type;
-
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
-        {label}
-      </label>
-      <div className={secret ? "relative" : undefined}>
-        <input
-          type={inputType}
-          value={value}
-          onChange={e => onChange(name, e.target.value)}
-          placeholder={placeholder}
-          disabled={disabled}
-          autoComplete="off"
-          spellCheck={false}
-          className={`input transition-colors ${secret ? "pr-9" : ""} ${error ? "err" : ""}`}
-        />
-        {secret && (
-          <button type="button" tabIndex={-1} onClick={() => setShow(v => !v)}
-            className="absolute inset-y-0 right-0 flex items-center px-2.5
-                       text-[var(--t-faint)] hover:text-[var(--t-mid)] transition-colors">
-            {show ? <EyeOff size={13} /> : <Eye size={13} />}
-          </button>
-        )}
-      </div>
-      {hint  && !error && <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>{hint}</p>}
-      {error && <p className="errmsg">{error}</p>}
-    </div>
-  );
-}
-
-function Toggle({ label, checked, onChange, disabled }: {
-  label: string; checked: boolean; onChange: () => void; disabled?: boolean;
-}) {
-  return (
-    <label className={`flex items-center gap-3 cursor-pointer select-none group mt-1
-                       ${disabled ? "opacity-40 pointer-events-none" : ""}`}>
-      <button type="button" role="switch" aria-checked={checked} onClick={onChange}
+    <FieldShell label={label} error={error} hint={hint}>
+      <InputShell
+        type={type}
+        value={value}
+        onChange={e => onChange(name, e.target.value)}
+        placeholder={placeholder}
         disabled={disabled}
-        className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none
-                    focus:ring-2 focus:ring-[var(--accent-line)]
-                    ${checked ? "bg-[var(--accent)]" : "bg-[var(--bg3)]"}`}>
-        <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow
-                          transition-transform duration-200 ${checked ? "translate-x-4" : "translate-x-0"}`} />
-      </button>
-      <span className="text-sm text-[var(--t-low)] group-hover:text-[var(--t-hi)] transition-colors">{label}</span>
-    </label>
+        secret={secret}
+        error={!!error}
+      />
+    </FieldShell>
   );
 }
 
@@ -665,18 +629,15 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
                   <span className="ml-0.5" style={{ color: "var(--err)" }}>*</span>
                 )}
               </label>
-              <select
+              <Select
                 value={form.template_id}
-                onChange={e => set("template_id", e.target.value)}
+                onChange={v => set("template_id", v)}
                 disabled={f || !remnavaveReady}
-                className="selectbox transition-colors"
-                style={errors.template_id ? { borderColor: "var(--err-line)" } : undefined}
-              >
-                <option value="">— выберите шаблон —</option>
-                {templates.map(t => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
+                error={!!errors.template_id}
+                placeholder="— выберите шаблон —"
+                aria-label="Шаблон конфигурации"
+                options={templates.map(t => ({ value: t.id, label: t.name }))}
+              />
               {errors.template_id
                 ? <p className="errmsg">{errors.template_id}</p>
                 : <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>Xray JSON с подстановкой $domain, $name, $privkey, $shortid</p>
@@ -730,17 +691,14 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
                      style={{ color: !remnavaveReady ? "var(--t-faint)" : "var(--t-low)" }}>
                 Плагин ноды
               </label>
-              <select
+              <Select
                 value={form.plugin_uuid}
-                onChange={e => set("plugin_uuid", e.target.value)}
+                onChange={v => set("plugin_uuid", v)}
                 disabled={f || !remnavaveReady || squadsLoading}
-                className="selectbox transition-colors"
-              >
-                <option value="">{squadsLoading ? "Загрузка..." : "Не использовать плагин"}</option>
-                {plugins.map(p => (
-                  <option key={p.value} value={p.value}>{p.label}</option>
-                ))}
-              </select>
+                placeholder={squadsLoading ? "Загрузка..." : "Не использовать плагин"}
+                aria-label="Плагин ноды"
+                options={plugins.map(p => ({ value: p.value, label: p.label }))}
+              />
             </div>
           </div>
         </div>
@@ -755,14 +713,13 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
           <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
             Провайдер сертификата
           </label>
-          <select
+          <Select
             value={form.cert_provider}
-            onChange={e => set("cert_provider", e.target.value)}
+            onChange={v => set("cert_provider", v)}
             disabled={f}
-            className="selectbox transition-colors"
-          >
-            {CERT_PROVIDERS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-          </select>
+            aria-label="Провайдер сертификата"
+            options={CERT_PROVIDERS.map(p => ({ value: p.value, label: p.label }))}
+          />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Домен ноды" name="domain" value={form.domain} onChange={set}

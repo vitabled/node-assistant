@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Plus, Pencil, Trash2, X, Loader2, Check, Server, Eye, EyeOff } from "lucide-react";
 import { MultiSelect, type SelectOption } from "./MultiSelect";
 import { loadDeployNodes } from "./infra/ui";
+import { Field as FieldShell, InputShell, Select, Toggle } from "../theme/ui";
 
 // ── Types (mirrors backend Pydantic HostTemplateBody exactly) ──
 
@@ -244,21 +245,16 @@ interface FieldProps {
 
 function Field({ label, name, value, onChange, type = "text", placeholder, hint, error, maxLength }: FieldProps) {
   return (
-    <div className="flex flex-col gap-1">
-      <label className="label">{label}</label>
-      <input
+    <FieldShell label={label} error={error} hint={hint}>
+      <InputShell
         type={type}
         value={value}
         onChange={e => onChange(name, e.target.value)}
         placeholder={placeholder}
         maxLength={maxLength}
-        autoComplete="off"
-        spellCheck={false}
-        className={`input ${error ? "err" : ""}`}
+        error={!!error}
       />
-      {error && <p className="errmsg">{error}</p>}
-      {hint && !error && <p className="hint">{hint}</p>}
-    </div>
+    </FieldShell>
   );
 }
 
@@ -267,23 +263,9 @@ function SelectField({ label, value, onChange, options, hint }: {
   options: { value: string; label: string }[]; hint?: string;
 }) {
   return (
-    <div className="flex flex-col gap-1">
-      <label className="label">{label}</label>
-      <select value={value} onChange={e => onChange(e.target.value)} className="selectbox">
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-      {hint && <p className="hint">{hint}</p>}
-    </div>
-  );
-}
-
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
-  return (
-    <label className="flex items-center gap-2.5 cursor-pointer select-none">
-      <button type="button" role="switch" aria-checked={checked} onClick={onChange}
-        className={`switch ${checked ? "on" : ""}`} />
-      <span className="text-sm" style={{ color: "var(--t-low)" }}>{label}</span>
-    </label>
+    <FieldShell label={label} hint={hint}>
+      <Select value={value} onChange={onChange} options={options} />
+    </FieldShell>
   );
 }
 

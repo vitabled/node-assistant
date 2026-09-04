@@ -7,6 +7,7 @@ import { toast } from "./infra/Toast";
 import { deployJobsKey } from "../auth/store";
 import type { DeployJobSummary } from "./DeployDashboard";
 import { FlagChip } from "./common/FlagChip";
+import { InputShell } from "../theme/ui";
 
 /**
  * «Fail2Ban list» (Wave-5 PR-2): список IP/CIDR, который backend применяет
@@ -419,8 +420,8 @@ export function F2bList() {
         <>
           <div className="flex items-center gap-2">
             <div className="flex-1" />
-            <input
-              className="input text-xs"
+            <InputShell
+              className="text-xs"
               style={{ maxWidth: 180, paddingTop: 4, paddingBottom: 4 }}
               placeholder="Поиск по списку"
               value={search}
