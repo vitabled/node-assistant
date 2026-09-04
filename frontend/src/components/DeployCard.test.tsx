@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { DeployCard, manageableComponents, opPayload } from "./DeployCard";
 import { FORM_DEFAULT, type FormData } from "./DeployForm";
@@ -108,5 +108,76 @@ describe("collapsed success card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Развернуть карточку ok.example" }));
     expect(screen.getByText("Управление компонентами")).toBeInTheDocument();
     expect(screen.queryByText("Развернуть")).not.toBeInTheDocument();
+  });
+});
+
+describe("expanded success card — domain + remnanode image controls", () => {
+  const expand = () =>
+    fireEvent.click(screen.getByRole("button", { name: "Развернуть карточку ok.example" }));
+
+  const okJob = (taskId: string) => ({
+    taskId, domain: "ok.example", ip: "1.2.3.4",
+    newSshPort: 2222, startedAt: Date.now(), savedForm: remna,
+    finalStatus: "success" as const,
+  });
+
+  const stubFetch = (versions: string[], current: string | null) => {
+    vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("/api/node/remnanode/versions")) {
+        return { ok: true, json: async () => ({ versions, current, source: "registry" }) };
+      }
+      return { ok: true, json: async () => ({ online: true, securityStats: null, trafficStats: null, certInfo: null }) };
+    }));
+  };
+
+  beforeEach(() => { stubFetch(["latest", "v2.8.0", "v2.7.0"], "v2.8.0"); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("shows «Сменить домен» as a button that opens the domain wizard", () => {
+    render(<DeployCard
+      job={okJob("ok-3")}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+    expand();
+
+    const btn = screen.getByRole("button", { name: "Сменить домен ноды" });
+    expect(btn).toBeInTheDocument();
+    fireEvent.click(btn);
+    expect(screen.getByText("Сменить домен ноды")).toBeInTheDocument();
+  });
+
+  it("renders a native <select> of remnanode versions with current pre-selected", async () => {
+    render(<DeployCard
+      job={okJob("ok-4")}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+    expand();
+
+    const select = await screen.findByRole("combobox", { name: "Версия образа remnanode" });
+    expect((select as HTMLSelectElement).value).toBe("v2.8.0");
+
+    const optionLabels = within(select).getAllByRole("option").map(o => o.textContent);
+    expect(optionLabels).toEqual(["Выберите версию…", "latest", "v2.8.0", "v2.7.0"]);
+  });
+
+  it("falls back to a manual docker-tag input when the versions list is empty", async () => {
+    stubFetch([], null);
+    render(<DeployCard
+      job={okJob("ok-5")}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+    expand();
+
+    const input = await screen.findByRole("textbox", { name: "Тег образа remnanode" });
+    expect(input).toBeInTheDocument();
+
+    const replace = screen.getByRole("button", { name: "Заменить образ remnanode на указанный тег" });
+    expect(replace).toBeDisabled();
+    fireEvent.change(input, { target: { value: "v2.0.1" } });
+    expect(replace).not.toBeDisabled();
   });
 });

@@ -493,19 +493,32 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
               </>
             )}
             {job.savedForm.mode !== "haproxy" && (
-              <ActionButton
-                label="Сменить домен"
-                icon={<ArrowLeftRight size={11} />}
-                variant="warn"
-                title="Сменить домен ноды"
-                onClick={e => { e.stopPropagation(); setShowReplace(true); }}
-                className="self-start"
-              />
+              <div
+                className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-1.5 mb-2">
+                  <ArrowLeftRight size={12} className="text-[var(--t-low)]" />
+                  <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest">
+                    Домен
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[var(--t-mid)] flex-1 min-w-0 truncate">{job.savedForm.domain}</span>
+                  <ActionButton
+                    label="Сменить домен"
+                    icon={<ArrowLeftRight size={11} />}
+                    variant="primary"
+                    title="Сменить домен ноды"
+                    onClick={e => { e.stopPropagation(); setShowReplace(true); }}
+                  />
+                </div>
+              </div>
             )}
             <SpeedtestBlock form={job.savedForm} />
             <ManageBlock form={job.savedForm} onOp={runOp} busy={opBusy} />
             {job.savedForm.mode !== "haproxy" && (
-              <RemnanodeVersionBlock onReplace={replaceRemnanodeImage} busy={opBusy} />
+              <RemnanodeVersionBlock form={job.savedForm} onReplace={replaceRemnanodeImage} busy={opBusy} />
             )}
           </>
         )}
@@ -1370,7 +1383,8 @@ function CollapsedCard({ job, security, cert, statsReady, markHex, onExpand }: {
 // это уже тег, а не репозиторий), длина 1–128.
 const REMNANODE_TAG_RE = /^[A-Za-z0-9._-]{1,128}$/;
 
-function RemnanodeVersionBlock({ onReplace, busy }: {
+function RemnanodeVersionBlock({ form, onReplace, busy }: {
+  form:      FormData;
   onReplace: (version: string) => void;
   busy:      boolean;
 }) {
@@ -1384,16 +1398,37 @@ function RemnanodeVersionBlock({ onReplace, busy }: {
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    fetch("/api/node/remnanode/versions")
+    // GET /api/node/remnanode/versions несёт SSH-креды в теле запроса (как
+    // /api/stats/node) — так сервер может вернуть и текущий тег образа ноды.
+    const sshPort = parseInt(
+      form.change_ssh_port ? form.new_ssh_port : form.current_ssh_port, 10,
+    ) || 22;
+    fetch("/api/node/remnanode/versions", {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ip: form.ip, ssh_port: sshPort, ssh_user: form.ssh_user,
+        ssh_password: form.ssh_password || "",
+        ssh_key_ref:  form.ssh_key_ref  || "",
+      }),
+    })
       .then(r => (r.ok ? r.json() : null))
-      .then((d: { versions?: unknown } | null) => {
+      .then((d: { versions?: unknown; current?: unknown } | null) => {
         if (!alive) return;
-        setVersions(Array.isArray(d?.versions) ? (d.versions as string[]) : []);
+        const list = Array.isArray(d?.versions) ? [...(d.versions as string[])] : [];
+        const cur = typeof d?.current === "string" && d.current ? d.current : "";
+        // Текущий тег может отсутствовать в снапшоте — добавляем в конец,
+        // не меняя порядок пришедших версий, чтобы select не показывался пустым.
+        if (cur && !list.includes(cur)) list.push(cur);
+        setVersions(list);
+        // Показываем текущий образ как выбранный по умолчанию (не затираем
+        // уже сделанный пользователем выбор при повторном фетче).
+        if (cur) setVersion(prev => prev || cur);
       })
       .catch(() => { if (alive) setVersions([]); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, []);
+  }, [form]);
 
   const manualTag   = manual.trim();
   const manualValid = REMNANODE_TAG_RE.test(manualTag);
@@ -1423,6 +1458,7 @@ function RemnanodeVersionBlock({ onReplace, busy }: {
               onChange={e => setManual(e.target.value)}
               disabled={busy}
               placeholder="например: v2.0.1"
+              aria-label="Тег образа remnanode"
               spellCheck={false}
               autoComplete="off"
               className="flex-1 min-w-0 bg-[var(--bg2)] border border-[var(--line)] rounded px-2 py-1.5
@@ -1432,7 +1468,7 @@ function RemnanodeVersionBlock({ onReplace, busy }: {
             <ActionButton
               label="Заменить"
               icon={<RefreshCw size={11} />}
-              variant="default"
+              variant="primary"
               disabled={busy || !manualValid}
               loading={busy}
               title="Заменить образ remnanode на указанный тег"
@@ -1451,6 +1487,7 @@ function RemnanodeVersionBlock({ onReplace, busy }: {
             value={version}
             onChange={e => setVersion(e.target.value)}
             disabled={busy}
+            aria-label="Версия образа remnanode"
             className="flex-1 min-w-0 bg-[var(--bg2)] border border-[var(--line)] rounded px-2 py-1.5
                        text-[11px] text-[var(--t-mid)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-dim)]"
           >
@@ -1462,7 +1499,7 @@ function RemnanodeVersionBlock({ onReplace, busy }: {
           <ActionButton
             label="Заменить"
             icon={<RefreshCw size={11} />}
-            variant="default"
+            variant="primary"
             disabled={busy || !version}
             loading={busy}
             title="Заменить образ remnanode на выбранную версию"
