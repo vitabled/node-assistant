@@ -51,8 +51,10 @@ afterEach(() => { cleanup(); allow = () => true; });
 describe("Sidebar", () => {
   it("renders the main navigation items", () => {
     renderSidebar();
+    // «Дашборд» встречается дважды (главная навигация + BEDOLAGA→Поддержка),
+    // поэтому проверяем присутствие, а не единственность.
     for (const label of ["Дашборд", "Деплой ноды", "Управление SSL", "Шаблоны", "Хосты", "Трафик", "Настройки"]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });
 

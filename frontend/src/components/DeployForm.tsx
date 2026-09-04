@@ -302,7 +302,8 @@ function Toggle({ label, checked, onChange, disabled }: {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[11px] font-semibold uppercase tracking-widest mt-1" style={{ color: "var(--t-faint)" }}>
+    <p className="text-[11px] font-semibold uppercase tracking-widest mt-1"
+       style={{ color: "var(--t-low)", borderBottom: "1px solid var(--line-soft)", paddingBottom: 5 }}>
       {children}
     </p>
   );
@@ -317,7 +318,7 @@ function Collapsible({ title, icon, open, onToggle, children }: {
       <button type="button" onClick={onToggle}
         className="w-full flex items-center justify-between gap-2 px-3 py-2.5
                    text-left hover:bg-[var(--bg3)] transition-colors rounded-lg">
-        <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
+        <span className="flex items-center gap-2" style={{ color: "var(--t-hi)", fontWeight: 600, fontSize: 13 }}>
           {icon}{title}
         </span>
         <ChevronDown size={14}

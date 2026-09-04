@@ -8,7 +8,7 @@ import { FlagChip } from "./common/FlagChip";
 import { ImportFromSubscription } from "./ImportFromSubscription";
 import { resolveCountryCode, splitFlagEmoji } from "../utils/countryAliases";
 import { nodeColorLookup } from "../utils/nodeColors";
-import { Page } from "../theme/ui";
+import { Page, Seg, EmptyState } from "../theme/ui";
 import { deployJobsKey } from "../auth/store";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
@@ -73,17 +73,14 @@ function latencyColor(online: boolean, ms: number): string {
   return "var(--err)";
 }
 
-// Global banner appearance per health state (style objects, not class strings —
-// applied via style= so the banner follows the light/dark theme tokens).
-const BANNER: Record<GState, { style: React.CSSProperties; icon: React.ReactNode; text: string }> = {
-  ok:      { style: { borderColor: "var(--ok-line)", background: "var(--ok-dim)", color: "var(--ok)" },
-             icon: <CheckCircle2 size={22} />, text: "Все узлы работают стабильно" },
-  partial: { style: { borderColor: "var(--warn-line)", background: "var(--warn-dim)", color: "var(--warn)" },
-             icon: <AlertTriangle size={22} />, text: "Частичные сбои" },
-  down:    { style: { borderColor: "var(--err-line)", background: "var(--err-dim)", color: "var(--err)" },
-             icon: <XCircle size={22} />, text: "Критическая нестабильность сети" },
-  unknown: { style: { borderColor: "var(--line-soft)", background: "var(--bg2)", color: "var(--t-low)" },
-             icon: <Activity size={22} />, text: "Нет данных мониторинга" },
+// Global banner appearance per health state — semantic color + soft-tile icon
+// + rail (сигнал состояния слева). Применяется через style=, поэтому следует
+// токенам light/dark/скина.
+const BANNER: Record<GState, { color: string; rail: string; dim: string; line: string; icon: React.ReactNode; text: string }> = {
+  ok:      { color: "var(--ok)",   rail: "var(--ok)",   dim: "var(--ok-dim)",   line: "var(--ok-line)",   icon: <CheckCircle2 size={18} />, text: "Все узлы работают стабильно" },
+  partial: { color: "var(--warn)", rail: "var(--warn)", dim: "var(--warn-dim)", line: "var(--warn-line)", icon: <AlertTriangle size={18} />, text: "Частичные сбои" },
+  down:    { color: "var(--err)",  rail: "var(--err)",  dim: "var(--err-dim)",  line: "var(--err-line)",  icon: <XCircle size={18} />, text: "Критическая нестабильность сети" },
+  unknown: { color: "var(--t-low)", rail: "var(--line)", dim: "var(--bg3)",      line: "var(--line)",      icon: <Activity size={18} />, text: "Нет данных мониторинга" },
 };
 
 // ── Top-level: tab switcher (Xray uptime / Server uptime) ──────
@@ -93,17 +90,17 @@ export function Dashboard() {
   const [tab, setTab] = useState<DashTab>("xray");
   return (
     <Page max={1024}>
-      {/* Horizontal tabs */}
-      <div className="flex rounded-lg border border-[var(--line-soft)] overflow-hidden mb-5 w-fit">
-        {([["xray", "Xray uptime", <Radio size={13} key="i" />],
-           ["server", "Server uptime", <Server size={13} key="i" />]] as const).map(([id, label, icon]) => (
-          <button key={id} onClick={() => setTab(id as DashTab)}
-            className={`flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-colors ${
-              tab === id ? "bg-[var(--bg3)] text-[var(--t-hi)]" : "text-[var(--t-low)] hover:text-[var(--t-mid)]"}`}>
-            {icon}{label}
-          </button>
-        ))}
-      </div>
+      {/* Horizontal tabs — Remnawave segmented control (cyan-индикатор, B3). */}
+      <Seg
+        accent
+        style={{ width: "fit-content", marginBottom: 20 }}
+        options={[
+          { v: "xray", l: "Xray uptime", icon: <Radio size={13} /> },
+          { v: "server", l: "Server uptime", icon: <Server size={13} /> },
+        ]}
+        value={tab}
+        onChange={v => setTab(v as DashTab)}
+      />
       {tab === "xray" ? <XrayUptime /> : <ServerUptime />}
     </Page>
   );
@@ -115,11 +112,16 @@ function HealthBanner({ state, primary, secondary, stats }: {
 }) {
   const banner = BANNER[state];
   return (
-    <div className="ni-health rounded-xl border p-5 mb-6 flex items-center gap-4" style={banner.style}>
-      {banner.icon}
-      <div className="flex-1">
-        <p className="text-lg font-semibold">{primary ?? banner.text}</p>
-        <p className="text-xs opacity-70 mt-0.5">{secondary}</p>
+    <div className="ni-health mb-6 flex items-center gap-4"
+      style={{ border: "1px solid var(--line)", background: "var(--raised)",
+        borderLeft: `2px solid ${banner.rail}`, borderRadius: "var(--r-lg)", padding: 20 }}>
+      <span style={{ width: 36, height: 36, borderRadius: 8, display: "grid", placeItems: "center", flex: "none",
+        background: banner.dim, border: `1px solid ${banner.line}`, color: banner.color }}>
+        {banner.icon}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ fontSize: 15, fontWeight: 600, color: "var(--t-hi)" }}>{primary ?? banner.text}</p>
+        <p style={{ fontSize: 12, color: "var(--t-low)", marginTop: 2 }}>{secondary}</p>
       </div>
       {stats && <div className="ni-health-stats flex items-center gap-6 text-right">{stats}</div>}
     </div>
@@ -356,9 +358,13 @@ function XrayUptime() {
 
       {/* Subscription → country groups */}
       {subGroups.length === 0 ? (
-        <div className="rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-8 text-center text-[var(--t-faint)] text-sm">
-          {running ? "Нет нод в подписке." : "Мониторинг неактивен."}
-        </div>
+        <EmptyState
+          icon={<Radio size={18} />}
+          title={running ? "Нет нод в подписке" : "Мониторинг неактивен"}
+          hint={running
+            ? "Добавьте ссылку на подписку или проверьте, что чекер запущен."
+            : "Включите мониторинг в настройках выше."}
+        />
       ) : subGroups.map(sg => {
         const isCollapsed = collapsed[sg.subId];
         return (
@@ -534,9 +540,11 @@ function ServerUptime() {
       />
 
       {groups.length === 0 ? (
-        <div className="rounded-xl border border-[var(--line-soft)] bg-[var(--bg2)] p-8 text-center text-[var(--t-faint)] text-sm">
-          Нет отслеживаемых серверов. Нажмите «Добавить сервер» или задеплойте ноду.
-        </div>
+        <EmptyState
+          icon={<Server size={18} />}
+          title="Нет отслеживаемых серверов"
+          hint="Нажмите «Добавить сервер» или задеплойте ноду."
+        />
       ) : (
         <div className="flex flex-col gap-3">
           {groups.map(([country, nodes]) => {
@@ -831,9 +839,13 @@ function NodeRow({ node, cc, ticks, trailing }: {
   // Цветовая маркировка (Wave-4 PR-9): тот же цвет, что у карточки деплоя,
   // по совпадению домена/IP (имя ноды часто содержит домен).
   const markHex = nodeColorLookup()(node.ip || node.name, node.ip);
+  // rail-кромка состояния (B3): teal=онлайн, yellow=slow(≥800мс), red=down.
+  // Явная цветовая маркировка (markHex) побеждает, если задана.
+  const statusRail = !node.online ? "var(--err)" : node.latencyMs >= 800 ? "var(--warn)" : "var(--ok)";
+  const rail = markHex ?? statusRail;
   return (
     <div className="ni-noderow flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--row-hover)]"
-      style={markHex ? { borderLeft: `3px solid ${markHex}`, paddingLeft: 13 } : undefined}>
+      style={{ borderLeft: `2px solid ${rail}`, paddingLeft: 14 }}>
       {/* name + protocol */}
       <div className="ni-node-name flex items-center gap-2 min-w-0 w-52 shrink-0">
         <FlagChip code={own.code || cc} size={18} />
@@ -878,9 +890,9 @@ function NodeRow({ node, cc, ticks, trailing }: {
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div>
-      <p className="text-[10px] uppercase tracking-widest opacity-60">{label}</p>
-      <p className="text-xl font-semibold tabular-nums">{value}</p>
-      {sub && <p className="text-[10px] opacity-50 truncate max-w-[160px]">{sub}</p>}
+      <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--t-low)" }}>{label}</p>
+      <p className="text-xl font-semibold tabular-nums" style={{ color: "var(--t-hi)" }}>{value}</p>
+      {sub && <p className="text-[10px] truncate max-w-[160px]" style={{ color: "var(--t-faint)" }}>{sub}</p>}
     </div>
   );
 }

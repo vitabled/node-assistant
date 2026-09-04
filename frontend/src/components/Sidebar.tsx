@@ -357,11 +357,7 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
     >
       {/* brand */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 4px 4px", minHeight: 34 }}>
-        <span style={{
-          width: 30, height: 30, borderRadius: 8, background: "var(--accent)",
-          color: "var(--accent-ink)", display: "grid", placeItems: "center", flex: "none",
-          boxShadow: "0 2px 10px var(--accent-dim)",
-        }}>
+        <span className="ni-brandicon">
           <Server size={17} />
         </span>
         <div style={{ minWidth: 0 }}>
@@ -383,6 +379,9 @@ export function Sidebar({ activeTab, onTabChange, drawer }: Props) {
           {editing ? <Save size={14} /> : <Pencil size={14} />}
         </button>
       </div>
+
+      {/* Бренд-разделитель: градиент transparent → cyan → transparent (только remnawave). */}
+      <div className="ni-brand-divider" />
 
       {/* nav — заголовок группы и её кнопки остаются СИБЛИНГАМИ в одной колонке
           (Fragment не добавляет узлов): по этой плоской структуре ходит тест. */}

@@ -55,9 +55,9 @@ function fmtBytes(n: number): string {
 function Card({ title, Icon, settings, children }:
   { title: string; Icon: typeof Users; settings?: ReactNode; children: ReactNode }) {
   return (
-    <div className="card" style={{ padding: 16, display: "flex", flexDirection: "column", minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <Icon size={15} style={{ color: "var(--accent)", flex: "none" }} />
+    <div className="ni-stat-card" style={{ padding: 16, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span className="ni-stat-icon"><Icon size={15} /></span>
         <span style={{ fontSize: 13, fontWeight: 600, color: "var(--t-hi)" }} className="trunc">{title}</span>
         {settings && <div style={{ marginLeft: "auto", flex: "none" }}>{settings}</div>}
       </div>
@@ -86,7 +86,7 @@ function Bar({ label, value, max, sub, color }:
         <span className="trunc">{label}</span>
         <span className="num" style={{ color: "var(--t-low)", flex: "none" }}>{sub ?? value}</span>
       </div>
-      <div style={{ height: 6, background: "var(--bg2)", borderRadius: 3, overflow: "hidden" }}>
+      <div style={{ height: 4, background: "var(--bg2)", borderRadius: 2, overflow: "hidden" }}>
         <div style={{ width: `${pct}%`, height: "100%", background: color }} />
       </div>
     </div>
@@ -120,8 +120,8 @@ function CheckerSelect({ value, onChange, instances }:
 // ── widgets ──────────────────────────────────────────────────
 
 // Fixed data-ink hues for the multi-line node-load chart (per CLAUDE.md, chart
-// palettes stay fixed hues; other UI uses CSS-var tokens).
-const LINE_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f472b6", "#a78bfa", "#f87171"];
+// palettes stay fixed hues; other UI uses CSS-var tokens). Cyan/teal ramp (B7).
+const LINE_COLORS = ["#2ad4f0", "#38d9a9", "#fcc419", "#ff6b6b", "#99f0ff", "#63e6be"];
 
 function _fmtTs(ts: number): string {
   return new Date(ts * 1000).toLocaleString("ru-RU",

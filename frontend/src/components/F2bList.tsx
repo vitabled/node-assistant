@@ -192,10 +192,10 @@ function Btn({ label, icon, onClick, variant = "default", disabled, loading, tit
   loading?: boolean;
   title?: string;
 }) {
-  const base = "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none px-2.5 py-1.5 text-xs";
+  const base = "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none px-2.5 py-1.5 text-xs";
   const v = variant === "primary"
     ? "bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)]"
-    : "border border-[var(--line)] bg-[var(--bg2)] text-[var(--t-mid)] hover:bg-[var(--bg3)]";
+    : "border border-[var(--line)] text-[var(--t-mid)] hover:bg-[var(--bg3)] hover:text-[var(--t-hi)]";
   return (
     <button type="button" onClick={onClick} disabled={disabled || loading}
       title={title} className={`${base} ${v}`}>
@@ -389,24 +389,35 @@ export function F2bList() {
 
   return (
     <div className="card card-p" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div className="flex items-center gap-2">
-        <ShieldAlert size={14} style={{ color: "var(--warn)" }} />
-        <span className="micro">Fail2Ban list</span>
-        {dirty && <span className="chip warn" style={{ fontSize: 10 }}>изменён</span>}
+      {/* Заголовок — BaseOverlayHeader паттерн (B6): мягкая yellow-иконка → белый
+          title 600 → приглушённый подзаголовок; счётчик — soft-badge. */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+        <span style={{ width: 34, height: 34, borderRadius: 8, display: "grid", placeItems: "center", flex: "none",
+          background: "var(--warn-dim)", border: "1px solid var(--warn-line)", color: "var(--warn)" }}>
+          <ShieldAlert size={16} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <h1 style={{ fontSize: 15, fontWeight: 600, color: "var(--t-hi)", margin: 0 }}>Fail2Ban list</h1>
+            {dirty && <span className="chip warn" style={{ fontSize: 10 }}>изменён</span>}
+            {!loading && (
+              <span className="chip accent" style={{ marginLeft: "auto", fontSize: 11 }}>
+                {uniqueCount} {plural(uniqueCount, "адрес", "адреса", "адресов")}
+              </span>
+            )}
+          </div>
+          <p className="sub" style={{ marginTop: 2 }}>
+            IP/CIDR по строке — автоматически банятся при любом деплое
+            (нода/панель/SSL). Убрали из списка — при следующем деплое разбанится.
+          </p>
+        </div>
       </div>
-      <p className="hint" style={{ marginTop: 0 }}>
-        IP/CIDR по строке — автоматически банятся при любом деплое
-        (нода/панель/SSL). Убрали из списка — при следующем деплое разбанится.
-      </p>
 
       {loading ? (
-        <Loader2 size={14} className="spin" style={{ color: "var(--t-faint)" }} />
+        <div className="ni-skeleton" style={{ height: 72 }} />
       ) : (
         <>
           <div className="flex items-center gap-2">
-            <span className="micro" style={{ color: "var(--t-faint)" }}>
-              {uniqueCount} {plural(uniqueCount, "адрес", "адреса", "адресов")}
-            </span>
             <div className="flex-1" />
             <input
               className="input text-xs"
@@ -436,6 +447,7 @@ export function F2bList() {
 
           <textarea className="input font-mono text-xs" rows={6} value={text}
             data-testid="f2b-textarea"
+            style={{ fontFamily: "var(--mono)" }}
             onChange={e => { setText(e.target.value); setDirty(true); }}
             placeholder={"203.0.113.10\n198.51.100.0/24"} spellCheck={false} />
         </>
@@ -500,6 +512,7 @@ export function F2bList() {
             </span>
           </div>
           <textarea className="input font-mono text-xs" rows={4} value={importText}
+            style={{ fontFamily: "var(--mono)" }}
             onChange={e => setImportText(e.target.value)}
             placeholder="203.0.113.10&#10;198.51.100.0/24" spellCheck={false} />
           {importPreview && importPreview.invalid.length > 0 && (
@@ -563,7 +576,8 @@ export function F2bList() {
                 const pull = !pullOff.has(n.taskId);
                 const push = !pushOff.has(n.taskId);
                 return (
-                  <div key={n.taskId} className="flex items-center gap-2 py-0.5">
+                  <div key={n.taskId} className="flex items-center gap-2 py-0.5"
+                    style={{ borderLeft: "2px solid var(--line)", paddingLeft: 8 }}>
                     <FlagChip code={n.country_code} size={15} />
                     <span className="text-xs flex-1 truncate" style={{ color: "var(--t-hi)" }}
                       title={`${n.label} (${n.ip})`}>
