@@ -61,14 +61,16 @@ type SyncOp = "collect" | "push";
 // ── helpers ──────────────────────────────────────────────────────────────
 
 /** Непустые строки (trim + filter). Без дедупа — так и уходит в PUT. */
-function lines(text: string): string[] {
-  return text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+function lines(text: unknown): string[] {
+  const s = typeof text === "string" ? text : String(text ?? "");
+  return s.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
 }
 
 /** Дедуп без учёта регистра, порядок первого вхождения сохраняется. */
 function dedupe(list: string[]): string[] {
   const seen = new Set<string>();
   return list.filter(s => {
+    if (typeof s !== "string") return false;
     const k = s.toLowerCase();
     if (seen.has(k)) return false;
     seen.add(k);
@@ -156,7 +158,7 @@ function loadNodes(): NodeRef[] {
         ssh_user: f.ssh_user || "root",
         ssh_password: f.ssh_password || "",
         ssh_port: f.change_ssh_port ? nxt : cur,
-        country_code: (f.country_code || "").toUpperCase() || null,
+        country_code: typeof f.country_code === "string" ? f.country_code.toUpperCase() : null,
       } as NodeRef;
     })
     .filter(n => !!n.ip);
@@ -231,8 +233,8 @@ export function F2bList() {
 
   useEffect(() => {
     fetch("/api/f2b-list").then(r => r.json())
-      .then(d => setText((d.entries || []).join("\n")))
-      .catch(() => {})
+      .then(d => setText((Array.isArray(d?.entries) ? d.entries : []).join("\n")))
+      .catch(() => setErr("Не удалось загрузить список"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -346,9 +348,9 @@ export function F2bList() {
 
   const allLines = lines(text);
   const uniqueCount = dedupe(allLines).length;
-  const searchLower = search.trim().toLowerCase();
+  const searchLower = String(search || "").trim().toLowerCase();
   const matched = searchLower
-    ? allLines.filter(l => l.toLowerCase().includes(searchLower))
+    ? allLines.filter(l => typeof l === "string" && l.toLowerCase().includes(searchLower))
     : [];
 
   const importPreview = useMemo(
