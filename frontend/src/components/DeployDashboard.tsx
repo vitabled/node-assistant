@@ -7,7 +7,9 @@ import { DeployCard } from "./DeployCard";
 import { DeployForm, type FormData } from "./DeployForm";
 import { deployJobsKey } from "../auth/store";
 import { Page } from "../theme/ui";
-import { fetchDeployJobs, putDeployJobs, reconcileJobs } from "./deployJobsSync";
+import {
+  fetchDeployJobs, upsertDeployJob, deleteDeployJob, reconcileJobs,
+} from "./deployJobsSync";
 import { toast } from "./infra/Toast";
 
 export interface DeployJobSummary {
@@ -31,6 +33,17 @@ function saveJobs(jobs: DeployJobSummary[]) {
   catch {}
 }
 
+// localStorage is now only a "pending" buffer: cards that were changed locally but
+// not yet confirmed by the server. (Confirmed cards live on the server and come
+// back via GET.) bufferUpsert/bufferRemove mutate just that pending set.
+function bufferUpsert(job: DeployJobSummary) {
+  saveJobs([...loadJobs().filter(j => j.taskId !== job.taskId), job]);
+}
+
+function bufferRemove(taskId: string) {
+  saveJobs(loadJobs().filter(j => j.taskId !== taskId));
+}
+
 export function DeployDashboard() {
   const [jobs,     setJobs]     = useState<DeployJobSummary[]>(loadJobs);
   const [showForm, setShowForm] = useState(false);
@@ -44,59 +57,92 @@ export function DeployDashboard() {
   // once per outage (and the next successful push clears it).
   const dirtyRef = useRef(false);
 
-  // Push the full list to the server. On failure we keep the change in
-  // localStorage (already written by the caller), mark dirty and toast — the
-  // next mutation re-pushes the whole list, and the mount merge re-syncs any
-  // local-only taskId after a reload, so nothing is lost.
-  const pushJobs = useCallback(async (next: DeployJobSummary[]) => {
-    try {
-      await putDeployJobs(next);
-      dirtyRef.current = false;
-    } catch {
-      if (!dirtyRef.current) {
-        toast("Не удалось синхронизировать карточки с сервером. Изменения сохранены локально.", "error");
-      }
-      dirtyRef.current = true;
+  const notifyDirty = useCallback(() => {
+    if (!dirtyRef.current) {
+      toast("Не удалось синхронизировать карточки с сервером. Изменения сохранены локально.", "error");
     }
+    dirtyRef.current = true;
   }, []);
 
+  // Sync a mutation's diff to the server WITHOUT a full-list PUT: removed taskIds
+  // are DELETE'd, added/changed cards are upserted one at a time. This keeps the
+  // server as the source of truth — a client with a stale local list can never
+  // clobber cards another browser pushed. A change is buffered in localStorage
+  // (pending) first, so a failed op survives a reload; a confirmed upsert drains
+  // its taskId from the buffer.
+  const syncDiff = useCallback((prev: DeployJobSummary[], next: DeployJobSummary[]) => {
+    // Reference identity is enough: mutations keep untouched cards as the SAME
+    // object and build a fresh object only for the cards they touch.
+    const removed = prev.filter(p => !next.includes(p));
+    const changed = next.filter(n => !prev.includes(n));
+
+    for (const j of removed) {
+      bufferRemove(j.taskId);
+      deleteDeployJob(j.taskId)
+        .then(() => { dirtyRef.current = false; })
+        .catch(notifyDirty);
+    }
+    for (const j of changed) {
+      bufferUpsert(j);
+      upsertDeployJob(j)
+        .then(() => { dirtyRef.current = false; bufferRemove(j.taskId); })
+        .catch(notifyDirty);
+    }
+  }, [notifyDirty]);
+
   // Single mutation path: derive the next list from the latest committed state
-  // (NOT a possibly-stale closure), persist to the localStorage cache and push to
-  // the server. Keeps the functional-update fix from addJob/retryJob for every
-  // mutation (remove/color/status too).
+  // (NOT a possibly-stale closure), then sync the diff to the server. Keeps the
+  // functional-update fix from addJob/retryJob for every mutation (remove/color/
+  // status too).
   const commitJobs = useCallback((updater: (prev: DeployJobSummary[]) => DeployJobSummary[]) => {
     setJobs(prev => {
       const next = updater(prev);
-      saveJobs(next);
-      void pushJobs(next);
+      syncDiff(prev, next);
       return next;
     });
-  }, [pushJobs]);
+  }, [syncDiff]);
 
-  // On mount, load from the server. localStorage is only a cache here, so:
-  //  - server empty + local non-empty -> PUT the whole local list (migration);
-  //  - server non-empty -> server wins, but local-only taskIds (not yet synced)
-  //    are kept and pushed;
-  //  - server unreachable (network/5xx/401) -> degrade to localStorage (the
-  //    initial state is already loadJobs(); nothing to do).
+  // On mount, load the authoritative list from the server. localStorage is only an
+  // offline buffer here:
+  //  - the server list is rendered as-is (server is the source of truth);
+  //  - local-only taskIds (cards that never reached the server) are pushed one at
+  //    a time and, once confirmed, drained from the buffer — always, not only when
+  //    the server list is empty;
+  //  - server unreachable (network/5xx/401) -> degrade to the buffer (the initial
+  //    state is already loadJobs(); nothing to do).
   useEffect(() => {
     let live = true;
     (async () => {
+      let serverJobs: DeployJobSummary[];
       try {
-        const serverJobs = await fetchDeployJobs<DeployJobSummary>();
-        if (!live) return;
-        setJobs(prev => {
-          const { merged, localOnly } = reconcileJobs(serverJobs, prev);
-          saveJobs(merged);
-          if (localOnly.length > 0) void pushJobs(merged);
-          return merged;
-        });
+        serverJobs = await fetchDeployJobs<DeployJobSummary>();
       } catch {
-        // degrade — localStorage stays the source of truth.
+        return; // offline — the buffer is already the render list.
       }
+      if (!live) return;
+      const local = loadJobs();
+      const { merged, localOnly } = reconcileJobs(serverJobs, local);
+      if (localOnly.length > 0) {
+        const confirmed = new Set<string>();
+        await Promise.all(localOnly.map(async j => {
+          try {
+            await upsertDeployJob(j);
+            confirmed.add(j.taskId);
+            dirtyRef.current = false;
+          } catch {
+            notifyDirty();
+          }
+        }));
+        if (!live) return;
+        // Drain the confirmed cards from the buffer; keep only still-pending ones.
+        saveJobs(localOnly.filter(j => !confirmed.has(j.taskId)));
+      } else {
+        saveJobs([]);
+      }
+      if (live) setJobs(merged);
     })();
     return () => { live = false; };
-  }, [pushJobs]);
+  }, [notifyDirty]);
 
   const submitDeploy = useCallback(async (data: FormData): Promise<string> => {
     const res = await fetch("/api/deploy", {
@@ -212,14 +258,14 @@ export function DeployDashboard() {
             <p className="text-xs text-[var(--t-faint)] mt-1">
               {jobs.length > 0 ? `${jobs.length} задач` : "Нет задач деплоя"}
             </p>
-            {/* Карточки лежат в браузере (localStorage), а не на сервере, потому
-                что несут SSH-креды — их мы не храним. Следствие: коллега своих
-                карточек здесь не увидит, и без этой строки «не вижу ноду,
-                которую задеплоил админ» будут считать багом. Общая картина —
-                серверная: «Доступность серверов» и ноды Remnawave. */}
+            {/* Карточки хранятся на сервере (зашифрованы Fernet-хранилищем) и
+                синхронизируются между устройствами этого аккаунта. Следствие:
+                коллега на другом аккаунте своих карточек здесь не увидит — его
+                список лежит в его собственном аккаунте. Общая картина серверная:
+                «Доступность серверов» и ноды Remnawave. */}
             <p className="text-[11.5px] text-[var(--t-faint)] mt-1.5" style={{ lineHeight: 1.55 }}>
-              Карточки видны только вам: они хранятся в этом браузере, так как
-              содержат SSH-доступы. Общий список — на «Доступности серверов».
+              Карточки хранятся на сервере и синхронизируются между устройствами
+              вашего аккаунта. Общий список — на «Доступности серверов».
             </p>
           </div>
           <div className="flex items-center gap-2">

@@ -81,70 +81,87 @@ describe("DeployDashboard", () => {
     expect(screen.getAllByText("Нет задач деплоя").length).toBeGreaterThan(0);
   });
 
-  // ── server sync ──────────────────────────────────────────────
+  // ── server sync (server is the source of truth) ──────────────
 
-  it("migrates localStorage to the server when the server list is empty", async () => {
-    const local = job("local.example", "t-local");
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([local]));
+  it("renders the server list as-is and leaves the buffer empty when nothing is pending", async () => {
+    const serverJob = job("server.example", "t1");
     const { calls } = stubFetch((url, init) => {
       const method = (init?.method ?? "GET").toUpperCase();
-      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [] }) };
-      if (url.includes("/api/deploy-jobs") && method === "PUT") return { ok: true, json: async () => ({}) };
-      return { ok: true, json: async () => ({}) };
-    });
-    render(<DeployDashboard />);
-
-    await waitFor(() => {
-      const put = calls.find(c => c.method === "PUT" && c.url.includes("/api/deploy-jobs"));
-      expect(put?.body).toEqual({ jobs: [local] });
-    });
-    expect(screen.getByText("CARD:local.example")).toBeInTheDocument();
-  });
-
-  it("uses the server list as source of truth when non-empty (server wins on same taskId)", async () => {
-    const serverJob = job("server.example", "t1");
-    // Stale local cache with the SAME taskId but different domain → server wins.
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("local.example", "t1")]));
-    const { calls } = stubFetch((url, init) => {
-      if (url.includes("/api/deploy-jobs") && (init?.method ?? "GET").toUpperCase() === "GET")
-        return { ok: true, json: async () => ({ jobs: [serverJob] }) };
+      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [serverJob] }) };
       return { ok: true, json: async () => ({}) };
     });
     render(<DeployDashboard />);
 
     await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
-    expect(screen.queryByText("CARD:local.example")).not.toBeInTheDocument();
-    // No local-only taskId → no push on mount.
-    expect(calls.some(c => c.method === "PUT")).toBe(false);
+    // No local-only card → no write calls on mount.
+    expect(calls.some(c => c.url.includes("/api/deploy-jobs") && c.method !== "GET")).toBe(false);
+    expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]")).toEqual([]);
   });
 
-  it("keeps and pushes a local-only taskId missing from the server", async () => {
+  it("uploads a local-only card to the server and removes it from localStorage", async () => {
+    const local = job("local.example", "t-local");
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([local]));
+    const { calls } = stubFetch((url, init) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [] }) };
+      if (url.includes("/api/deploy-jobs") && method === "POST") return { ok: true, json: async () => ({ job: local }) };
+      return { ok: true, json: async () => ({}) };
+    });
+    render(<DeployDashboard />);
+
+    // Uploaded via a per-card upsert (POST), never a full-list PUT.
+    await waitFor(() => {
+      const post = calls.find(c => c.method === "POST" && c.url.includes("/api/deploy-jobs"));
+      expect(post?.body).toEqual(local);
+    });
+    expect(calls.some(c => c.method === "PUT")).toBe(false);
+    expect(screen.getByText("CARD:local.example")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]")).toEqual([]);
+    });
+  });
+
+  it("uploads local-only cards even when the server list is non-empty (no empty-server guard)", async () => {
     const serverJob = job("server.example", "t-server");
     const localNew = job("new.example", "t-new");
     localStorage.setItem("deploy_jobs_id-a", JSON.stringify([localNew]));
     const { calls } = stubFetch((url, init) => {
       const method = (init?.method ?? "GET").toUpperCase();
       if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [serverJob] }) };
-      if (url.includes("/api/deploy-jobs") && method === "PUT") return { ok: true, json: async () => ({}) };
+      if (url.includes("/api/deploy-jobs") && method === "POST") return { ok: true, json: async () => ({ job: localNew }) };
       return { ok: true, json: async () => ({}) };
     });
     render(<DeployDashboard />);
 
-    await waitFor(() => expect(screen.getByText("CARD:new.example")).toBeInTheDocument());
-    expect(screen.getByText("CARD:server.example")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
+    expect(screen.getByText("CARD:new.example")).toBeInTheDocument();
     await waitFor(() => {
-      const put = calls.find(c => c.method === "PUT" && c.url.includes("/api/deploy-jobs"));
-      expect((put?.body as { jobs: { taskId: string }[] })?.jobs.map(j => j.taskId)).toEqual(["t-new", "t-server"]);
+      const post = calls.find(c => c.method === "POST" && c.url.includes("/api/deploy-jobs"));
+      expect(post?.body).toEqual(localNew);
     });
   });
 
-  it("a mutation (remove) pushes the new list to the server", async () => {
+  it("uses the server list as source of truth (server wins on the same taskId)", async () => {
+    const serverJob = job("server.example", "t1");
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("local.example", "t1")]));
+    stubFetch((url, init) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [serverJob] }) };
+      return { ok: true, json: async () => ({}) };
+    });
+    render(<DeployDashboard />);
+
+    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
+    expect(screen.queryByText("CARD:local.example")).not.toBeInTheDocument();
+  });
+
+  it("a mutation (remove) deletes the card on the server, not a full-list PUT", async () => {
     const existing = job("node1.example", "t1");
     localStorage.setItem("deploy_jobs_id-a", JSON.stringify([existing]));
     const { calls } = stubFetch((url, init) => {
       const method = (init?.method ?? "GET").toUpperCase();
       if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [existing] }) };
-      if (url.includes("/api/deploy-jobs") && method === "PUT") return { ok: true, json: async () => ({}) };
+      if (url.includes("/api/deploy-jobs") && method === "DELETE") return { ok: true, json: async () => ({ ok: true }) };
       return { ok: true, json: async () => ({}) };
     });
     render(<DeployDashboard />);
@@ -153,30 +170,28 @@ describe("DeployDashboard", () => {
     fireEvent.click(screen.getByRole("button", { name: "remove" }));
 
     await waitFor(() => {
-      const puts = calls.filter(c => c.method === "PUT" && c.url.includes("/api/deploy-jobs"));
-      expect(puts).toHaveLength(1);
-      expect(puts[0].body).toEqual({ jobs: [] });
+      const del = calls.find(c => c.method === "DELETE" && c.url.includes("/api/deploy-jobs"));
+      expect(del?.url).toContain("t1");
     });
     expect(screen.queryByText("CARD:node1.example")).not.toBeInTheDocument();
+    expect(calls.some(c => c.method === "PUT")).toBe(false);
   });
 
-  it("keeps the local change when a push fails (dirty, no loss)", async () => {
-    const existing = job("node1.example", "t1");
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([existing]));
+  it("keeps a card buffered locally when its upsert fails (no loss)", async () => {
+    const serverJob = job("server.example", "t-server");
+    const localNew = job("new.example", "t-new");
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([localNew]));
     stubFetch((url, init) => {
       const method = (init?.method ?? "GET").toUpperCase();
-      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [existing] }) };
-      if (url.includes("/api/deploy-jobs") && method === "PUT") throw new Error("offline");
+      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [serverJob] }) };
+      if (url.includes("/api/deploy-jobs") && method === "POST") throw new Error("offline");
       return { ok: true, json: async () => ({}) };
     });
     render(<DeployDashboard />);
-    await waitFor(() => expect(screen.getByText("CARD:node1.example")).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("button", { name: "remove" }));
-
-    // Push failed, but the local change is applied and persisted (nothing lost).
-    await waitFor(() => expect(screen.queryByText("CARD:node1.example")).not.toBeInTheDocument());
-    expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a")!)).toEqual([]);
+    await waitFor(() => expect(screen.getByText("CARD:new.example")).toBeInTheDocument());
+    // Upsert failed → the card stays in the local buffer for the next sync.
+    expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]").map((j: { taskId: string }) => j.taskId)).toEqual(["t-new"]);
   });
 
   it("degrades to localStorage when the server is unreachable", async () => {
@@ -184,7 +199,7 @@ describe("DeployDashboard", () => {
     stubFetch(() => { throw new Error("network down"); });
     render(<DeployDashboard />);
 
-    // Card renders from the local cache; the failed GET doesn't crash the UI.
+    // Card renders from the local buffer; the failed GET doesn't crash the UI.
     expect(screen.getByText("CARD:offline.example")).toBeInTheDocument();
     await new Promise(r => setTimeout(r, 0));
     expect(screen.getByText("CARD:offline.example")).toBeInTheDocument();

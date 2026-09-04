@@ -146,22 +146,28 @@ function loadNodes(): NodeRef[] {
   try { jobs = JSON.parse(localStorage.getItem(deployJobsKey()) ?? "[]"); }
   catch { /* ignore malformed */ }
   if (!Array.isArray(jobs)) jobs = [];
+  return nodesFromJobs(jobs);
+}
+
+/** Серверные карточки (GET /api/deploy-jobs) → ноды. savedForm приходит
+ *  расшифрованным с ssh-кредами — сервер теперь источник правды. */
+function nodesFromJobs(jobs: DeployJobSummary[]): NodeRef[] {
   return jobs
     .map(j => {
-      const f = (j.savedForm ?? {}) as NodeForm;
+      const f = ((j.savedForm ?? {}) as NodeForm);
       const cur = parseInt(String(f.current_ssh_port ?? "22"), 10) || 22;
       const nxt = parseInt(String(f.new_ssh_port ?? "22"), 10) || 22;
       return {
-        taskId: j.taskId,
-        label: (j.domain || "").trim() || j.ip,
-        ip: j.ip,
+        taskId: String(j.taskId ?? ""),
+        label: (String(j.domain ?? "")).trim() || String(j.ip ?? ""),
+        ip: String(j.ip ?? ""),
         ssh_user: f.ssh_user || "root",
         ssh_password: f.ssh_password || "",
         ssh_port: f.change_ssh_port ? nxt : cur,
         country_code: typeof f.country_code === "string" ? f.country_code.toUpperCase() : null,
       } as NodeRef;
     })
-    .filter(n => !!n.ip);
+    .filter(n => !!n.ip && !!n.taskId);
 }
 
 function download(name: string, content: string, mime: string) {
@@ -219,8 +225,8 @@ export function F2bList() {
   // Экспорт-дропдаун.
   const [exportOpen, setExportOpen] = useState(false);
 
-  // Ноды (localStorage) + выбор pull/push (по умолчанию обе включены).
-  const [nodes] = useState<NodeRef[]>(loadNodes);
+  // Ноды: сервер — источник правды (GET /api/deploy-jobs), localStorage — фолбэк.
+  const [nodes, setNodes] = useState<NodeRef[]>(loadNodes);
   const [pullOff, setPullOff] = useState<Set<string>>(new Set());
   const [pushOff, setPushOff] = useState<Set<string>>(new Set());
 
@@ -236,6 +242,27 @@ export function F2bList() {
       .then(d => setText((Array.isArray(d?.entries) ? d.entries : []).join("\n")))
       .catch(() => setErr("Не удалось загрузить список"))
       .finally(() => setLoading(false));
+  }, []);
+
+  // Свежий список карточек с сервера (с расшифрованными ssh-кредами) —
+  // если пришёл, заменяет локальный; иначе остаётся localStorage-фолбэк.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/deploy-jobs")
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { jobs?: DeployJobSummary[] } | null) => {
+        if (!alive || !d || !Array.isArray(d.jobs) || d.jobs.length === 0) return;
+        const serverNodes = nodesFromJobs(d.jobs as DeployJobSummary[]);
+        if (serverNodes.length === 0) return;
+        setNodes(prev => {
+          const byId = new Map<string, NodeRef>();
+          for (const n of serverNodes) byId.set(n.taskId, n);
+          for (const n of prev) if (!byId.has(n.taskId)) byId.set(n.taskId, n);
+          return [...byId.values()];
+        });
+      })
+      .catch(() => { /* локальный фолбэк остаётся */ });
+    return () => { alive = false; };
   }, []);
 
   const save = async () => {
