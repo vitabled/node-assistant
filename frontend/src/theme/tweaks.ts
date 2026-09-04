@@ -1,7 +1,7 @@
 // Appearance tweaks — accent colour + density. Writes CSS variables on :root,
 // fully self-contained (no other component needs to know). Persisted locally.
 
-export type AccentKey = "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime" | "nodeflow";
+export type AccentKey = "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime" | "nodeflow" | "remnawave";
 export type Density = "comfortable" | "compact";
 export type ThemeMode = "light" | "dark" | "system";
 
@@ -14,13 +14,16 @@ export const THEME_MODES: { key: ThemeMode; label: string }[] = [
 // Design skin — a second, independent theme axis on :root (data-skin), on top of
 // the light/dark data-theme axis. "apple" = System-Settings aesthetic (SF font,
 // iOS controls, glass); "console" = the JetBrains-Mono default; "neon" = glow;
-// "nodeflow" = лесная зелёная палитра панели NodeFlow + Inter. Apple is default.
-export type AppSkin = "apple" | "console" | "neon" | "nodeflow";
+// "nodeflow" = лесная зелёная палитра панели NodeFlow + Inter;
+// "remnawave" = GitHub-dark палитра панели Remnawave, cyan-акцент, Montserrat.
+// Apple is default.
+export type AppSkin = "apple" | "console" | "neon" | "nodeflow" | "remnawave";
 export const SKINS: { key: AppSkin; label: string }[] = [
-  { key: "apple",    label: "Apple" },
-  { key: "console",  label: "Консоль" },
-  { key: "neon",     label: "Неон" },
-  { key: "nodeflow", label: "NodeFlow" },
+  { key: "apple",     label: "Apple" },
+  { key: "console",   label: "Консоль" },
+  { key: "neon",      label: "Неон" },
+  { key: "nodeflow",  label: "NodeFlow" },
+  { key: "remnawave", label: "Remnawave" },
 ];
 
 interface AccentDef {
@@ -44,6 +47,11 @@ export const ACCENTS: Record<AccentKey, AccentDef> = {
   // NodeFlow green (oklch 71% .18 145 → hex) — дефолт скина nodeflow.
   nodeflow: { base: "#48BD54", hi: "#6FDA75", ink: "#062110",
               light: { base: "#157A2B", hi: "#157A2B", ink: "#FFFFFF" } },
+  // Remnawave cyan (GitHub-dark акцент): заливка cyan-6, активный текст cyan-4.
+  // Ink тёмный: белый на #0096b5 даёт 3.47 (<AA 4.5), а тёмные чернила проходят
+  // — как и для всех прочих акцентов (см. contrast.test.ts «ink on accents»).
+  // Skin dark-committed → light-варианта нет (светлая тема Remnawave — P2).
+  remnawave: { base: "#0096b5", hi: "#2ad4f0", ink: "#00161a" },
 };
 
 function hexA(hex: string, a: number): string {
@@ -137,7 +145,7 @@ export function loadAccent(): AccentKey {
 export function resolveAccentForSkin(skin: AppSkin): AccentKey {
   const v = localStorage.getItem(ACCENT_KEY);
   if (v && v in ACCENTS) return v as AccentKey;
-  return skin === "nodeflow" ? "nodeflow" : "blue";
+  return skin === "nodeflow" ? "nodeflow" : skin === "remnawave" ? "remnawave" : "blue";
 }
 export function loadDensity(): Density {
   return localStorage.getItem(DENSITY_KEY) === "compact" ? "compact" : "comfortable";
@@ -153,7 +161,7 @@ export function saveThemeMode(accountId: string | null | undefined, m: ThemeMode
 }
 export function loadSkin(accountId?: string | null): AppSkin {
   const v = localStorage.getItem(skinKey(accountId));
-  return v === "console" || v === "neon" || v === "nodeflow" ? v : "apple";
+  return v === "console" || v === "neon" || v === "nodeflow" || v === "remnawave" ? v : "apple";
 }
 export function saveSkin(accountId: string | null | undefined, s: AppSkin): void {
   localStorage.setItem(skinKey(accountId), s);

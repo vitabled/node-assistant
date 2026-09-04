@@ -286,7 +286,7 @@ export function DeployDashboard() {
         {jobs.length === 0 ? (
           <DeployEmptyState onAdd={() => setShowForm(true)} />
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
+          <div className="ni-deploy-grid">
             {jobs.map(job => (
               <DeployCard
                 key={job.taskId}

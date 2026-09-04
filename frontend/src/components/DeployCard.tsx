@@ -4,7 +4,7 @@ import {
   Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck, Youtube,
   Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
   ShieldAlert, RefreshCw, Trash2, Wrench, Gauge, Play, ArrowLeftRight, Palette,
-  ChevronDown, ChevronUp, Boxes, Lock,
+  ChevronDown, ChevronUp, Boxes, Lock, Activity,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { NODE_COLOR_PRESETS, colorHex, cardTint, setJobColor } from "../utils/nodeColors";
@@ -62,7 +62,10 @@ export function manageableComponents(f: FormData): { id: string; label: string }
   ];
 }
 
-// ── Переиспользуемая кнопка действия: motion (hover/press) + иконка+подпись + состояния ──
+// ── Переиспользуемая кнопка действия: единые уровни (primary-градиент / ghost-outline /
+// danger / warn) + состояния hover/press/disabled/loading. Видимость — главное: ghost
+// больше не «невидимый», а outline с видимой рамкой; danger/warn — мягкие soft-чипы.
+// Без spring-scale (Remnawave: лёгкий :active translateY, transition .2s).
 interface ActionButtonProps {
   label:     string;
   onClick:   (e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -80,22 +83,19 @@ function ActionButton({
   label, onClick, icon, variant = "default", disabled, loading,
   title, ariaLabel, size = "sm", className = "",
 }: ActionButtonProps) {
-  const base = "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none";
-  const sizes = { xs: "px-1.5 py-0.5 text-[10px]", sm: "px-2 py-1 text-[11px]" };
+  const base = "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none active:translate-y-px";
+  const sizes = { xs: "px-2 py-1 text-[10px]", sm: "px-2.5 py-1.5 text-[11px]" };
   const variants: Record<NonNullable<ActionButtonProps["variant"]>, string> = {
-    default: "border border-[var(--line)] bg-[var(--bg2)] text-[var(--t-mid)] hover:bg-[var(--bg3)]",
-    primary: "bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)]",
-    danger:  "border btn-danger",
-    warn:    "border btn-warn",
-    ghost:   "text-[var(--t-faint)] hover:text-[var(--t-hi)] hover:bg-[var(--bg3)]",
+    // default → «light»: мягкая accent-подсветка вместо серой рамки.
+    default: "bg-[var(--accent-dim)] text-[var(--accent-hi)] border border-[var(--accent-line)] hover:bg-[var(--accent-line)]",
+    primary: "bg-[var(--accent)] text-[var(--accent-ink)] border border-transparent hover:bg-[var(--accent-hi)]",
+    danger:  "bg-[var(--err-dim)] text-[var(--err)] border border-[var(--err-line)] hover:bg-[var(--err-line)]",
+    warn:    "bg-[var(--warn-dim)] text-[var(--warn)] border border-[var(--warn-line)] hover:bg-[var(--warn-line)]",
+    ghost:   "border border-[var(--line)] text-[var(--t-mid)] hover:bg-[var(--bg3)] hover:text-[var(--t-hi)]",
   };
-  const noAnim = disabled || loading;
   return (
-    <motion.button
+    <button
       type="button"
-      whileHover={noAnim ? undefined : { scale: 1.04 }}
-      whileTap={noAnim ? undefined : { scale: 0.95 }}
-      transition={{ type: "spring", stiffness: 500, damping: 25, mass: 0.6 }}
       onClick={onClick}
       disabled={disabled || loading}
       title={title}
@@ -104,7 +104,7 @@ function ActionButton({
     >
       {loading ? <Loader2 size={size === "xs" ? 10 : 11} className="animate-spin" /> : icon}
       <span>{label}</span>
-    </motion.button>
+    </button>
   );
 }
 
@@ -304,6 +304,9 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
   const isDone    = stepStatus.status === "success" || stepStatus.status === "failed";
   const isSuccess = stepStatus.status === "success";
   const collapsed = isSuccess && !expanded;
+  // Status rail — обязательный сигнал состояния (2px слева): cyan=работает,
+  // teal=успех, red=ошибка, серый=ожидание (B4.3). Заменяет прежнюю borderLeft-маркировку.
+  const rail = isSuccess ? "var(--ok)" : isFailed ? "var(--err)" : isRunning ? "var(--accent)" : "var(--line)";
 
   const stopDeploy = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -381,11 +384,12 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
       ) : (
       <div
         onClick={() => setShowDetail(true)}
-        style={markHex
-          ? { borderLeft: `3px solid ${markHex}`, background: cardTint(markHex) }
-          : undefined}
-        className="cursor-pointer rounded-xl border border-[var(--line)] bg-[var(--bg2)]
-                   hover:border-[var(--line)] hover:bg-[var(--bg3)] transition-all flex flex-col"
+        style={{
+          borderLeft: `2px solid ${rail}`,
+          ...(markHex ? { background: cardTint(markHex) } : {}),
+        }}
+        className="ni-deploy-card cursor-pointer rounded-xl border border-[var(--line)] bg-[var(--bg2)]
+                   hover:bg-[var(--bg3)] transition-colors flex flex-col"
       >
         {/* Header */}
         <div className="px-4 pt-4 pb-3 flex items-start justify-between gap-2">
@@ -484,6 +488,9 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
               <>
                 {security && <SecurityBlock stats={security} onUpdateXray={runXrayUpdate} xrayUpdateBusy={opBusy} />}
                 {job.savedForm.install_vnstat !== false && traffic && <TrafficBlock stats={traffic} />}
+                {job.savedForm.install_vnstat !== false && job.savedForm.mode !== "haproxy" && (
+                  <VnstatBlock form={job.savedForm} />
+                )}
                 {job.savedForm.mode !== "haproxy" && cert && <CertBlock cert={cert} />}
                 {!security && !traffic && (
                   <p className="mx-4 mb-3 text-[11px] text-[var(--t-faint)] flex items-center gap-1.5">
@@ -494,7 +501,7 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
             )}
             {job.savedForm.mode !== "haproxy" && (
               <div
-                className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5"
+                className="ni-card-section"
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-center gap-1.5 mb-2">
@@ -660,11 +667,12 @@ export const DeployCard = memo(DeployCardImpl);
 // сервера, вместо стопки пустых боксов рисуем одну тонкую строку-заглушку.
 function ServerDataSkeleton() {
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5 flex items-center gap-2">
-      <Loader2 size={12} className="animate-spin" style={{ color: "var(--t-faint)" }} />
-      <span className="text-[11px]" style={{ color: "var(--t-faint)" }}>
-        Загружаем данные сервера (безопасность, трафик)…
-      </span>
+    <div className="ni-card-section" aria-busy="true" aria-label="Загружаем данные сервера">
+      <div className="flex flex-col gap-2">
+        <div className="ni-skeleton" style={{ height: 10, width: "40%" }} />
+        <div className="ni-skeleton" style={{ height: 10, width: "72%" }} />
+        <div className="ni-skeleton" style={{ height: 10, width: "56%" }} />
+      </div>
     </div>
   );
 }
@@ -679,7 +687,7 @@ function CertBlock({ cert }: { cert: CertInfo | null }) {
     : days < 0  ? `истёк ${-days} дн. назад`
     : `${days} дн.`;
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5">
+    <div className="ni-card-section">
       <div className="flex items-center gap-1.5">
         <ShieldCheck size={12} style={{ color: tone }} />
         <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest flex-1">
@@ -787,7 +795,7 @@ function SpeedtestBlock({ form }: { form: FormData }) {
   );
 
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5"
+    <div className="ni-card-section"
       onClick={e => e.stopPropagation()}>
       <div className="flex items-center gap-1.5 mb-2">
         <Gauge size={12} className="text-[var(--t-low)]" />
@@ -895,7 +903,7 @@ function ManageBlock({ form, onOp, busy }: {
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const comps = manageableComponents(form);
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5"
+    <div className="ni-card-section"
       onClick={e => e.stopPropagation()}>
       <div className="flex items-center gap-1.5 mb-2">
         <Wrench size={12} className="text-[var(--t-low)]" />
@@ -973,7 +981,7 @@ function OpStreamModal({ title, logs, status, onClose }: {
 // ── Status helpers ────────────────────────────────────────────
 
 function StatusIcon({ status, isRunning }: { status: TaskStatus; isRunning: boolean }) {
-  const base = "rounded-full p-1.5 shrink-0";
+  const base = "rounded-lg p-1.5 shrink-0";
   if (isRunning)            return <div className={`${base} bg-[var(--accent-dim)] text-[var(--accent-hi)]`}><Loader2 size={14} className="animate-spin" /></div>;
   if (status === "success") return <div className={`${base} bg-[var(--ok-dim)] text-[var(--ok)]`}><CheckCircle2 size={14} /></div>;
   if (status === "failed")  return <div className={`${base} bg-[var(--err-dim)] text-[var(--err)]`}><XCircle size={14} /></div>;
@@ -1023,7 +1031,7 @@ function SecurityBlock({ stats, onUpdateXray, xrayUpdateBusy }: {
     : "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]";
 
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5">
+    <div className="ni-card-section">
       <div className="flex items-center gap-1.5 mb-2">
         <ShieldCheck size={12} className="text-[var(--t-low)]" />
         <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest">
@@ -1121,7 +1129,7 @@ function TrafficBlock({ stats }: { stats: TrafficStats | null }) {
   const b = stats ? stats[period] : null;
 
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5">
+    <div className="ni-card-section">
       <div className="flex items-center gap-1.5 mb-2">
         <Network size={12} className="text-[var(--t-low)]" />
         <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest">
@@ -1164,6 +1172,189 @@ function TrafficBlock({ stats }: { stats: TrafficStats | null }) {
             <span className="text-[var(--t-hi)] font-medium tabular-nums">{fmtBytes(b.total)}</span>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Vnstat block — «Трафик (vnstat)» (SUCCESS, remnanode, install_vnstat) ──
+// Отдельный эндпоинт POST /api/node/vnstat возвращает по-интерфейсный разбор
+// vnstat --json: total/месяц/день + топ-дней. Дополняет TrafficBlock (агрегат
+// today/week/month через /api/stats/node) детализацией. Креды — те же из
+// savedForm, per-request, никогда не сохраняются.
+
+interface VnstatDay { date: string; rx: number; tx: number }
+interface VnstatInterface {
+  name: string;
+  rx_total: number; tx_total: number;
+  rx_month: number; tx_month: number;
+  rx_day: number; tx_day: number;
+  top_days: VnstatDay[];
+}
+interface VnstatResponse {
+  ip: string;
+  online: boolean;
+  interfaces: VnstatInterface[];
+  error?: string | null;
+}
+
+// Простой inline-SVG спарклайн (CSP self-contained, без внешних chart-lib).
+function VnstatSparkline({ points }: { points: VnstatDay[] }) {
+  const sorted = [...points].sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length < 2) return null;
+  const W = 220, H = 32, P = 3;
+  const max = Math.max(...sorted.map(d => d.rx + d.tx), 1);
+  const step = (W - P * 2) / (sorted.length - 1);
+  const coords = sorted.map((d, i) => ({
+    x: P + i * step,
+    y: H - P - ((d.rx + d.tx) / max) * (H - P * 2),
+  }));
+  const line = coords.map((c, i) => `${i === 0 ? "M" : "L"}${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(" ");
+  const last = coords[coords.length - 1], first = coords[0];
+  const area = `${line} L${last.x.toFixed(1)} ${H - P} L${first.x.toFixed(1)} ${H - P} Z`;
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: "block" }} aria-hidden="true">
+      <path d={area} fill="rgba(6,182,212,.12)" />
+      <path d={line} fill="none" stroke="var(--accent-hi)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function VnstatBlock({ form }: { form: FormData }) {
+  const [data,    setData]    = useState<VnstatResponse | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [iface,   setIface]   = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    const sshPort = parseInt(form.change_ssh_port ? form.new_ssh_port : form.current_ssh_port, 10) || 22;
+    const fetchVnstat = async () => {
+      try {
+        const res = await fetch("/api/node/vnstat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ip: form.ip, ssh_port: sshPort, ssh_user: form.ssh_user,
+            ssh_password: form.ssh_password || "",
+            ssh_key_ref: form.ssh_key_ref || "",
+          }),
+        });
+        const d = await res.json();
+        if (!alive) return;
+        if (!res.ok) {
+          setError(typeof d?.detail === "string" ? d.detail : `HTTP ${res.status}`);
+          setData(null);
+          return;
+        }
+        const list: VnstatInterface[] = Array.isArray(d?.interfaces) ? d.interfaces : [];
+        setData(d);
+        setError(typeof d?.error === "string" && d.error ? d.error : null);
+        setIface(prev => (prev && list.some(i => i.name === prev)) ? prev : (list[0]?.name ?? ""));
+      } catch {
+        if (alive) setError("Не удалось прочитать vnstat по SSH");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    };
+    fetchVnstat();
+    const id = setInterval(fetchVnstat, 300_000);   // 5 min
+    return () => { alive = false; clearInterval(id); };
+  }, [form]);
+
+  const interfaces = data?.interfaces ?? [];
+  const current = interfaces.find(i => i.name === iface) ?? interfaces[0] ?? null;
+  // «vnstat not installed» — не ошибка SSH, а причина пустого состояния (подсказка).
+  const vnstatErr = !!error && error.toLowerCase().includes("vnstat");
+
+  return (
+    <div className="ni-card-section" onClick={e => e.stopPropagation()}>
+      <div className="ni-card-section-head">
+        <Activity size={12} style={{ color: "var(--accent-hi)" }} />
+        <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest flex-1">
+          Трафик (vnstat)
+        </span>
+        {interfaces.length > 1 && (
+          <select
+            value={iface}
+            onChange={e => setIface(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            aria-label="Интерфейс vnstat"
+            className="bg-[var(--bg2)] border border-[var(--line)] rounded px-1.5 py-0.5
+                       text-[10px] text-[var(--t-mid)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-dim)]"
+          >
+            {interfaces.map(i => <option key={i.name} value={i.name}>{i.name}</option>)}
+          </select>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="flex flex-col gap-2">
+          <div className="ni-skeleton" style={{ height: 10, width: "80%" }} />
+          <div className="ni-skeleton" style={{ height: 10, width: "60%" }} />
+          <div className="ni-skeleton" style={{ height: 10, width: "70%" }} />
+        </div>
+      ) : error && !vnstatErr ? (
+        <p className="text-[11px] text-[var(--warn)] flex items-center gap-1.5">
+          <ShieldAlert size={11} /> {error}
+        </p>
+      ) : !current ? (
+        <div className="flex flex-col gap-1">
+          <p className="text-[11px] text-[var(--t-faint)]">
+            vnstat не установлен / данных ещё нет.
+          </p>
+          <p className="text-[10px] text-[var(--t-faint)]" style={{ lineHeight: 1.5 }}>
+            Включите «Установить vnstat» при деплое (по умолчанию включено) — раздел появится после накопления данных.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-col gap-1.5 text-[11px]">
+            <div className="ni-kv">
+              <span className="ni-kv-label flex items-center gap-1.5"><ArrowDownToLine size={11} style={{ color: "var(--accent-hi)" }} /> RX всего</span>
+              <span className="text-[var(--t-hi)] tabular-nums">{fmtBytes(current.rx_total)}</span>
+            </div>
+            <div className="ni-kv">
+              <span className="ni-kv-label flex items-center gap-1.5"><ArrowUpFromLine size={11} style={{ color: "var(--ok)" }} /> TX всего</span>
+              <span className="text-[var(--t-hi)] tabular-nums">{fmtBytes(current.tx_total)}</span>
+            </div>
+            <div className="ni-kv">
+              <span className="ni-kv-label">Месяц</span>
+              <span className="text-[var(--t-hi)] tabular-nums">↓ {fmtBytes(current.rx_month)} · ↑ {fmtBytes(current.tx_month)}</span>
+            </div>
+            <div className="ni-kv">
+              <span className="ni-kv-label">Сегодня</span>
+              <span className="text-[var(--t-hi)] tabular-nums">↓ {fmtBytes(current.rx_day)} · ↑ {fmtBytes(current.tx_day)}</span>
+            </div>
+          </div>
+
+          {current.top_days?.length > 0 && (
+            <>
+              <div className="mt-2"><VnstatSparkline points={current.top_days} /></div>
+              <div className="mt-2 flex flex-col gap-1">
+                {(() => {
+                  const maxDay = Math.max(...current.top_days.map(d => d.rx + d.tx), 1);
+                  return [...current.top_days]
+                    .sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx))
+                    .slice(0, 5)
+                    .map(d => {
+                      const [, m, day] = d.date.split("-");
+                      const w = Math.round(((d.rx + d.tx) / maxDay) * 100);
+                      return (
+                        <div key={d.date} className="flex items-center gap-2 text-[11px]">
+                          <span className="text-[var(--t-low)] tabular-nums w-[46px] shrink-0">{day}.{m}</span>
+                          <div className="flex-1 h-1.5 rounded bg-[var(--bg3)] overflow-hidden">
+                            <div className="h-full rounded" style={{ width: `${w}%`, background: "var(--viz-1)" }} />
+                          </div>
+                          <span className="text-[var(--t-hi)] tabular-nums w-[64px] text-right shrink-0">{fmtBytes(d.rx + d.tx)}</span>
+                        </div>
+                      );
+                    });
+                })()}
+              </div>
+            </>
+          )}
+        </>
       )}
     </div>
   );
@@ -1343,8 +1534,8 @@ function CollapsedCard({ job, security, cert, statsReady, markHex, onExpand }: {
       aria-label={`Развернуть карточку ${job.domain}`}
       onClick={onExpand}
       onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onExpand(); } }}
-      style={markHex ? { borderLeft: `3px solid ${markHex}`, background: cardTint(markHex) } : undefined}
-      className="cursor-pointer rounded-xl border border-[var(--line)] bg-[var(--bg2)]
+      style={{ borderLeft: "2px solid var(--ok)", ...(markHex ? { background: cardTint(markHex) } : {}) }}
+      className="ni-deploy-card cursor-pointer rounded-xl border border-[var(--line)] bg-[var(--bg2)]
                  hover:bg-[var(--bg3)] transition-colors flex flex-col"
     >
       <div className="px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 min-w-0">
@@ -1434,7 +1625,7 @@ function RemnanodeVersionBlock({ form, onReplace, busy }: {
   const manualValid = REMNANODE_TAG_RE.test(manualTag);
 
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5"
+    <div className="ni-card-section"
       onClick={e => e.stopPropagation()}>
       <div className="flex items-center gap-1.5 mb-2">
         <Boxes size={12} className="text-[var(--t-low)]" />

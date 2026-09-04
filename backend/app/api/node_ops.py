@@ -19,11 +19,11 @@ import json
 import re
 from pathlib import Path
 from urllib.parse import urljoin
-from typing import Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.deploy import DeployRequest
 from app.models.ssh_creds import SshCreds
@@ -91,6 +91,173 @@ class NodeOpRequest(DeployRequest):
 class NodeRemnanodeVersionsRequest(SshCreds):
     """Per-request SSH credentials for reporting the node's current image tag."""
     ssh_port: int = Field(default=22, ge=1, le=65535)
+
+
+class NodeVnstatRequest(SshCreds):
+    """Per-request SSH credentials for a read-only vnStat traffic probe."""
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+
+
+class VnstatBucket(BaseModel):
+    rx: Optional[int] = None
+    tx: Optional[int] = None
+
+
+class VnstatDay(BaseModel):
+    date: str
+    rx: int
+    tx: int
+
+
+class NodeVnstatResponse(BaseModel):
+    ok: bool
+    reason: Optional[str] = None
+    interface: Optional[str] = None
+    updated_at: Optional[str] = None
+    total: VnstatBucket = Field(default_factory=VnstatBucket)
+    month: VnstatBucket = Field(default_factory=VnstatBucket)
+    day: VnstatBucket = Field(default_factory=VnstatBucket)
+    top_days: list[VnstatDay] = Field(default_factory=list)
+
+
+def _vnstat_date(value: Any) -> Optional[str]:
+    """Convert vnStat's date object to YYYY-MM-DD, or reject malformed dates."""
+    if isinstance(value, str):
+        return value or None
+    if not isinstance(value, dict):
+        return None
+    try:
+        year, month, day = int(value["year"]), int(value["month"]), int(value["day"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not 1 <= month <= 12 or not 1 <= day <= 31:
+        return None
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _vnstat_updated_at(value: Any) -> Optional[str]:
+    if not isinstance(value, dict):
+        return None
+    date = _vnstat_date(value.get("date"))
+    time = value.get("time")
+    if not date:
+        return None
+    if not isinstance(time, dict):
+        return date
+    try:
+        hour, minute = int(time["hour"]), int(time["minute"])
+    except (KeyError, TypeError, ValueError):
+        return date
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        return date
+    return f"{date} {hour:02d}:{minute:02d}"
+
+
+def _vnstat_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _vnstat_bucket(value: Any) -> VnstatBucket:
+    value = value if isinstance(value, dict) else {}
+    return VnstatBucket(rx=_vnstat_int(value.get("rx")), tx=_vnstat_int(value.get("tx")))
+
+
+def _parse_vnstat_json(raw: str) -> NodeVnstatResponse:
+    """Parse vnStat 2.x JSON for the preferred active interface.
+
+    eth0 is selected when it has a traffic section; otherwise the first interface
+    with traffic is used. Older plural day/month keys and total-less output are
+    accepted for consistency with the aggregate stats parser.
+    """
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return NodeVnstatResponse(ok=False, reason="no data")
+    if not isinstance(payload, dict):
+        return NodeVnstatResponse(ok=False, reason="no data")
+
+    interfaces = payload.get("interfaces")
+    if not isinstance(interfaces, list):
+        return NodeVnstatResponse(ok=False, reason="no data")
+    active = [
+        iface for iface in interfaces
+        if isinstance(iface, dict)
+        and isinstance(iface.get("traffic"), dict)
+        and any(
+            iface["traffic"].get(key)
+            for key in ("total", "day", "days", "month", "months")
+        )
+    ]
+    if not active:
+        return NodeVnstatResponse(ok=False, reason="no data")
+    iface = next((item for item in active if item.get("name") == "eth0"), active[0])
+    traffic = iface["traffic"]
+    days = traffic.get("day") or traffic.get("days") or []
+    months = traffic.get("month") or traffic.get("months") or []
+    if not isinstance(days, list):
+        days = []
+    if not isinstance(months, list):
+        months = []
+    total_raw = traffic.get("total")
+    if isinstance(total_raw, dict):
+        total = _vnstat_bucket(total_raw)
+    elif months:
+        total = VnstatBucket(
+            rx=sum(_vnstat_int(item.get("rx")) for item in months if isinstance(item, dict)),
+            tx=sum(_vnstat_int(item.get("tx")) for item in months if isinstance(item, dict)),
+        )
+    else:
+        total = VnstatBucket()
+    month = _vnstat_bucket(months[-1]) if months else VnstatBucket()
+    day = _vnstat_bucket(days[-1]) if days else VnstatBucket()
+    top_days = [
+        VnstatDay(date=date, rx=_vnstat_int(item.get("rx")), tx=_vnstat_int(item.get("tx")))
+        for item in days if isinstance(item, dict)
+        for date in [_vnstat_date(item.get("date"))]
+        if date is not None
+    ]
+    top_days.sort(key=lambda item: item.rx + item.tx, reverse=True)
+    return NodeVnstatResponse(
+        ok=True,
+        interface=iface.get("name") if isinstance(iface.get("name"), str) else None,
+        updated_at=_vnstat_updated_at(payload.get("updated")),
+        total=total,
+        month=month,
+        day=day,
+        top_days=top_days[:5],
+    )
+
+
+async def _vnstat(req: NodeVnstatRequest) -> NodeVnstatResponse:
+    ssh: Optional[SSHSession] = None
+    try:
+        ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, **await ssh_auth.resolve(req))
+        await ssh.connect(timeout=10)
+        raw = await ssh.get_script_output(
+            "if ! command -v vnstat >/dev/null 2>&1; then\n"
+            "  printf '__VNSTAT_NOT_INSTALLED__'\n"
+            "else\n"
+            "  vnstat --json 2>/dev/null\n"
+            "fi",
+            timeout=20,
+        )
+        if raw.strip() == "__VNSTAT_NOT_INSTALLED__":
+            return NodeVnstatResponse(ok=False, reason="vnstat not installed")
+        return _parse_vnstat_json(raw)
+    except Exception:
+        return NodeVnstatResponse(ok=False, reason="no data")
+    finally:
+        if ssh is not None:
+            await ssh.close()
+
+
+@router.post("/vnstat", response_model=NodeVnstatResponse)
+async def node_vnstat(req: NodeVnstatRequest) -> NodeVnstatResponse:
+    """Read one node's vnStat data without persisting its SSH credentials."""
+    return await _vnstat(req)
 
 
 def _snapshot_remnanode_versions() -> list[str]:

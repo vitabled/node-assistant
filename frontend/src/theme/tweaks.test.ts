@@ -114,6 +114,14 @@ describe("accent", () => {
     localStorage.setItem("ni_accent", "chartreuse");
     expect(resolveAccentForSkin("nodeflow")).toBe("nodeflow"); // мусор = «не выбирал»
   });
+
+  it("resolveAccentForSkin: remnawave defaults to its cyan accent", () => {
+    localStorage.clear();
+    expect(resolveAccentForSkin("remnawave")).toBe("remnawave");
+    applyAccent("remnawave");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#0096b5");
+    expect(document.documentElement.style.getPropertyValue("--accent-hi")).toBe("#2ad4f0");
+  });
 });
 
 describe("density", () => {
@@ -152,7 +160,14 @@ describe("skin", () => {
     expect(loadSkin("acc1")).toBe("apple");
   });
 
-  it("exposes exactly the four skin options", () => {
-    expect(SKINS.map(s => s.key)).toEqual(["apple", "console", "neon", "nodeflow"]);
+  it("exposes exactly the five skin options", () => {
+    expect(SKINS.map(s => s.key)).toEqual(["apple", "console", "neon", "nodeflow", "remnawave"]);
+  });
+
+  it("persists and reads back the remnawave skin", () => {
+    saveSkin("acc1", "remnawave");
+    expect(loadSkin("acc1")).toBe("remnawave");
+    applySkin("remnawave");
+    expect(document.documentElement.dataset.skin).toBe("remnawave");
   });
 });

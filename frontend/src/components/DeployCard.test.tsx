@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
-import { DeployCard, manageableComponents, opPayload } from "./DeployCard";
+import { DeployCard, manageableComponents, opPayload, VnstatBlock } from "./DeployCard";
 import { FORM_DEFAULT, type FormData } from "./DeployForm";
 
 const remna: FormData = { ...FORM_DEFAULT, mode: "remnanode", optimize: true, install_warp: true, install_trafficguard: true };
@@ -179,5 +179,78 @@ describe("expanded success card — domain + remnanode image controls", () => {
     expect(replace).toBeDisabled();
     fireEvent.change(input, { target: { value: "v2.0.1" } });
     expect(replace).not.toBeDisabled();
+  });
+});
+
+describe("VnstatBlock", () => {
+  const form = { ...FORM_DEFAULT, ip: "1.2.3.4", change_ssh_port: false };
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("renders the header and formatted totals from a mocked fetch", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ip: "1.2.3.4", online: true,
+        interfaces: [{
+          name: "eth0",
+          rx_total: 5368709120, tx_total: 2147483648,   // 5 ГБ / 2 ГБ
+          rx_month: 1073741824, tx_month: 536870912,     // 1 ГБ / 512 МБ
+          rx_day: 104857600,    tx_day: 52428800,        // 100 МБ / 50 МБ
+          top_days: [
+            { date: "2026-09-04", rx: 3221225472, tx: 1073741824 },
+            { date: "2026-09-03", rx: 2147483648, tx: 536870912 },
+          ],
+        }],
+        error: null,
+      }),
+    }));
+    render(<VnstatBlock form={form} />);
+
+    expect(await screen.findByText("Трафик (vnstat)")).toBeInTheDocument();
+    expect(await screen.findByText("5.00 ГБ")).toBeInTheDocument();  // rx_total
+    expect(screen.getByText("2.00 ГБ")).toBeInTheDocument();         // tx_total
+    expect(screen.getByText("04.09")).toBeInTheDocument();           // топ-день
+    expect(screen.getByText("03.09")).toBeInTheDocument();
+  });
+
+  it("shows the empty state (install_vnstat hint) when no interfaces are reported", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ip: "1.2.3.4", online: true, interfaces: [], error: null }),
+    }));
+    render(<VnstatBlock form={form} />);
+
+    expect(await screen.findByText(/vnstat не установлен/)).toBeInTheDocument();
+    expect(screen.getByText(/Установить vnstat/)).toBeInTheDocument();
+  });
+
+  it("offers an interface selector when more than one interface is present", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ip: "1.2.3.4", online: true,
+        interfaces: [
+          { name: "eth0", rx_total: 1, tx_total: 1, rx_month: 0, tx_month: 0, rx_day: 0, tx_day: 0, top_days: [] },
+          { name: "ens3", rx_total: 2, tx_total: 2, rx_month: 0, tx_month: 0, rx_day: 0, tx_day: 0, top_days: [] },
+        ],
+        error: null,
+      }),
+    }));
+    render(<VnstatBlock form={form} />);
+
+    const sel = await screen.findByRole("combobox", { name: "Интерфейс vnstat" });
+    expect((sel as HTMLSelectElement).value).toBe("eth0");
+    expect(within(sel as HTMLElement).getAllByRole("option").map(o => o.textContent))
+      .toEqual(["eth0", "ens3"]);
+  });
+
+  it("shows the vnstat-not-installed reason as an empty state, not an error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ip: "1.2.3.4", online: false, interfaces: [], error: "vnstat not installed" }),
+    }));
+    render(<VnstatBlock form={form} />);
+
+    expect(await screen.findByText(/vnstat не установлен/)).toBeInTheDocument();
   });
 });

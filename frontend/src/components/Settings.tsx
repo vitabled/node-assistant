@@ -634,6 +634,7 @@ export function ThemeTab() {
     console: "Моноширинный, консольный",
     neon: "Неон, свечения и градиенты",
     nodeflow: "Лесная зелень и Inter, как в панели NodeFlow",
+    remnawave: "GitHub-dark и cyan, как в панели Remnawave",
   };
 
   return (

@@ -129,6 +129,17 @@ strong{color:var(--t-hi);font-weight:600}
 .card-p{padding:var(--card-p)}
 .panel{background:var(--bg1);border:1px solid var(--line-soft);border-radius:var(--r-lg)}
 
+/* ── deploy-card masonry + section rails (Remnawave redesign, skin-agnostic) ──
+   CSS-колонки вместо grid: карточки живут своей высотой, сетка не растягивает их
+   по высоте ряда (устраняет «рваные» ряды). Секции — плоские блоки на общем фоне
+   карточки, разделённые hairline, вместо вложенных «серых коробочек». */
+.ni-deploy-grid{ column-width:340px; column-gap:16px; }
+.ni-deploy-card{ break-inside:avoid; margin-bottom:16px; }
+.ni-card-section{ border-top:1px solid var(--line-soft); padding:10px 16px; }
+.ni-card-section-head{ display:flex; align-items:center; gap:6px; margin-bottom:8px; }
+.ni-kv{ display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; padding:3px 0; }
+.ni-kv-label{ color:var(--t-low); }
+
 /* ── tables ── */
 table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl thead th{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
@@ -468,6 +479,79 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 :root[data-skin="nodeflow"][data-theme="light"] .toast.ok{background:rgba(238,248,241,.95);color:#0E5A2E}
 :root[data-skin="nodeflow"][data-theme="light"] .toast.err{background:rgba(253,240,240,.95);color:#C03430}
 :root[data-skin="nodeflow"][data-theme="light"] .toast.info{background:rgba(245,248,246,.96);color:var(--t-mid)}
+
+/* ════════ Remnawave skin — пятый data-skin, аддитивный (как neon/nodeflow) ════════
+   Визуальный язык панели Remnawave: GitHub-dark палитра, Montserrat/Fira Mono,
+   cyan-акцент, плоские полупрозрачные поверхности, радиусы 6/8/16, без blur.
+   Тёмный committed (одна палитра на обе темы, светлая — P2). Акцентных токенов
+   тут НЕТ: их ставит тема-зависимый applyAccent (ACCENTS.remnawave), а инлайн
+   перебивает любой stylesheet — как у nodeflow. */
+:root[data-skin="remnawave"]{
+  --font:'Montserrat',system-ui,sans-serif;
+  --mono:'Fira Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  /* радиусы — резче, чем сейчас */
+  --r-sm:6px; --r-md:8px; --r-lg:16px;
+  /* плотность — чуть плотнее */
+  --row-py:8px; --card-p:16px; --ctl-py:7px; --nav-py:6px;
+  /* стекло убрать: Remnawave — плоские/полупрозрачные поверхности, без blur */
+  --glass-blur:0px;
+}
+/* Dark-committed: идентичная палитра под light и dark (как --term-bg, см. neon). */
+:root[data-skin="remnawave"]:not([data-theme="light"]),
+:root[data-skin="remnawave"][data-theme="light"]{
+  /* поверхности (GitHub-dark ramp) */
+  --bg0:#0d1117;                    /* dark-8 — канвас */
+  --bg1:#161b22;                    /* dark-7 — топбар/сайдбар/панели */
+  --bg2:#1b1f26;                    /* entity-card — карточки/инпуты */
+  --bg3:#21262d;                    /* dark-6 — hover/raised */
+  --line:rgba(255,255,255,.08);     /* бордер карточки */
+  --line-soft:rgba(255,255,255,.06);/* hairline/divider */
+  /* текст (GitHub-dark ramp) */
+  --t-hi:#ffffff;
+  --t-mid:#c9d1d9;                  /* dark-0 */
+  --t-low:#8b949e;                  /* dark-2 (dimmed) */
+  --t-faint:#6e7681;                /* dark-3 */
+  /* статусы (Mantine teal/yellow/red) */
+  --ok:#38d9a9;   --ok-dim:rgba(56,217,169,.14);   --ok-line:rgba(56,217,169,.30);
+  --warn:#fcc419; --warn-dim:rgba(252,196,25,.12); --warn-line:rgba(252,196,25,.28);
+  --err:#ff6b6b;  --err-dim:rgba(255,107,107,.14); --err-line:rgba(255,107,107,.30);
+  --raised:rgba(255,255,255,.02); --row-hover:rgba(255,255,255,.04); --overlay:rgba(0,0,0,.72);
+  --topbar-bg:#161b22;
+  --sidebar-bg:linear-gradient(135deg,#0d1117,#161b22);
+  --term-bg:#0d1117; --scroll-thumb:#30363d;
+  /* тени — мягче и «многослойнее» */
+  --shadow-pop:0 8px 32px rgba(0,0,0,.4),0 2px 8px rgba(0,0,0,.2);
+  --shadow-modal:0 16px 48px rgba(0,0,0,.55);
+  /* data-viz ink — cyan/teal-ориентированный ramp */
+  --viz-1:#2ad4f0; --viz-2:#38d9a9; --viz-3:#fcc419; --viz-4:#ff6b6b;
+  --viz-5:#99f0ff; --viz-6:#5ee3ff; --viz-7:#63e6be; --viz-8:#ffd43b;
+}
+/* Кнопки перестают быть пилюлями — радиус 8px везде. Primary — cyan-заливка +
+   accent-ink; soft — мягкая cyan-подсветка (B4.1/B4.4). */
+:root[data-skin="remnawave"] .btn{ border-radius:8px; }
+:root[data-skin="remnawave"] .btn-ghost{ border-radius:8px; }
+:root[data-skin="remnawave"] .btn-primary{ background:var(--accent); color:var(--accent-ink); border-radius:8px; }
+:root[data-skin="remnawave"] .btn-primary:hover:not(:disabled){ background:var(--accent-hi); }
+:root[data-skin="remnawave"] .btn-soft{ background:var(--accent-dim); border-color:var(--accent-line); color:var(--accent-hi); border-radius:8px; }
+:root[data-skin="remnawave"] .btn-soft:hover:not(:disabled){ background:var(--accent-line); color:var(--accent-hi); }
+/* Активный пункт навигации — soft cyan (переносим паттерн Remnawave-tabs на navitem). */
+:root[data-skin="remnawave"] .navitem.active{
+  color:var(--accent-hi); background:var(--accent-dim); border-color:var(--accent-line);
+}
+:root[data-skin="remnawave"] .navitem.active::before{ display:none; }
+/* Инпуты — радиус 8px (B5). */
+:root[data-skin="remnawave"] .input,
+:root[data-skin="remnawave"] .selectbox,
+:root[data-skin="remnawave"] textarea.input{ border-radius:8px; }
+/* Segmented control — cyan-индикатор (B3). */
+:root[data-skin="remnawave"] .seg.accent button.on{ background:var(--accent); color:var(--accent-ink); }
+/* Тайл иконки заголовка страницы — мягкий cyan (BaseOverlayHeader паттерн). */
+:root[data-skin="remnawave"] .ni-pageicon{
+  width:34px; height:34px; align-items:center; justify-content:center;
+  background:var(--accent-dim); border:1px solid var(--accent-line); border-radius:8px;
+}
+/* Focus — отступаем от Remnawave focusRing:'never' ради a11y: cyan + offset -2px. */
+:root[data-skin="remnawave"] *:focus-visible{ outline:2px solid var(--accent-hi); outline-offset:-2px; }
 
 /* Shimmer skeleton — animated only when motion is allowed. */
 @media (prefers-reduced-motion: no-preference){
