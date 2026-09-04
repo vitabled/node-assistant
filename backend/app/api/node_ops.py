@@ -14,7 +14,10 @@ Steps 1 «Подключение» and 2 «Обновление системы»
 here); the SSH-port network steps are intentionally excluded too — rolling the
 port back on a live box is lockout-prone and out of scope.
 """
+import asyncio
+import json
 import re
+from pathlib import Path
 from urllib.parse import urljoin
 from typing import Callable, Literal, Optional
 
@@ -34,6 +37,9 @@ from app.services import pipeline
 router = APIRouter(prefix="/api/node")
 
 _REMNANODE_REPOSITORY = "remnawave/node"
+_REMNANODE_SNAPSHOT_PATH = Path(__file__).parent.parent / "services" / "remnanode_tags.json"
+_DOCKER_HUB_TIMEOUT = httpx.Timeout(15.0, connect=6.0)
+_DOCKER_HUB_TOTAL_TIMEOUT = 15.0
 _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
 Component = Literal[
@@ -87,8 +93,19 @@ class NodeRemnanodeVersionsRequest(SshCreds):
     ssh_port: int = Field(default=22, ge=1, le=65535)
 
 
-async def _list_remnanode_versions() -> list[str]:
-    """Read tags from the same Docker Hub repository used by the installer."""
+def _snapshot_remnanode_versions() -> list[str]:
+    """Read the packaged, validated Docker Hub tag snapshot."""
+    payload = json.loads(_REMNANODE_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise RuntimeError("Remnanode tag snapshot must be a JSON array")
+    return sorted({
+        tag for tag in payload
+        if isinstance(tag, str) and _DOCKER_TAG_RE.fullmatch(tag)
+    })
+
+
+async def _list_remnanode_versions() -> tuple[list[str], Literal["registry", "snapshot"]]:
+    """Read live Docker Hub tags, falling back to the packaged snapshot on failure."""
     auth_url = "https://auth.docker.io/token"
     tags_url = f"https://registry-1.docker.io/v2/{_REMNANODE_REPOSITORY}/tags/list?n=1000"
     params = {
@@ -96,24 +113,30 @@ async def _list_remnanode_versions() -> list[str]:
         "scope": f"repository:{_REMNANODE_REPOSITORY}:pull",
     }
     tags: set[str] = set()
-    async with httpx.AsyncClient(timeout=20) as client:
-        token_response = await client.get(auth_url, params=params)
-        token_response.raise_for_status()
-        token = token_response.json().get("token")
-        if not isinstance(token, str) or not token:
-            raise RuntimeError("Docker Hub did not return a pull token")
+    try:
+        async with asyncio.timeout(_DOCKER_HUB_TOTAL_TIMEOUT):
+            async with httpx.AsyncClient(timeout=_DOCKER_HUB_TIMEOUT) as client:
+                token_response = await client.get(auth_url, params=params)
+                token_response.raise_for_status()
+                token = token_response.json().get("token")
+                if not isinstance(token, str) or not token:
+                    raise RuntimeError("Docker Hub did not return a pull token")
 
-        while tags_url:
-            response = await client.get(tags_url, headers={"Authorization": f"Bearer {token}"})
-            response.raise_for_status()
-            payload = response.json()
-            tags.update(
-                tag for tag in payload.get("tags", [])
-                if isinstance(tag, str) and _DOCKER_TAG_RE.fullmatch(tag)
-            )
-            next_link = response.links.get("next", {}).get("url")
-            tags_url = urljoin(str(response.url), next_link) if next_link else ""
-    return sorted(tags)
+                while tags_url:
+                    response = await client.get(
+                        tags_url, headers={"Authorization": f"Bearer {token}"}
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    tags.update(
+                        tag for tag in payload.get("tags", [])
+                        if isinstance(tag, str) and _DOCKER_TAG_RE.fullmatch(tag)
+                    )
+                    next_link = response.links.get("next", {}).get("url")
+                    tags_url = urljoin(str(response.url), next_link) if next_link else ""
+        return sorted(tags), "registry"
+    except Exception:
+        return _snapshot_remnanode_versions(), "snapshot"
 
 
 async def _current_remnanode_version(req: NodeRemnanodeVersionsRequest) -> Optional[str]:
@@ -134,20 +157,15 @@ async def _current_remnanode_version(req: NodeRemnanodeVersionsRequest) -> Optio
 
 @router.get("/remnanode/versions")
 async def remnanode_versions(req: NodeRemnanodeVersionsRequest):
-    """List live Docker Hub tags and, when reachable, the node's current tag."""
-    try:
-        versions = await _list_remnanode_versions()
-    except (httpx.HTTPError, ValueError, RuntimeError) as exc:
-        raise HTTPException(502, f"Не удалось получить версии Remnanode из Docker Hub: {exc}")
+    """List registry tags or the packaged snapshot, plus the node's current tag."""
+    versions, source = await _list_remnanode_versions()
 
-    body: dict[str, object] = {"versions": versions}
+    current: Optional[str] = None
     try:
         current = await _current_remnanode_version(req)
     except Exception:
-        current = None
-    if current:
-        body["current"] = current
-    return body
+        pass
+    return {"versions": versions, "current": current, "source": source}
 
 
 # ── Read-only detection of already-installed components ────────
@@ -321,11 +339,10 @@ async def node_detect(req: NodeDetectRequest):
 async def node_step(req: NodeOpRequest, background_tasks: BackgroundTasks):
     if req.component == "remnanode" and req.action == "reinstall" and req.version:
         try:
-            versions: Optional[list[str]] = await _list_remnanode_versions()
-        except (httpx.HTTPError, ValueError, RuntimeError):
-            # The registry being unavailable must not turn a previously valid
-            # manual operation into a hard failure. When it answered, however,
-            # its list is authoritative, including an unexpectedly empty one.
+            versions, _source = await _list_remnanode_versions()
+        except Exception:
+            # A malformed/unreadable local snapshot must not turn a previously
+            # valid manual operation into a hard failure.
             versions = None
         if versions is not None and req.version not in versions:
             raise HTTPException(

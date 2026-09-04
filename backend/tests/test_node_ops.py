@@ -5,6 +5,7 @@ import uuid
 from typing import Any, cast
 
 import pytest
+import httpx
 from fastapi import BackgroundTasks, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -79,7 +80,7 @@ def test_remnanode_reinstall_passes_selected_image_tag(monkeypatch):
 
 def test_remnanode_reinstall_rejects_tag_absent_from_registry(monkeypatch):
     async def fake_versions():
-        return ["latest", "v2.8.0"]
+        return ["latest", "v2.8.0"], "registry"
 
     monkeypatch.setattr(node_ops, "_list_remnanode_versions", fake_versions)
     with pytest.raises(HTTPException) as error:
@@ -106,7 +107,7 @@ def test_remnanode_versions_reads_registry_tags_and_current_image(monkeypatch):
             pass
 
     async def fake_versions():
-        return ["latest", "v2.8.0"]
+        return ["latest", "v2.8.0"], "registry"
 
     monkeypatch.setattr(node_ops, "SSHSession", FakeSSH)
     monkeypatch.setattr(node_ops, "_list_remnanode_versions", fake_versions)
@@ -115,7 +116,64 @@ def test_remnanode_versions_reads_registry_tags_and_current_image(monkeypatch):
         json={"ip": "1.2.3.4", "ssh_password": "pw"},
     )
     assert response.status_code == 200
-    assert response.json() == {"versions": ["latest", "v2.8.0"], "current": "v2.8.0"}
+    assert response.json() == {
+        "versions": ["latest", "v2.8.0"],
+        "current": "v2.8.0",
+        "source": "registry",
+    }
+
+
+def test_remnanode_versions_use_snapshot_when_registry_is_unavailable(monkeypatch):
+    class FailingAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def get(self, *_args, **_kwargs):
+            raise httpx.ConnectError("Docker Hub unavailable")
+
+    monkeypatch.setattr(node_ops.httpx, "AsyncClient", FailingAsyncClient)
+
+    versions, source = asyncio.run(node_ops._list_remnanode_versions())
+
+    assert source == "snapshot"
+    assert "latest" in versions
+    assert "sni-2.1.0" in versions
+
+
+def test_remnanode_versions_return_snapshot_when_node_is_unreachable(monkeypatch):
+    class UnreachableSSH:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def connect(self):
+            raise OSError("node unavailable")
+
+        async def close(self):
+            pass
+
+    async def fake_versions():
+        return ["latest"], "snapshot"
+
+    monkeypatch.setattr(node_ops, "SSHSession", UnreachableSSH)
+    monkeypatch.setattr(node_ops, "_list_remnanode_versions", fake_versions)
+
+    response = client.request(
+        "GET", "/api/node/remnanode/versions", headers=_auth(),
+        json={"ip": "1.2.3.4", "ssh_password": "pw"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "versions": ["latest"],
+        "current": None,
+        "source": "snapshot",
+    }
 
 
 # ── uninstall scripts: right teardown command per component, idempotent ──
