@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import shlex
 import threading
 from pathlib import Path
 from typing import Optional
 
-from app.services import accounts
+from app.services import accounts, ssh_auth
+from app.services.ssh_manager import SSHSession
 
 _LOCK = threading.Lock()
 MAX_ENTRIES = 500
@@ -75,10 +77,23 @@ _BANLIST_FILE = "/etc/fail2ban/nai-banlist.txt"
 _CRON_MARK = "nai-f2b-banlist"
 
 
-def sync_script(entries: list[str]) -> str:
+def sync_script(entries: list[str], jails: Optional[list[str]] = None) -> str:
     """Bash-синхронизация: баним список, разбаниваем своё снятое, персистентим.
     Идемпотентна — безопасна на каждом деплое."""
     quoted = "\n".join(shlex.quote(e) for e in entries)
+    jail_names = jails or ["sshd"]
+    ban_commands = "\n  ".join(
+        f"fail2ban-client set {shlex.quote(jail)} banip \"$ip\" >/dev/null 2>&1 || true"
+        for jail in jail_names
+    )
+    unban_commands = "\n    ".join(
+        f"fail2ban-client set {shlex.quote(jail)} unbanip \"$old\" >/dev/null 2>&1 || true"
+        for jail in jail_names
+    )
+    reboot_commands = " ".join(
+        f"fail2ban-client set {shlex.quote(jail)} banip \\\"\\$ip\\\";"
+        for jail in jail_names
+    )
     return f"""\
 set -u
 if ! command -v fail2ban-client >/dev/null 2>&1; then
@@ -93,19 +108,88 @@ NAIEOF
 # 2. Баним всё из списка (повторный banip безвреден)
 while IFS= read -r ip; do
   [ -n "$ip" ] || continue
-  fail2ban-client set sshd banip "$ip" >/dev/null 2>&1 || true
+  {ban_commands}
 done < {_BANLIST_FILE}
 
 # 3. Разбаниваем то, что мы банили раньше, но чего в списке больше нет
 if [ -f {_BANLIST_FILE}.prev ]; then
   while IFS= read -r old; do
     [ -n "$old" ] || continue
-    grep -qxF "$old" {_BANLIST_FILE} || fail2ban-client set sshd unbanip "$old" >/dev/null 2>&1 || true
+    grep -qxF "$old" {_BANLIST_FILE} || (
+      {unban_commands}
+    )
   done < {_BANLIST_FILE}.prev
 fi
 cp {_BANLIST_FILE} {_BANLIST_FILE}.prev
 
 # 4. Персистентность: повторное применение после рестарта fail2ban/сервера
-(crontab -l 2>/dev/null | grep -v '{_CRON_MARK}'; echo "@reboot sleep 20 && while IFS= read -r ip; do [ -n \\"\\$ip\\" ] && fail2ban-client set sshd banip \\"\\$ip\\"; done < {_BANLIST_FILE} # {_CRON_MARK}") | crontab - 2>/dev/null || true
+(crontab -l 2>/dev/null | grep -v '{_CRON_MARK}'; echo "@reboot sleep 20 && while IFS= read -r ip; do [ -n \\"\\$ip\\" ] && {reboot_commands}; done < {_BANLIST_FILE} # {_CRON_MARK}") | crontab - 2>/dev/null || true
 echo "[f2b-list] применено записей: $(grep -c . {_BANLIST_FILE} 2>/dev/null || echo 0)"
 """
+
+
+def parse_banned_output(raw: str) -> list[str]:
+    """Extract IP addresses from fail2ban-client's version-dependent output."""
+    result: list[str] = []
+    for token in re.split(r"[\s,\[\]()'\"]+", raw or ""):
+        try:
+            address = str(ipaddress.ip_address(token))
+        except ValueError:
+            continue
+        if address not in result:
+            result.append(address)
+    return result
+
+
+async def collect_node(req, jails: list[str]) -> list[str]:
+    """Read active bans from requested jails without changing the central list."""
+    ssh = None
+    try:
+        ssh = SSHSession(
+            req.ip, req.ssh_port, req.ssh_user, **await ssh_auth.resolve(req)
+        )
+        await ssh.connect()
+        ips: list[str] = []
+        for jail in jails:
+            output = await ssh.get_output(
+                f"fail2ban-client get {shlex.quote(jail)} banned 2>/dev/null || true"
+            )
+            for address in parse_banned_output(output):
+                if address not in ips:
+                    ips.append(address)
+        return ips
+    finally:
+        if ssh is not None:
+            await ssh.close()
+
+
+async def apply_node(req, entries: list[str], jails: list[str]) -> dict[str, int]:
+    """Apply the central list and only unban addresses recorded by NAI earlier."""
+    ssh = None
+    try:
+        ssh = SSHSession(
+            req.ip, req.ssh_port, req.ssh_user, **await ssh_auth.resolve(req)
+        )
+        await ssh.connect()
+        current_by_jail = []
+        for jail in jails:
+            output = await ssh.get_output(
+                f"fail2ban-client get {shlex.quote(jail)} banned 2>/dev/null || true"
+            )
+            current_by_jail.append(set(parse_banned_output(output)))
+        previous = set(parse_banned_output(await ssh.get_output(
+            f"cat {_BANLIST_FILE}.prev 2>/dev/null || true"
+        )))
+        desired = set(entries)
+        skipped = sum(
+            1 for entry in entries if all(entry in current for current in current_by_jail)
+        )
+        await ssh.get_script_output(sync_script(entries, jails))
+        return {
+            "applied": len(entries) - skipped,
+            "unbanned": len(previous - desired),
+            "skipped": skipped,
+        }
+    finally:
+        if ssh is not None:
+            await ssh.close()
