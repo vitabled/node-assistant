@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Plus, Rocket, X, ServerCog, Search, Loader2,
   CheckCircle2, XCircle, HelpCircle,
@@ -7,6 +7,8 @@ import { DeployCard } from "./DeployCard";
 import { DeployForm, type FormData } from "./DeployForm";
 import { deployJobsKey } from "../auth/store";
 import { Page } from "../theme/ui";
+import { fetchDeployJobs, putDeployJobs, reconcileJobs } from "./deployJobsSync";
+import { toast } from "./infra/Toast";
 
 export interface DeployJobSummary {
   taskId:     string;
@@ -37,6 +39,64 @@ export function DeployDashboard() {
   // `existingPreset` = detected creds + positive install_components selection.
   const [showExisting,   setShowExisting]   = useState(false);
   const [existingPreset, setExistingPreset] = useState<Partial<FormData> | null>(null);
+
+  // Unsynced-state flag: true once a server push has failed, so we only toast
+  // once per outage (and the next successful push clears it).
+  const dirtyRef = useRef(false);
+
+  // Push the full list to the server. On failure we keep the change in
+  // localStorage (already written by the caller), mark dirty and toast — the
+  // next mutation re-pushes the whole list, and the mount merge re-syncs any
+  // local-only taskId after a reload, so nothing is lost.
+  const pushJobs = useCallback(async (next: DeployJobSummary[]) => {
+    try {
+      await putDeployJobs(next);
+      dirtyRef.current = false;
+    } catch {
+      if (!dirtyRef.current) {
+        toast("Не удалось синхронизировать карточки с сервером. Изменения сохранены локально.", "error");
+      }
+      dirtyRef.current = true;
+    }
+  }, []);
+
+  // Single mutation path: derive the next list from the latest committed state
+  // (NOT a possibly-stale closure), persist to the localStorage cache and push to
+  // the server. Keeps the functional-update fix from addJob/retryJob for every
+  // mutation (remove/color/status too).
+  const commitJobs = useCallback((updater: (prev: DeployJobSummary[]) => DeployJobSummary[]) => {
+    setJobs(prev => {
+      const next = updater(prev);
+      saveJobs(next);
+      void pushJobs(next);
+      return next;
+    });
+  }, [pushJobs]);
+
+  // On mount, load from the server. localStorage is only a cache here, so:
+  //  - server empty + local non-empty -> PUT the whole local list (migration);
+  //  - server non-empty -> server wins, but local-only taskIds (not yet synced)
+  //    are kept and pushed;
+  //  - server unreachable (network/5xx/401) -> degrade to localStorage (the
+  //    initial state is already loadJobs(); nothing to do).
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const serverJobs = await fetchDeployJobs<DeployJobSummary>();
+        if (!live) return;
+        setJobs(prev => {
+          const { merged, localOnly } = reconcileJobs(serverJobs, prev);
+          saveJobs(merged);
+          if (localOnly.length > 0) void pushJobs(merged);
+          return merged;
+        });
+      } catch {
+        // degrade — localStorage stays the source of truth.
+      }
+    })();
+    return () => { live = false; };
+  }, [pushJobs]);
 
   const submitDeploy = useCallback(async (data: FormData): Promise<string> => {
     const res = await fetch("/api/deploy", {
@@ -81,15 +141,11 @@ export function DeployDashboard() {
     // modal may have been open while running cards streamed status updates and
     // called setJobs), which previously dropped the new card from the live
     // grid even though it was persisted — so it only showed after an F5.
-    setJobs(prev => {
-      const updated = [job, ...prev];
-      saveJobs(updated);
-      return updated;
-    });
+    commitJobs(prev => [job, ...prev]);
     setShowForm(false);
     setEditJob(null);
     setExistingPreset(null);
-  }, [submitDeploy]);
+  }, [submitDeploy, commitJobs]);
 
   const retryJob = useCallback(async (job: DeployJobSummary) => {
     const task_id = await submitDeploy(job.savedForm);
@@ -99,12 +155,8 @@ export function DeployDashboard() {
       startedAt: Date.now(),
       finalStatus: undefined,
     };
-    setJobs(prev => {
-      const updated = [newJob, ...prev.filter(j => j.taskId !== job.taskId)];
-      saveJobs(updated);
-      return updated;
-    });
-  }, [submitDeploy]);
+    commitJobs(prev => [newJob, ...prev.filter(j => j.taskId !== job.taskId)]);
+  }, [submitDeploy, commitJobs]);
 
   const restartWaitingJob = useCallback(async (job: DeployJobSummary) => {
     const res = await fetch("/api/deploy/restart", {
@@ -120,49 +172,35 @@ export function DeployDashboard() {
     const replacement: DeployJobSummary = {
       ...job, taskId: task_id, startedAt: Date.now(), finalStatus: undefined,
     };
-    setJobs(prev => {
+    commitJobs(prev => {
       // The backend returns the same replacement for duplicate requests. Filter
       // both ids so a double-click can never create duplicate cards either.
-      const updated = [replacement, ...prev.filter(
+      return [replacement, ...prev.filter(
         j => j.taskId !== job.taskId && j.taskId !== task_id,
       )];
-      saveJobs(updated);
-      return updated;
     });
-  }, []);
+  }, [commitJobs]);
 
   const removeJob = useCallback((taskId: string) => {
-    setJobs(prev => {
-      const updated = prev.filter(j => j.taskId !== taskId);
-      saveJobs(updated);
-      return updated;
-    });
-  }, []);
+    commitJobs(prev => prev.filter(j => j.taskId !== taskId));
+  }, [commitJobs]);
 
   const updateJobStatus = useCallback((taskId: string, status: "success" | "failed") => {
-    setJobs(prev => {
-      const updated = prev.map(j =>
-        j.taskId === taskId ? { ...j, finalStatus: status } : j
-      );
-      saveJobs(updated);
-      return updated;
-    });
-  }, []);
+    commitJobs(prev => prev.map(j =>
+      j.taskId === taskId ? { ...j, finalStatus: status } : j
+    ));
+  }, [commitJobs]);
 
   // Цветовая маркировка виджета ноды (Wave-4 PR-9).
   const changeJobColor = useCallback((taskId: string, colorKey: string | null) => {
-    setJobs(prev => {
-      const updated = prev.map(j => {
-        if (j.taskId !== taskId) return j;
-        const c = { ...j };
-        if (colorKey) c.color = colorKey;
-        else delete c.color;
-        return c;
-      });
-      saveJobs(updated);
-      return updated;
-    });
-  }, []);
+    commitJobs(prev => prev.map(j => {
+      if (j.taskId !== taskId) return j;
+      const c = { ...j };
+      if (colorKey) c.color = colorKey;
+      else delete c.color;
+      return c;
+    }));
+  }, [commitJobs]);
 
   return (
     <Page max={1152}>

@@ -247,6 +247,11 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/cliproxy/oauth", {"GET": "assistant.view", "*": "assistant.edit"}),
 
     # ── деплой нод ───────────────────────────────────────────
+    ("/api/deploy-jobs", {
+        "GET": ("deploy.view", _CREDS),
+        "POST": ("deploy.create", _CREDS),
+        "*": ("deploy.edit", _CREDS),
+    }),
     ("/api/node-ops/add-node", {"*": "deploy.create"}),
     ("/api/node-ops/deploy", {"*": ("deploy.execute", _CREDS)}),
     ("/api/node-ops", {"PATCH": "deploy.edit", "DELETE": "deploy.edit"}),
@@ -254,6 +259,7 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/deploy/stop", {"*": "deploy.execute"}),
     ("/api/deploy", {"*": ("deploy.execute", _CREDS)}),
     ("/api/node/detect", {"*": ("deploy.view", _CREDS)}),
+    ("/api/node/remnanode/versions", {"*": ("deploy.view", _CREDS)}),
     ("/api/node/step", {"*": ("deploy.execute", _CREDS)}),
     ("/api/node/xray-version", {"*": ("deploy.execute", _CREDS)}),
     ("/api/regru-vip/deploy", {"*": ("deploy.execute", _CREDS)}),
