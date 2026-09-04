@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense, type ReactNode } from "react";
 
 /** True below the lg breakpoint (mobile/small tablet) — used to switch the
  *  certs tab to a vertical stack with a draggable splitter. */
@@ -49,67 +49,70 @@ function Splitter({ onDrag }: { onDrag: (dy: number) => void }) {
   );
 }
 import {
-  CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight,
+  CheckCircle2, XCircle, Terminal as TermIcon, ChevronRight, Loader2,
 } from "lucide-react";
 import { Sidebar, NAV_TABS, tabPermission, type Tab } from "./components/Sidebar";
 import { InstanceSidebar }                 from "./components/InstanceSidebar";
 import { BottomTabBar, PRIMARY_TABS }       from "./components/BottomTabBar";
 import { Dashboard }                       from "./components/Dashboard";
 import { DeployDashboard }                 from "./components/DeployDashboard";
-import { Settings }                        from "./components/Settings";
-import { Templates }                       from "./components/Templates";
-import { Hosts }                           from "./components/Hosts";
 import { CertsForm, type CertsFormData }  from "./components/CertsForm";
 import { F2bList }                        from "./components/F2bList";
-import { DomainsPanel }                    from "./components/DomainsPanel";
-import { TrafficRules }                   from "./components/TrafficRules";
-import { Bridges }                        from "./components/bridges/Bridges";
-import { AutoTemplate }                   from "./components/auto/AutoTemplate";
-import { UsersStats }                      from "./components/stats/UsersStats";
-import { SpeedTests }                      from "./components/stats/SpeedTests";
-import { Placeholder }                     from "./components/rw/Placeholder";
-import { Profiles }                         from "./components/profiles/Profiles";
-import { MihomoEditor }                     from "./components/MihomoEditor";
-import { ConfigTemplates }                  from "./components/configs/ConfigTemplates";
-import { Library }                          from "./components/Library";
-import { RuleBuilder }                      from "./components/automation/RuleBuilder";
-import { Notifications }                    from "./components/automation/Notifications";
-import { AiChat }                           from "./components/automation/AiChat";
-import { Migration }                        from "./components/rw/Migration";
-import { RegruTool }                        from "./components/obhod/RegruTool";
-import { BeelineCdnTool }                   from "./components/obhod/BeelineCdnTool";
-import { Subnets }                           from "./components/obhod/Subnets";
-import { PanelDashboard }                   from "./components/rw/PanelDashboard";
-import { SubPages }                        from "./components/rw/SubPages";
-import { PanelVariables }                  from "./components/rw/PanelVariables";
-import { Backup }                          from "./components/rw/Backup";
-import { HostingsCatalog }                from "./components/hostings/HostingsCatalog";
-import { HostingsMap }                     from "./components/hostings/HostingsMap";
-import { SubscriptionAnalyze }             from "./components/SubscriptionAnalyze";
-import { SiteCopy }                        from "./components/hostings/SiteCopy";
-import { Vault }                           from "./components/vault/Vault";
-import { CfOverview }                      from "./components/cloudflare/CfOverview";
-import { CfSubscriptions }                 from "./components/cloudflare/CfSubscriptions";
-import { CfUsage }                         from "./components/cloudflare/CfUsage";
-import { CfPayments }                      from "./components/cloudflare/CfPayments";
-import { CfDomains }                       from "./components/cloudflare/CfDomains";
-import { HaproxyOverview }                 from "./components/haproxy/HaproxyOverview";
-import { HaproxyNodes }                    from "./components/haproxy/HaproxyNodes";
-import { HaproxyRoutes }                   from "./components/haproxy/HaproxyRoutes";
-import { HaproxyTraffic }                  from "./components/haproxy/HaproxyTraffic";
-import { HaproxyFirewall }                 from "./components/haproxy/HaproxyFirewall";
-import { HaproxyReleases }                 from "./components/haproxy/HaproxyReleases";
-import { InfraDashboard }                 from "./components/infra/InfraDashboard";
-import { BedolagaDashboard }              from "./components/bedolaga/BedolagaDashboard";
-import { BedolagaChats }                  from "./components/bedolaga/BedolagaChats";
-import { BedolagaKanban }                 from "./components/bedolaga/BedolagaKanban";
-import { BedolagaAiSettings }             from "./components/bedolaga/BedolagaAiSettings";
-import { InfraProviders }                 from "./components/infra/InfraProviders";
-import { InfraProjects }                  from "./components/infra/InfraProjects";
-import { InfraServices }                  from "./components/infra/InfraServices";
-import { InfraPayments }                  from "./components/infra/InfraPayments";
-import { InfraSettings }                  from "./components/infra/InfraSettings";
-import { InfraApiTokens }                 from "./components/infra/InfraApiTokens";
+// ── Тяжёлые экраны грузятся лениво (React.lazy): раньше все ~50 разделов
+//    сидели в одном входном чанке (~2.4 МБ JS). Теперь у каждого раздела свой
+//    chunk, который докачивается только при открытии вкладки; Suspense вокруг
+//    экрана показывает компактный скелетон на время загрузки чанка. ──
+const Settings           = lazy(() => import("./components/Settings").then(m => ({ default: m.Settings })));
+const Templates          = lazy(() => import("./components/Templates").then(m => ({ default: m.Templates })));
+const Hosts              = lazy(() => import("./components/Hosts").then(m => ({ default: m.Hosts })));
+const DomainsPanel       = lazy(() => import("./components/DomainsPanel").then(m => ({ default: m.DomainsPanel })));
+const TrafficRules       = lazy(() => import("./components/TrafficRules").then(m => ({ default: m.TrafficRules })));
+const Bridges            = lazy(() => import("./components/bridges/Bridges").then(m => ({ default: m.Bridges })));
+const AutoTemplate       = lazy(() => import("./components/auto/AutoTemplate").then(m => ({ default: m.AutoTemplate })));
+const UsersStats         = lazy(() => import("./components/stats/UsersStats").then(m => ({ default: m.UsersStats })));
+const SpeedTests         = lazy(() => import("./components/stats/SpeedTests").then(m => ({ default: m.SpeedTests })));
+const Profiles           = lazy(() => import("./components/profiles/Profiles").then(m => ({ default: m.Profiles })));
+const MihomoEditor       = lazy(() => import("./components/MihomoEditor").then(m => ({ default: m.MihomoEditor })));
+const ConfigTemplates    = lazy(() => import("./components/configs/ConfigTemplates").then(m => ({ default: m.ConfigTemplates })));
+const Library            = lazy(() => import("./components/Library").then(m => ({ default: m.Library })));
+const RuleBuilder        = lazy(() => import("./components/automation/RuleBuilder").then(m => ({ default: m.RuleBuilder })));
+const Notifications      = lazy(() => import("./components/automation/Notifications").then(m => ({ default: m.Notifications })));
+const AiChat             = lazy(() => import("./components/automation/AiChat").then(m => ({ default: m.AiChat })));
+const Migration          = lazy(() => import("./components/rw/Migration").then(m => ({ default: m.Migration })));
+const RegruTool          = lazy(() => import("./components/obhod/RegruTool").then(m => ({ default: m.RegruTool })));
+const BeelineCdnTool     = lazy(() => import("./components/obhod/BeelineCdnTool").then(m => ({ default: m.BeelineCdnTool })));
+const Subnets            = lazy(() => import("./components/obhod/Subnets").then(m => ({ default: m.Subnets })));
+const PanelDashboard     = lazy(() => import("./components/rw/PanelDashboard").then(m => ({ default: m.PanelDashboard })));
+const SubPages           = lazy(() => import("./components/rw/SubPages").then(m => ({ default: m.SubPages })));
+const PanelVariables     = lazy(() => import("./components/rw/PanelVariables").then(m => ({ default: m.PanelVariables })));
+const Backup             = lazy(() => import("./components/rw/Backup").then(m => ({ default: m.Backup })));
+const HostingsCatalog    = lazy(() => import("./components/hostings/HostingsCatalog").then(m => ({ default: m.HostingsCatalog })));
+const HostingsMap        = lazy(() => import("./components/hostings/HostingsMap").then(m => ({ default: m.HostingsMap })));
+const SubscriptionAnalyze = lazy(() => import("./components/SubscriptionAnalyze").then(m => ({ default: m.SubscriptionAnalyze })));
+const SiteCopy           = lazy(() => import("./components/hostings/SiteCopy").then(m => ({ default: m.SiteCopy })));
+const Vault              = lazy(() => import("./components/vault/Vault").then(m => ({ default: m.Vault })));
+const CfOverview         = lazy(() => import("./components/cloudflare/CfOverview").then(m => ({ default: m.CfOverview })));
+const CfSubscriptions    = lazy(() => import("./components/cloudflare/CfSubscriptions").then(m => ({ default: m.CfSubscriptions })));
+const CfUsage            = lazy(() => import("./components/cloudflare/CfUsage").then(m => ({ default: m.CfUsage })));
+const CfPayments         = lazy(() => import("./components/cloudflare/CfPayments").then(m => ({ default: m.CfPayments })));
+const CfDomains          = lazy(() => import("./components/cloudflare/CfDomains").then(m => ({ default: m.CfDomains })));
+const HaproxyOverview    = lazy(() => import("./components/haproxy/HaproxyOverview").then(m => ({ default: m.HaproxyOverview })));
+const HaproxyNodes       = lazy(() => import("./components/haproxy/HaproxyNodes").then(m => ({ default: m.HaproxyNodes })));
+const HaproxyRoutes      = lazy(() => import("./components/haproxy/HaproxyRoutes").then(m => ({ default: m.HaproxyRoutes })));
+const HaproxyTraffic     = lazy(() => import("./components/haproxy/HaproxyTraffic").then(m => ({ default: m.HaproxyTraffic })));
+const HaproxyFirewall    = lazy(() => import("./components/haproxy/HaproxyFirewall").then(m => ({ default: m.HaproxyFirewall })));
+const HaproxyReleases    = lazy(() => import("./components/haproxy/HaproxyReleases").then(m => ({ default: m.HaproxyReleases })));
+const InfraDashboard     = lazy(() => import("./components/infra/InfraDashboard").then(m => ({ default: m.InfraDashboard })));
+const BedolagaDashboard  = lazy(() => import("./components/bedolaga/BedolagaDashboard").then(m => ({ default: m.BedolagaDashboard })));
+const BedolagaChats      = lazy(() => import("./components/bedolaga/BedolagaChats").then(m => ({ default: m.BedolagaChats })));
+const BedolagaKanban     = lazy(() => import("./components/bedolaga/BedolagaKanban").then(m => ({ default: m.BedolagaKanban })));
+const BedolagaAiSettings = lazy(() => import("./components/bedolaga/BedolagaAiSettings").then(m => ({ default: m.BedolagaAiSettings })));
+const InfraProviders     = lazy(() => import("./components/infra/InfraProviders").then(m => ({ default: m.InfraProviders })));
+const InfraProjects      = lazy(() => import("./components/infra/InfraProjects").then(m => ({ default: m.InfraProjects })));
+const InfraServices      = lazy(() => import("./components/infra/InfraServices").then(m => ({ default: m.InfraServices })));
+const InfraPayments      = lazy(() => import("./components/infra/InfraPayments").then(m => ({ default: m.InfraPayments })));
+const InfraSettings      = lazy(() => import("./components/infra/InfraSettings").then(m => ({ default: m.InfraSettings })));
+const InfraApiTokens     = lazy(() => import("./components/infra/InfraApiTokens").then(m => ({ default: m.InfraApiTokens })));
 import { Toaster }                        from "./components/infra/Toast";
 import { StepProgress, RENEW_STEPS }       from "./components/StepProgress";
 import { TerminalOutput }                  from "./components/TerminalOutput";
@@ -139,6 +142,19 @@ function Screen({ tabKey: k, children }: { tabKey: string; children: ReactNode }
     <motion.div key={k} style={style} variants={tabFade} initial="initial" animate="animate">
       {children}
     </motion.div>
+  );
+}
+
+// Compact skeleton while a lazily-loaded screen chunk is downloading.
+function TabFallback() {
+  return (
+    <div style={{
+      flex: 1, display: "flex", flexDirection: "column", minHeight: 0,
+      alignItems: "center", justifyContent: "center", gap: 10,
+    }}>
+      <Loader2 size={18} className="animate-spin" style={{ color: "var(--t-faint)" }} />
+      <span className="text-xs" style={{ color: "var(--t-faint)" }}>Загрузка раздела…</span>
+    </div>
   );
 }
 
@@ -391,6 +407,7 @@ export default function App() {
 
         {/* Screen */}
         <main className="ni-main" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <Suspense fallback={<TabFallback />}>
           <Screen tabKey={tab}>
           {tab === "dashboard" && <Dashboard />}
           {tab === "deploy" && <DeployDashboard />}
@@ -550,6 +567,7 @@ export default function App() {
             </div>
           )}
           </Screen>
+          </Suspense>
         </main>
       </div>
 

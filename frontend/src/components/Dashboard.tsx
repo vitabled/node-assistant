@@ -220,6 +220,9 @@ function XrayUptime() {
   const [instances, setInstances] = useState<{ id: string; name: string }[]>([]);
   const [checkerId, setCheckerId] = useState("local");
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Сигнатура последнего ответа: пока данные не изменились, поллинг не
+  // перерисовывает страницу (раньше каждый тик 10 с заменял весь state).
+  const lastSig = useRef("");
 
   useEffect(() => {
     fetch("/api/checker/instances").then(r => r.json())
@@ -233,8 +236,12 @@ function XrayUptime() {
         fetch(`/api/checker/statuspage?ticks=${n}&checker_id=${encodeURIComponent(checkerId)}`).then(r => r.json()),
         fetch(`/api/checker/incidents?days=7&checker_id=${encodeURIComponent(checkerId)}`).then(r => r.json()).catch(() => ({ incidents: [] })),
       ]);
+      const arr = Array.isArray(inc?.incidents) ? inc.incidents : [];
+      const sig = JSON.stringify([s, arr]);
+      if (sig === lastSig.current) { setLoading(false); return; }
+      lastSig.current = sig;
       setData(s);
-      setIncidents(Array.isArray(inc.incidents) ? inc.incidents : []);
+      setIncidents(arr);
     } catch { /* keep last */ }
     setLoading(false);
   }, [checkerId]);
@@ -414,6 +421,7 @@ function ServerUptime() {
   const [modal, setModal]       = useState<{ editing?: Node } | null>(null);
   const [importing, setImporting] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastSig = useRef("");
 
   const load = useCallback(async (n: number) => {
     try {
@@ -421,8 +429,12 @@ function ServerUptime() {
         fetch(`/api/server-monitor/statuspage?ticks=${n}`).then(r => r.json()),
         fetch(`/api/server-monitor/incidents?days=7`).then(r => r.json()).catch(() => ({ incidents: [] })),
       ]);
+      const arr = Array.isArray(inc?.incidents) ? inc.incidents : [];
+      const sig = JSON.stringify([s, arr]);
+      if (sig === lastSig.current) { setLoading(false); return; }
+      lastSig.current = sig;
       setData(s);
-      setIncidents(Array.isArray(inc.incidents) ? inc.incidents : []);
+      setIncidents(arr);
     } catch { /* keep last */ }
     setLoading(false);
   }, []);

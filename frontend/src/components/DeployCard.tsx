@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, memo } from "react";
 import {
   X, Square, Server, CheckCircle2, XCircle, Loader2,
   Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck, Youtube,
@@ -90,7 +90,10 @@ interface Props {
   onColorChange?: (taskId: string, colorKey: string | null) => void;
 }
 
-export function DeployCard({ job, onRemove, onEdit, onRetry, onRestart, onStatusChange, onColorChange }: Props) {
+// memo: карточка перерисовывается только когда меняется её собственный job
+// (статус/цвет) — апдейт соседней карточки (stream шагов) не перерисовывает
+// всю сетку «Деплой нод» (раньше каждый onStatusChange дёргал все карточки).
+function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusChange, onColorChange }: Props) {
   const [logs,       setLogs]       = useState<string[]>([]);
   const [stepStatus, setStepStatus] = useState<StatusFrame>(
     job.finalStatus
@@ -125,6 +128,10 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onRestart, onStatus
   const [security, setSecurity] = useState<SecurityStats | null>(null);
   const [traffic,  setTraffic]  = useState<TrafficStats | null>(null);
   const [cert,     setCert]     = useState<CertInfo | null>(null);
+  // Первая попытка сбора завершилась (успех/офлайн/ошибка). До этого момента
+  // карточка показывает компактный скелетон вместо пачки пустых блоков — так
+  // она не «торчит» раздутой, пока по SSH ещё едут название/безопасность.
+  const [statsReady, setStatsReady] = useState(false);
   useEffect(() => {
     if (stepStatus.status !== "success") return;
     const f = job.savedForm;
@@ -148,6 +155,7 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onRestart, onStatus
         if (d.trafficStats)  setTraffic(d.trafficStats);
         setCert(d.certInfo ?? null);
       } catch { /* keep last */ }
+      finally { if (alive) setStatsReady(true); }
     };
     fetchStats();
     const id = setInterval(fetchStats, 300_000);   // 5 min
@@ -379,16 +387,29 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onRestart, onStatus
 
         {/* Security + traffic blocks — only for SUCCESS nodes. The traffic block
             is hidden when the node was deployed without vnstat (install_vnstat
-            defaults to true, so pre-existing cards keep showing it). */}
+            defaults to true, so pre-existing cards keep showing it). Пока SSH-сбор
+            (название/безопасность/статус) не завершился — вместо стопки пустых
+            блоков показываем один компактный скелетон; пустые секции не рисуем. */}
         {stepStatus.status === "success" && (
           <>
-            <SecurityBlock stats={security} onUpdateXray={runXrayUpdate} xrayUpdateBusy={opBusy} />
-            {job.savedForm.install_vnstat !== false && <TrafficBlock stats={traffic} />}
-            {job.savedForm.mode !== "haproxy" && <CertBlock cert={cert} />}
+            {!statsReady ? (
+              <ServerDataSkeleton />
+            ) : (
+              <>
+                {security && <SecurityBlock stats={security} onUpdateXray={runXrayUpdate} xrayUpdateBusy={opBusy} />}
+                {job.savedForm.install_vnstat !== false && traffic && <TrafficBlock stats={traffic} />}
+                {job.savedForm.mode !== "haproxy" && cert && <CertBlock cert={cert} />}
+                {!security && !traffic && (
+                  <p className="mx-4 mb-3 text-[11px] text-[var(--t-faint)] flex items-center gap-1.5">
+                    <ShieldAlert size={11} /> Сервер недоступен — данные безопасности и метрики не собраны.
+                  </p>
+                )}
+              </>
+            )}
             {job.savedForm.mode !== "haproxy" && (
               <button type="button" onClick={() => setShowReplace(true)}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors
-                           bg-[var(--bg2)] hover:bg-[var(--bg3)] text-[var(--t-mid)] border-[var(--line)]">
+                          bg-[var(--bg2)] hover:bg-[var(--bg3)] text-[var(--t-mid)] border-[var(--line)]">
                 <ArrowLeftRight size={12} /> Сменить домен
               </button>
             )}
@@ -511,7 +532,22 @@ export function DeployCard({ job, onRemove, onEdit, onRetry, onRestart, onStatus
   );
 }
 
+export const DeployCard = memo(DeployCardImpl);
+
 // ── Certificate expiry block — SUCCESS remnanode nodes ────────
+// Компактный скелетон карточки: пока по SSH не приехали название/безопасность
+// сервера, вместо стопки пустых боксов рисуем одну тонкую строку-заглушку.
+function ServerDataSkeleton() {
+  return (
+    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5 flex items-center gap-2">
+      <Loader2 size={12} className="animate-spin" style={{ color: "var(--t-faint)" }} />
+      <span className="text-[11px]" style={{ color: "var(--t-faint)" }}>
+        Загружаем данные сервера (безопасность, трафик)…
+      </span>
+    </div>
+  );
+}
+
 function CertBlock({ cert }: { cert: CertInfo | null }) {
   const days = cert?.daysLeft;
   const tone = days === undefined ? "var(--t-low)"
@@ -639,29 +675,37 @@ function SpeedtestBlock({ form }: { form: FormData }) {
         </span>
       </div>
 
-      {/* Last stored result (characteristics + speeds) */}
-      <div className="flex flex-col gap-1.5 text-[11px] mb-2">
-        <Row label="ЦП" value={last?.cpu || "—"} />
-        <Row label="RAM" value={last?.ram_mb != null ? `${(last.ram_mb / 1024).toFixed(1)} ГБ` : "—"} />
-        <Row label="Диск" value={last?.disk || "—"} />
-        <div className="pt-1 border-t border-[var(--line-soft)] flex flex-col gap-1.5">
-          <Row label="iperf3" value={
-            last?.iperf_mbps != null
-              ? `${fmtMbps(last.iperf_mbps)}${last.ping_ms != null ? ` · пинг ${fmtMs(last.ping_ms)}` : ""}`
-              : "—"
-          } />
-          <Row label="Speedtest" value={
-            last?.st_down != null || last?.st_up != null
-              ? `↓ ${fmtMbps(last?.st_down)} · ↑ ${fmtMbps(last?.st_up)}`
-              : "—"
-          } />
-          <Row label="Xray-туннель" value={
-            last?.xray_down != null || last?.xray_up != null
-              ? `↓ ${fmtMbps(last?.xray_down)} · ↑ ${fmtMbps(last?.xray_up)}`
-              : "—"
-          } />
+      {/* Last stored result (characteristics + speeds) — скрыт, пока на ноде
+          ещё не было ни одного прогона: вместо таблицы из «—» пустая секция
+          не рисуется, остаётся только строка с кнопкой запуска. */}
+      {last ? (
+        <div className="flex flex-col gap-1.5 text-[11px] mb-2">
+          <Row label="ЦП" value={last.cpu || "—"} />
+          <Row label="RAM" value={last.ram_mb != null ? `${(last.ram_mb / 1024).toFixed(1)} ГБ` : "—"} />
+          <Row label="Диск" value={last.disk || "—"} />
+          <div className="pt-1 border-t border-[var(--line-soft)] flex flex-col gap-1.5">
+            <Row label="iperf3" value={
+              last.iperf_mbps != null
+                ? `${fmtMbps(last.iperf_mbps)}${last.ping_ms != null ? ` · пинг ${fmtMs(last.ping_ms)}` : ""}`
+                : "—"
+            } />
+            <Row label="Speedtest" value={
+              last.st_down != null || last.st_up != null
+                ? `↓ ${fmtMbps(last?.st_down)} · ↑ ${fmtMbps(last?.st_up)}`
+                : "—"
+            } />
+            <Row label="Xray-туннель" value={
+              last.xray_down != null || last.xray_up != null
+                ? `↓ ${fmtMbps(last?.xray_down)} · ↑ ${fmtMbps(last?.xray_up)}`
+                : "—"
+            } />
+          </div>
         </div>
-      </div>
+      ) : (
+        <p className="text-[10px] text-[var(--t-faint)] mb-2">
+          Тест ещё не запускался на этой ноде.
+        </p>
+      )}
 
       {/* Run controls */}
       <div className="flex flex-col gap-1.5 pt-1.5 border-t border-[var(--line-soft)]">

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Plus, Rocket, X, ServerCog, Search, Loader2,
   CheckCircle2, XCircle, HelpCircle,
@@ -38,7 +38,7 @@ export function DeployDashboard() {
   const [showExisting,   setShowExisting]   = useState(false);
   const [existingPreset, setExistingPreset] = useState<Partial<FormData> | null>(null);
 
-  const submitDeploy = async (data: FormData): Promise<string> => {
+  const submitDeploy = useCallback(async (data: FormData): Promise<string> => {
     const res = await fetch("/api/deploy", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
@@ -64,9 +64,9 @@ export function DeployDashboard() {
     }
     const { task_id } = await res.json();
     return task_id as string;
-  };
+  }, []);
 
-  const addJob = async (data: FormData) => {
+  const addJob = useCallback(async (data: FormData) => {
     const task_id = await submitDeploy(data);
     const job: DeployJobSummary = {
       taskId:    task_id,
@@ -89,9 +89,9 @@ export function DeployDashboard() {
     setShowForm(false);
     setEditJob(null);
     setExistingPreset(null);
-  };
+  }, [submitDeploy]);
 
-  const retryJob = async (job: DeployJobSummary) => {
+  const retryJob = useCallback(async (job: DeployJobSummary) => {
     const task_id = await submitDeploy(job.savedForm);
     const newJob: DeployJobSummary = {
       ...job,
@@ -104,9 +104,9 @@ export function DeployDashboard() {
       saveJobs(updated);
       return updated;
     });
-  };
+  }, [submitDeploy]);
 
-  const restartWaitingJob = async (job: DeployJobSummary) => {
+  const restartWaitingJob = useCallback(async (job: DeployJobSummary) => {
     const res = await fetch("/api/deploy/restart", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -129,17 +129,17 @@ export function DeployDashboard() {
       saveJobs(updated);
       return updated;
     });
-  };
+  }, []);
 
-  const removeJob = (taskId: string) => {
+  const removeJob = useCallback((taskId: string) => {
     setJobs(prev => {
       const updated = prev.filter(j => j.taskId !== taskId);
       saveJobs(updated);
       return updated;
     });
-  };
+  }, []);
 
-  const updateJobStatus = (taskId: string, status: "success" | "failed") => {
+  const updateJobStatus = useCallback((taskId: string, status: "success" | "failed") => {
     setJobs(prev => {
       const updated = prev.map(j =>
         j.taskId === taskId ? { ...j, finalStatus: status } : j
@@ -147,10 +147,10 @@ export function DeployDashboard() {
       saveJobs(updated);
       return updated;
     });
-  };
+  }, []);
 
   // Цветовая маркировка виджета ноды (Wave-4 PR-9).
-  const changeJobColor = (taskId: string, colorKey: string | null) => {
+  const changeJobColor = useCallback((taskId: string, colorKey: string | null) => {
     setJobs(prev => {
       const updated = prev.map(j => {
         if (j.taskId !== taskId) return j;
@@ -162,7 +162,7 @@ export function DeployDashboard() {
       saveJobs(updated);
       return updated;
     });
-  };
+  }, []);
 
   return (
     <Page max={1152}>
