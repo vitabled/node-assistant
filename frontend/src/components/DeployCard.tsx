@@ -302,15 +302,9 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
     <>
       <div
         onClick={() => setShowDetail(true)}
-        style={{
-          // Прокрутка деплой-грида: рендерим/красим только карточки вблизи
-          // вьюпорта, офскрин не участвует в layout/paint (лечит лаги скролла).
-          contentVisibility: "auto",
-          containIntrinsicSize: "auto 460px",
-          ...(markHex
-            ? { borderLeft: `3px solid ${markHex}`, background: cardTint(markHex) }
-            : {}),
-        }}
+        style={markHex
+          ? { borderLeft: `3px solid ${markHex}`, background: cardTint(markHex) }
+          : undefined}
         className="cursor-pointer rounded-xl border border-[var(--line)] bg-[var(--bg2)]
                    hover:border-[var(--line)] hover:bg-[var(--bg3)] transition-all flex flex-col"
       >
