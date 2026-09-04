@@ -4,7 +4,9 @@ import {
   Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck, Youtube,
   Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
   ShieldAlert, RefreshCw, Trash2, Wrench, Gauge, Play, ArrowLeftRight, Palette,
+  ChevronDown, ChevronUp, Boxes, Lock,
 } from "lucide-react";
+import { motion } from "motion/react";
 import { NODE_COLOR_PRESETS, colorHex, cardTint, setJobColor } from "../utils/nodeColors";
 import { StepProgress, DEPLOY_STEPS } from "./StepProgress";
 import { TerminalOutput } from "./TerminalOutput";
@@ -60,6 +62,52 @@ export function manageableComponents(f: FormData): { id: string; label: string }
   ];
 }
 
+// ── Переиспользуемая кнопка действия: motion (hover/press) + иконка+подпись + состояния ──
+interface ActionButtonProps {
+  label:     string;
+  onClick:   (e: React.MouseEvent<HTMLButtonElement>) => void;
+  icon?:     React.ReactNode;
+  variant?:  "default" | "primary" | "danger" | "warn" | "ghost";
+  disabled?: boolean;
+  loading?:  boolean;
+  title?:    string;
+  ariaLabel?: string;
+  size?:     "xs" | "sm";
+  className?: string;
+}
+
+function ActionButton({
+  label, onClick, icon, variant = "default", disabled, loading,
+  title, ariaLabel, size = "sm", className = "",
+}: ActionButtonProps) {
+  const base = "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none";
+  const sizes = { xs: "px-1.5 py-0.5 text-[10px]", sm: "px-2 py-1 text-[11px]" };
+  const variants: Record<NonNullable<ActionButtonProps["variant"]>, string> = {
+    default: "border border-[var(--line)] bg-[var(--bg2)] text-[var(--t-mid)] hover:bg-[var(--bg3)]",
+    primary: "bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)]",
+    danger:  "border btn-danger",
+    warn:    "border btn-warn",
+    ghost:   "text-[var(--t-faint)] hover:text-[var(--t-hi)] hover:bg-[var(--bg3)]",
+  };
+  const noAnim = disabled || loading;
+  return (
+    <motion.button
+      type="button"
+      whileHover={noAnim ? undefined : { scale: 1.04 }}
+      whileTap={noAnim ? undefined : { scale: 0.95 }}
+      transition={{ type: "spring", stiffness: 500, damping: 25, mass: 0.6 }}
+      onClick={onClick}
+      disabled={disabled || loading}
+      title={title}
+      aria-label={ariaLabel ?? title ?? label}
+      className={`${base} ${sizes[size]} ${variants[variant]} ${className}`}
+    >
+      {loading ? <Loader2 size={size === "xs" ? 10 : 11} className="animate-spin" /> : icon}
+      <span>{label}</span>
+    </motion.button>
+  );
+}
+
 const INITIAL_STATUS: StatusFrame = {
   status:       "pending",
   current_step: 0,
@@ -103,6 +151,10 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
   const [showDetail, setShowDetail] = useState(false);
   const [retrying,   setRetrying]   = useState(false);
   const [showReplace, setShowReplace] = useState(false);  // «Сменить домен» wizard (Plan E)
+  // Свёрнутое представление успешной карточки (мало DOM → плавный скролл).
+  const [expanded,      setExpanded]      = useState(false);
+  const [confirmStop,   setConfirmStop]   = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   const addLog   = useCallback((line: string) => setLogs(l => [...l, line]), []);
   const onStatus = useCallback((frame: StatusFrame) =>
@@ -177,14 +229,19 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
   // doesn't blink closed between submit and task_id arrival.
   const opBusy = opSubmitting || (opStatus === "running" && !!opTaskId);
 
-  const runOp = useCallback(async (component: string, action: NodeAction, title: string) => {
+  const runOp = useCallback(async (
+    component: string, action: NodeAction, title: string, version?: string,
+  ) => {
     setOpLogs([]); setOpStatus("running"); setOpTitle(title); setOpTaskId(null);
     setOpSubmitting(true);
     try {
       const res = await fetch("/api/node/step", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...opPayload(job.savedForm), component, action }),
+        body: JSON.stringify({
+          ...opPayload(job.savedForm), component, action,
+          ...(version ? { version } : {}),
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -201,6 +258,12 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
       setOpSubmitting(false);
     }
   }, [job.savedForm]);
+
+  // Замена образа remnanode на выбранную версию — тот же stream, что и runOp
+  // (POST /api/node/step с component=remnanode, action=reinstall, version=<…>).
+  const replaceRemnanodeImage = useCallback((version: string) => {
+    runOp("remnanode", "reinstall", `Замена образа remnanode → ${version}`, version);
+  }, [runOp]);
 
   // Standalone Xray-core version update — same task-stream modal as runOp,
   // but its own endpoint (/api/node/xray-version) since it's not a managed
@@ -239,6 +302,8 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
     (stepStatus.status === "pending" && logs.length === 0 && !job.finalStatus);
   const isFailed  = stepStatus.status === "failed";
   const isDone    = stepStatus.status === "success" || stepStatus.status === "failed";
+  const isSuccess = stepStatus.status === "success";
+  const collapsed = isSuccess && !expanded;
 
   const stopDeploy = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -248,6 +313,10 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
       body:    JSON.stringify({ task_id: job.taskId }),
     }).catch(() => {});
   };
+
+  // Danger-подтверждение: первый клик вооружает, второй — выполняет.
+  const handleStopConfirm   = async (e: React.MouseEvent) => { setConfirmStop(false);   await stopDeploy(e); };
+  const handleRemoveConfirm = () => { setConfirmRemove(false); onRemove(job.taskId); };
 
   const handleRetry = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -300,6 +369,16 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
 
   return (
     <>
+      {collapsed ? (
+        <CollapsedCard
+          job={job}
+          security={security}
+          cert={cert}
+          statsReady={statsReady}
+          markHex={markHex}
+          onExpand={() => setExpanded(true)}
+        />
+      ) : (
       <div
         onClick={() => setShowDetail(true)}
         style={markHex
@@ -318,6 +397,13 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
             </div>
           </div>
           <div className="flex items-center gap-1">
+            {isSuccess && (
+              <button type="button" title="Свернуть" aria-label="Свернуть"
+                onClick={e => { e.stopPropagation(); setExpanded(false); }}
+                className="iconbtn" style={{ width: 26, height: 26 }}>
+                <ChevronUp size={13} />
+              </button>
+            )}
             <div className="relative">
               <button type="button" title="Цвет виджета ноды" data-testid="node-color-btn"
                 onClick={e => { e.stopPropagation(); setColorOpen(o => !o); }}
@@ -415,12 +501,15 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
             )}
             <SpeedtestBlock form={job.savedForm} />
             <ManageBlock form={job.savedForm} onOp={runOp} busy={opBusy} />
+            {job.savedForm.mode !== "haproxy" && (
+              <RemnanodeVersionBlock onReplace={replaceRemnanodeImage} busy={opBusy} />
+            )}
           </>
         )}
 
         {/* Footer */}
         <div
-          className="px-4 py-2.5 border-t border-[var(--line-soft)] flex items-center gap-2"
+          className="px-4 py-2.5 border-t border-[var(--line-soft)] flex items-center gap-2 flex-wrap"
           onClick={e => e.stopPropagation()}
         >
           <Clock size={11} className="text-[var(--t-faint)] shrink-0" />
@@ -430,64 +519,80 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
             <TermIcon size={10} /> лог
           </span>
 
-          {/* Edit button — always visible */}
-          <button
-            onClick={handleEdit}
+          {/* Edit — always visible */}
+          <ActionButton
+            label="Изменить"
+            icon={<Pencil size={11} />}
+            variant="ghost"
             title="Редактировать конфигурацию"
-            className="p-1.5 rounded text-[var(--t-faint)] hover:text-[var(--accent-hi)] hover:bg-[var(--bg3)]
-                       transition-colors"
-          >
-            <Pencil size={12} />
-          </button>
+            onClick={handleEdit}
+          />
 
-          {/* Running: Stop button */}
-          {isRunning && (
-            <button onClick={stopDeploy}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium
-                         border btn-danger
-                         transition-colors">
-              <Square size={10} fill="currentColor" /> Стоп
-            </button>
-          )}
+          {/* Running: Stop (danger-подтверждение) */}
+          {isRunning && (confirmStop ? (
+            <ActionButton
+              label="Остановить?"
+              icon={<ShieldAlert size={11} />}
+              variant="danger"
+              title="Подтвердить остановку деплоя"
+              onClick={handleStopConfirm}
+            />
+          ) : (
+            <ActionButton
+              label="Стоп"
+              icon={<Square size={10} fill="currentColor" />}
+              variant="danger"
+              title="Остановить деплой"
+              onClick={() => setConfirmStop(true)}
+            />
+          ))}
 
-          {/* Pending means the worker has not claimed the deploy yet. The backend
-              atomically replaces only that state, so this cannot duplicate a
-              running job or disturb a completed one. */}
+          {/* Pending: idempotent restart (worker hasn't claimed it yet) */}
           {stepStatus.status === "pending" && !job.finalStatus && (
-            <button onClick={handleRestartWaiting} disabled={retrying}
-              aria-label="Перезапустить ожидающий деплой"
+            <ActionButton
+              label="Перезапустить"
+              icon={<RotateCcw size={10} />}
+              loading={retrying}
+              variant="warn"
               title="Перезапустить ожидающий деплой без дублирования задачи"
-              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium
-                         border btn-warn transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-              {retrying ? <Loader2 size={10} className="animate-spin" /> : <RotateCcw size={10} />}
-            </button>
+              ariaLabel="Перезапустить ожидающий деплой"
+              onClick={handleRestartWaiting}
+            />
           )}
 
-          {/* Failed: Retry button */}
+          {/* Failed: Retry */}
           {isFailed && (
-            <button onClick={handleRetry} disabled={retrying}
+            <ActionButton
+              label="Повторить"
+              icon={<RotateCcw size={10} />}
+              loading={retrying}
+              variant="warn"
               title="Перезапустить деплой с теми же параметрами"
-              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium
-                         border btn-warn
-                         transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-              {retrying
-                ? <Loader2 size={10} className="animate-spin" />
-                : <RotateCcw size={10} />
-              }
-              Повторить
-            </button>
+              onClick={handleRetry}
+            />
           )}
 
-          {/* Done: Remove button */}
-          {isDone && (
-            <button onClick={() => onRemove(job.taskId)}
-              className="p-1.5 rounded text-[var(--t-faint)] hover:text-[var(--t-low)] hover:bg-[var(--bg3)]
-                         transition-colors" title="Удалить задачу">
-              <X size={12} />
-            </button>
-          )}
+          {/* Done: Remove (danger-подтверждение) */}
+          {isDone && (confirmRemove ? (
+            <ActionButton
+              label="Удалить?"
+              icon={<ShieldAlert size={11} />}
+              variant="danger"
+              title="Подтвердить удаление задачи"
+              onClick={handleRemoveConfirm}
+            />
+          ) : (
+            <ActionButton
+              label="Удалить"
+              icon={<Trash2 size={11} />}
+              variant="ghost"
+              title="Удалить задачу"
+              onClick={() => setConfirmRemove(true)}
+            />
+          ))}
         </div>
       </div>
+      )}
 
       {/* Detail modal */}
       {showDetail && (
@@ -751,14 +856,15 @@ function SpeedtestBlock({ form }: { form: FormData }) {
             </button>
           ))}
         </div>
-        <button type="button" onClick={runTest} disabled={running}
-          className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-[11px] font-medium
-                     border border-[var(--line)] bg-[var(--bg2)] text-[var(--t-mid)]
-                     hover:bg-[var(--bg3)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-          {running
-            ? <><Loader2 size={11} className="animate-spin" /> Тест выполняется…</>
-            : <><Play size={11} /> Запустить тест</>}
-        </button>
+        <ActionButton
+          label={running ? "Тест выполняется…" : "Запустить тест"}
+          icon={<Play size={11} />}
+          loading={running}
+          variant="default"
+          title="Запустить тест скорости"
+          onClick={runTest}
+          className="w-full justify-center py-1.5"
+        />
       </div>
     </div>
   );
@@ -783,25 +889,34 @@ function ManageBlock({ form, onOp, busy }: {
       </div>
       <div className="flex flex-col gap-1">
         {comps.map(c => (
-          <div key={c.id} className="flex items-center gap-2 py-0.5">
+          <div key={c.id} className="flex items-center gap-2 py-0.5 flex-wrap">
             <span className="text-xs text-[var(--t-mid)] flex-1 truncate">{c.label}</span>
-            <button title="Переустановить" disabled={busy}
+            <ActionButton
+              label="Переустановить"
+              icon={<RefreshCw size={11} />}
+              variant="ghost"
+              disabled={busy}
+              title={`Переустановить ${c.label}`}
               onClick={() => onOp(c.id, "reinstall", `Переустановка: ${c.label}`)}
-              className="p-1 rounded text-[var(--t-faint)] hover:text-[var(--accent-hi)] hover:bg-[var(--bg3)] transition-colors disabled:opacity-40">
-              <RefreshCw size={12} />
-            </button>
+            />
             {confirmDel === c.id ? (
-              <button title="Подтвердить удаление" disabled={busy}
+              <ActionButton
+                label="Точно?"
+                icon={<ShieldAlert size={10} />}
+                variant="danger"
+                disabled={busy}
+                title="Подтвердить удаление"
                 onClick={() => { setConfirmDel(null); onOp(c.id, "uninstall", `Удаление: ${c.label}`); }}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium btn-danger border disabled:opacity-40">
-                <ShieldAlert size={10} /> Точно?
-              </button>
+              />
             ) : (
-              <button title="Удалить" disabled={busy}
+              <ActionButton
+                label="Удалить"
+                icon={<Trash2 size={11} />}
+                variant="ghost"
+                disabled={busy}
+                title={`Удалить ${c.label}`}
                 onClick={() => setConfirmDel(c.id)}
-                className="p-1 rounded text-[var(--t-faint)] hover:text-[var(--err)] hover:bg-[var(--bg3)] transition-colors disabled:opacity-40">
-                <Trash2 size={12} />
-              </button>
+              />
             )}
           </div>
         ))}
@@ -1153,6 +1268,166 @@ function DeployDetailModal({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Свёрнутая карточка успешной ноды (заголовок + безопасность + сертификат) ──
+function CompactSecurity({ stats }: { stats: SecurityStats }) {
+  const active = stats.fail2banActive > 0 || stats.trafficGuardActive > 0;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[11px] text-[var(--t-low)] shrink-0"
+      title={`Fail2Ban: ${stats.fail2banActive} активных · TrafficGuard: ${stats.trafficGuardActive} заблокировано`}
+    >
+      <ShieldCheck size={12} style={{ color: active ? "var(--warn)" : "var(--ok)" }} />
+      <span className="tabular-nums">Fail2Ban {stats.fail2banActive}</span>
+      <span className="text-[var(--t-faint)]">·</span>
+      <span className="tabular-nums">TrafficGuard {stats.trafficGuardActive}</span>
+    </span>
+  );
+}
+
+function CompactCert({ cert }: { cert: CertInfo | null }) {
+  const days = cert?.daysLeft;
+  const tone = days === undefined ? "var(--t-low)"
+    : days < 0  ? "var(--err)"
+    : days < 14 ? "var(--warn)"
+    : "var(--ok)";
+  const text = days === undefined ? "неизвестно"
+    : days < 0 ? `истёк ${-days} дн.` : `${days} дн.`;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[11px] shrink-0"
+      title={cert?.notAfter ? `Сертификат до ${cert.notAfter}` : "Сертификат"}
+    >
+      <Lock size={12} style={{ color: tone }} />
+      <span className="text-[var(--t-low)]">Сертификат</span>
+      <span className="tabular-nums font-medium" style={{ color: tone }}>{text}</span>
+    </span>
+  );
+}
+
+function CollapsedCard({ job, security, cert, statsReady, markHex, onExpand }: {
+  job:        DeployJobSummary;
+  security:   SecurityStats | null;
+  cert:       CertInfo | null;
+  statsReady: boolean;
+  markHex:    string | undefined;
+  onExpand:   () => void;
+}) {
+  const hasRemnanode = job.savedForm.mode !== "haproxy";
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.16 }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Развернуть карточку ${job.domain}`}
+      onClick={onExpand}
+      onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onExpand(); } }}
+      style={markHex ? { borderLeft: `3px solid ${markHex}`, background: cardTint(markHex) } : undefined}
+      className="cursor-pointer rounded-xl border border-[var(--line)] bg-[var(--bg2)]
+                 hover:bg-[var(--bg3)] transition-colors flex flex-col"
+    >
+      <div className="px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 min-w-0">
+        <StatusIcon status="success" isRunning={false} />
+        <div className="min-w-0 flex-1" style={{ minWidth: 140 }}>
+          <p className="text-sm font-medium text-[var(--t-hi)] truncate">{job.domain}</p>
+          <p className="text-xs text-[var(--t-low)]">{job.ip}:{job.newSshPort}</p>
+        </div>
+
+        {!statsReady ? (
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--t-faint)] shrink-0">
+            <Loader2 size={12} className="animate-spin" /> Сбор данных…
+          </span>
+        ) : (
+          <>
+            {security && <CompactSecurity stats={security} />}
+            {!security && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-[var(--t-faint)] shrink-0">
+                <ShieldAlert size={12} /> сервер офлайн
+              </span>
+            )}
+            {hasRemnanode && cert && <CompactCert cert={cert} />}
+          </>
+        )}
+
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--t-low)] shrink-0">
+          <ChevronDown size={14} /> Развернуть
+        </span>
+      </div>
+    </motion.div>
+  );
+}
+
+// ── Замена образа remnanode (выбор версии из GET /api/node/remnanode/versions) ──
+function RemnanodeVersionBlock({ onReplace, busy }: {
+  onReplace: (version: string) => void;
+  busy:      boolean;
+}) {
+  const [versions, setVersions] = useState<string[] | null>(null);
+  const [version,  setVersion]  = useState("");
+  const [loading,  setLoading]  = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetch("/api/node/remnanode/versions")
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { versions?: unknown } | null) => {
+        if (!alive) return;
+        setVersions(Array.isArray(d?.versions) ? (d.versions as string[]) : []);
+      })
+      .catch(() => { if (alive) setVersions([]); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
+  return (
+    <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5"
+      onClick={e => e.stopPropagation()}>
+      <div className="flex items-center gap-1.5 mb-2">
+        <Boxes size={12} className="text-[var(--t-low)]" />
+        <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest">
+          Образ remnanode
+        </span>
+      </div>
+
+      {loading ? (
+        <p className="text-[11px] text-[var(--t-faint)] flex items-center gap-1.5">
+          <Loader2 size={10} className="animate-spin" /> Загружаем доступные версии…
+        </p>
+      ) : !versions || versions.length === 0 ? (
+        <p className="text-[11px] text-[var(--t-faint)]">
+          Список версий образа недоступен — попробуйте позже.
+        </p>
+      ) : (
+        <div className="flex items-center gap-2">
+          <select
+            value={version}
+            onChange={e => setVersion(e.target.value)}
+            disabled={busy}
+            className="flex-1 min-w-0 bg-[var(--bg2)] border border-[var(--line)] rounded px-2 py-1.5
+                       text-[11px] text-[var(--t-mid)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-dim)]"
+          >
+            <option value="">Выберите версию…</option>
+            {versions.map(v => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+          <ActionButton
+            label="Заменить"
+            icon={<RefreshCw size={11} />}
+            variant="default"
+            disabled={busy || !version}
+            loading={busy}
+            title="Заменить образ remnanode на выбранную версию"
+            onClick={() => onReplace(version)}
+          />
+        </div>
+      )}
     </div>
   );
 }

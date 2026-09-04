@@ -76,3 +76,37 @@ describe("waiting deploy recovery", () => {
     expect(onRestart).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("collapsed success card", () => {
+  beforeEach(() => {
+    // The success card polls /api/stats/node and, once expanded, SpeedtestBlock +
+    // RemnanodeVersionBlock each fetch on mount. Stub fetch so none of them throw
+    // synchronously on a relative URL in jsdom.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ online: true, securityStats: null, trafficStats: null, certInfo: null }),
+    }));
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("collapses a success node by default and expands on click", () => {
+    render(<DeployCard
+      job={{
+        taskId: "ok-1", domain: "ok.example", ip: "1.2.3.4",
+        newSshPort: 2222, startedAt: Date.now(), savedForm: remna,
+        finalStatus: "success",
+      }}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+
+    // Collapsed: only name + security/cert + expand affordance, no heavy blocks.
+    expect(screen.getByText("Развернуть")).toBeInTheDocument();
+    expect(screen.queryByText("Управление компонентами")).not.toBeInTheDocument();
+
+    // Expand via the collapsed card.
+    fireEvent.click(screen.getByRole("button", { name: "Развернуть карточку ok.example" }));
+    expect(screen.getByText("Управление компонентами")).toBeInTheDocument();
+    expect(screen.queryByText("Развернуть")).not.toBeInTheDocument();
+  });
+});
