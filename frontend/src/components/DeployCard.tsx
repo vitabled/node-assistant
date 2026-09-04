@@ -493,11 +493,14 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
               </>
             )}
             {job.savedForm.mode !== "haproxy" && (
-              <button type="button" onClick={() => setShowReplace(true)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors
-                          bg-[var(--bg2)] hover:bg-[var(--bg3)] text-[var(--t-mid)] border-[var(--line)]">
-                <ArrowLeftRight size={12} /> Сменить домен
-              </button>
+              <ActionButton
+                label="Сменить домен"
+                icon={<ArrowLeftRight size={11} />}
+                variant="warn"
+                title="Сменить домен ноды"
+                onClick={e => { e.stopPropagation(); setShowReplace(true); }}
+                className="self-start"
+              />
             )}
             <SpeedtestBlock form={job.savedForm} />
             <ManageBlock form={job.savedForm} onOp={runOp} busy={opBusy} />
@@ -1363,6 +1366,10 @@ function CollapsedCard({ job, security, cert, statsReady, markHex, onExpand }: {
 }
 
 // ── Замена образа remnanode (выбор версии из GET /api/node/remnanode/versions) ──
+// Валидный Docker-тег: буквы/цифры/точки/дефисы/подчёркивания (без слэшей —
+// это уже тег, а не репозиторий), длина 1–128.
+const REMNANODE_TAG_RE = /^[A-Za-z0-9._-]{1,128}$/;
+
 function RemnanodeVersionBlock({ onReplace, busy }: {
   onReplace: (version: string) => void;
   busy:      boolean;
@@ -1370,6 +1377,9 @@ function RemnanodeVersionBlock({ onReplace, busy }: {
   const [versions, setVersions] = useState<string[] | null>(null);
   const [version,  setVersion]  = useState("");
   const [loading,  setLoading]  = useState(true);
+  // Ручной тег на случай, когда GET /versions вернул ошибку/пусто (backend
+  // чинят, список станет доступен через снапшот — но фронт должен не падать).
+  const [manual,   setManual]   = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -1384,6 +1394,9 @@ function RemnanodeVersionBlock({ onReplace, busy }: {
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, []);
+
+  const manualTag   = manual.trim();
+  const manualValid = REMNANODE_TAG_RE.test(manualTag);
 
   return (
     <div className="mx-4 mb-3 rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5"
@@ -1400,9 +1413,38 @@ function RemnanodeVersionBlock({ onReplace, busy }: {
           <Loader2 size={10} className="animate-spin" /> Загружаем доступные версии…
         </p>
       ) : !versions || versions.length === 0 ? (
-        <p className="text-[11px] text-[var(--t-faint)]">
-          Список версий образа недоступен — попробуйте позже.
-        </p>
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[10px] text-[var(--t-faint)]">
+            Список версий недоступен — введите тег образа вручную.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              value={manual}
+              onChange={e => setManual(e.target.value)}
+              disabled={busy}
+              placeholder="например: v2.0.1"
+              spellCheck={false}
+              autoComplete="off"
+              className="flex-1 min-w-0 bg-[var(--bg2)] border border-[var(--line)] rounded px-2 py-1.5
+                         text-[11px] text-[var(--t-mid)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-dim)]
+                         disabled:opacity-45 disabled:cursor-not-allowed"
+            />
+            <ActionButton
+              label="Заменить"
+              icon={<RefreshCw size={11} />}
+              variant="default"
+              disabled={busy || !manualValid}
+              loading={busy}
+              title="Заменить образ remnanode на указанный тег"
+              onClick={() => onReplace(manualTag)}
+            />
+          </div>
+          {manualTag !== "" && !manualValid && (
+            <p className="text-[10px] text-[var(--warn)]">
+              Тег: только буквы, цифры, точки, дефисы и подчёркивания (без слэшей), до 128 символов.
+            </p>
+          )}
+        </div>
       ) : (
         <div className="flex items-center gap-2">
           <select
