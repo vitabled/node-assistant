@@ -54,6 +54,8 @@ const appleDark = { ...consoleDark, ...block(':root[data-skin="apple"]:not([data
 const neon = { ...consoleDark, ...block(':root[data-skin="neon"]') };
 const nodeflowDark = { ...consoleDark, ...block(':root[data-skin="nodeflow"]:not([data-theme="light"])') };
 const nodeflowLight = { ...consoleLight, ...block(':root[data-skin="nodeflow"][data-theme="light"]') };
+const remnawaveDark = { ...consoleDark, ...block(':root[data-skin="remnawave"]:not([data-theme="light"])') };
+const remnawaveLight = { ...consoleLight, ...block(':root[data-skin="remnawave"][data-theme="light"]') };
 
 const PALETTES: Record<string, Record<string, string>> = {
   "console-dark": consoleDark,
@@ -63,6 +65,8 @@ const PALETTES: Record<string, Record<string, string>> = {
   neon,
   "nodeflow-dark": nodeflowDark,
   "nodeflow-light": nodeflowLight,
+  "remnawave-dark": remnawaveDark,
+  "remnawave-light": remnawaveLight,
 };
 
 const INKS = ["--t-faint", "--t-low", "--t-mid", "--t-hi"];
@@ -73,11 +77,21 @@ const AA = 4.5; // обычный текст <18px
  * Известные провалы, с измеренными коэффициентами. Формат ключа:
  * "<палитра> <fg> on <bg>". Заполняется реальными числами прогона.
  *
- * Пуст: Ф4 перетюнила --t-faint/--t-low во всех палитрах (минимум 4.5 на
- * bg1/bg2/bg3), а хардкод #fff на акценте в apple-скине заменён на a.ink.
+ * Исходно пуст: Ф4 перетюнила --t-faint/--t-low во всех палитрах (минимум 4.5
+ * на bg1/bg2/bg3), а хардкод #fff на акценте в apple-скине заменён на a.ink.
+ *
+ * P2 (item 11) добавил remnawave-dark в гейт и вскрыл её под-AA --t-faint
+ * (#6e7681 = GitHub-dark dark[3], план A3/P0). Это самый приглушённый тон меты,
+ * который GitHub сам использует ниже AA; тёмную палитру P2 не трогает
+ * («в тёмной всё как было»), поэтому провалы документируем, а не чиним здесь.
+ * Светлая remnawave-light — новая поверхность P2 — проходит гейт чисто.
  * Тест «no stale entry» не даёт списку гнить: починил провал — убери строку.
  */
-const KNOWN_FAILURES = new Set<string>([]);
+const KNOWN_FAILURES = new Set<string>([
+  "remnawave-dark --t-faint on --bg1",
+  "remnawave-dark --t-faint on --bg2",
+  "remnawave-dark --t-faint on --bg3",
+]);
 
 describe("contrast: ink on surfaces", () => {
   const failures: string[] = [];

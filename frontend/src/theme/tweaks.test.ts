@@ -122,6 +122,21 @@ describe("accent", () => {
     expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#0096b5");
     expect(document.documentElement.style.getPropertyValue("--accent-hi")).toBe("#2ad4f0");
   });
+
+  it("remnawave accent uses its light variant (cyan-8) on light theme and reverts on dark", () => {
+    mockMatchMedia(false);
+    applyThemeMode("light");
+    applyAccent("remnawave");
+    const s = document.documentElement.style;
+    expect(s.getPropertyValue("--accent")).toBe("#00677a");
+    expect(s.getPropertyValue("--accent-hi")).toBe("#00677a");
+    expect(s.getPropertyValue("--accent-ink")).toBe("#FFFFFF");
+    // Смена темы переприменяет текущий акцент (как у nodeflow).
+    applyThemeMode("dark");
+    expect(s.getPropertyValue("--accent")).toBe("#0096b5");
+    expect(s.getPropertyValue("--accent-hi")).toBe("#2ad4f0");
+    expect(s.getPropertyValue("--accent-ink")).toBe("#00161a");
+  });
 });
 
 describe("density", () => {

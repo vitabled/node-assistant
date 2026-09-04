@@ -13,16 +13,18 @@ export function useMotionEnabled(): boolean {
 }
 
 // Tab-transition variant for <AnimatePresence mode="wait">.
+// Единый ритм (P2): 150ms на state/color-переходы (таб-свитч), 200ms на fade
+// карточек (StaggerItem ниже) — см. план A4 «Motion».
 export const tabFade: Variants = {
   initial: { opacity: 0, y: 8 },
-  animate: { opacity: 1, y: 0, transition: { duration: 0.16, ease: "easeOut" } },
-  exit:    { opacity: 0, y: -6, transition: { duration: 0.12, ease: "easeIn" } },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.15, ease: "easeOut" } },
+  exit:    { opacity: 0, y: -6, transition: { duration: 0.15, ease: "easeIn" } },
 };
 
 const containerV: Variants = { animate: { transition: { staggerChildren: 0.04 } } };
 const itemV: Variants = {
   initial: { opacity: 0, y: 6 },
-  animate: { opacity: 1, y: 0, transition: { duration: 0.18, ease: "easeOut" } },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.2, ease: "easeOut" } },
 };
 
 interface BoxProps { children: ReactNode; className?: string; style?: CSSProperties }

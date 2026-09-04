@@ -69,7 +69,7 @@ strong{color:var(--t-hi);font-weight:600}
 /* ── buttons ── */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
   border-radius:999px;font-weight:600;font-size:14px;line-height:1;
-  padding:calc(var(--ctl-py) + 1px) 14px;transition:background .12s,border-color .12s,color .12s,opacity .12s,filter .12s;
+  padding:calc(var(--ctl-py) + 1px) 14px;transition:background .15s,border-color .15s,color .15s,opacity .15s,filter .15s;
   border:1px solid transparent;white-space:nowrap;font-family:var(--font);cursor:pointer}
 .btn:focus-visible{outline:2px solid var(--accent-line);outline-offset:1px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
@@ -85,7 +85,7 @@ strong{color:var(--t-hi);font-weight:600}
 .btn-warn:hover:not(:disabled){background:rgba(240,176,84,.2)}
 .btn-lg{padding:12px 20px;font-size:15px;border-radius:999px}
 .iconbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
-  border-radius:999px;color:var(--t-low);transition:background .12s,color .12s;cursor:pointer;
+  border-radius:999px;color:var(--t-low);transition:background .15s,color .15s;cursor:pointer;
   background:none;border:none}
 .iconbtn:hover{color:var(--t-hi);background:var(--bg3)}
 .iconbtn:focus-visible{outline:2px solid var(--accent-line)}
@@ -96,7 +96,7 @@ strong{color:var(--t-hi);font-weight:600}
 .label{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--t-low);display:block}
 .input,.selectbox,textarea.input{
   width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:12px;
-  padding:var(--ctl-py) 11px;font-size:13px;color:var(--t-hi);transition:border-color .12s, box-shadow .12s;
+  padding:var(--ctl-py) 11px;font-size:13px;color:var(--t-hi);transition:border-color .15s, box-shadow .15s;
   font-family:var(--font)}
 .input::placeholder{color:var(--t-faint)}
 .input:focus,.selectbox:focus,textarea.input:focus{outline:none;border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-dim)}
@@ -147,7 +147,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   border-bottom:1px solid var(--line-soft)}
 .tbl tbody td{padding:var(--row-py) 14px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
 .tbl tbody tr:last-child td{border-bottom:none}
-.tbl tbody tr{transition:background .1s}
+.tbl tbody tr{transition:background .15s}
 .tbl tbody tr:hover{background:var(--row-hover)}
 .tbl .r{text-align:right} .tbl .c{text-align:center}
 /* Видимые границы столбцов (модификатор; базовая таблица — hairline-строки). */
@@ -157,7 +157,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 /* ── nav ── */
 .navitem{display:flex;align-items:center;gap:10px;width:100%;padding:var(--nav-py) 10px;
   border-radius:var(--r-sm);color:var(--t-low);font-size:12.5px;font-weight:500;
-  border:1px solid transparent;transition:background .12s,color .12s;position:relative;text-align:left;
+  border:1px solid transparent;transition:background .15s,color .15s;position:relative;text-align:left;
   background:none;cursor:pointer;font-family:var(--font)}
 .navitem:hover{color:var(--t-hi);background:var(--bg3)}
 .navitem.active{color:var(--nav-active-fg);background:var(--nav-active-bg);border-color:transparent}
@@ -168,7 +168,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 /* ── segmented control ── */
 .seg{display:flex;gap:2px;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r-md);padding:3px}
 .seg button{flex:1;padding:calc(var(--ctl-py) - 2px) 12px;border-radius:var(--r-sm);font-size:12.5px;
-  font-weight:600;color:var(--t-low);transition:background .12s,color .12s;white-space:nowrap;
+  font-weight:600;color:var(--t-low);transition:background .15s,color .15s;white-space:nowrap;
   background:none;border:none;cursor:pointer;font-family:var(--font)}
 .seg button:hover{color:var(--t-mid)}
 .seg button.on{background:var(--bg3);color:var(--t-hi);box-shadow:inset 0 0 0 1px var(--line)}
@@ -187,30 +187,30 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .switch{position:relative;width:34px;height:19px;border-radius:99px;background:var(--bg3);
   border:1px solid var(--line);transition:background .15s,border-color .15s;flex:none;cursor:pointer}
 .switch::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:99px;
-  background:var(--t-low);transition:transform .18s,background .15s}
+  background:var(--t-low);transition:transform .15s,background .15s}
 .switch.on{background:var(--accent);border-color:var(--accent)}
 .switch.on::after{transform:translateX(15px);background:var(--accent-ink)}
 .switch:focus-visible{outline:2px solid var(--accent-line);outline-offset:1px}
 
 /* checkbox */
 .ck{width:15px;height:15px;flex:none;border-radius:4px;border:1.5px solid var(--line);background:var(--bg2);
-  display:inline-flex;align-items:center;justify-content:center;transition:all .12s;margin-top:2px;cursor:pointer}
+  display:inline-flex;align-items:center;justify-content:center;transition:all .15s;margin-top:2px;cursor:pointer}
 .ck.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 
 /* ── modal ── */
 @keyframes ni-fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes ni-riseIn{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
 .overlay{position:fixed;inset:0;z-index:60;background:var(--overlay);backdrop-filter:blur(3px);
-  display:flex;align-items:center;justify-content:center;padding:20px;animation:ni-fadeIn .14s ease-out}
+  display:flex;align-items:center;justify-content:center;padding:20px;animation:ni-fadeIn .2s ease-out}
 .modal{background:var(--bg1);border:1px solid var(--line);border-radius:14px;width:100%;
-  box-shadow:var(--shadow-modal);animation:ni-riseIn .16s ease-out;display:flex;flex-direction:column;
+  box-shadow:var(--shadow-modal);animation:ni-riseIn .2s ease-out;display:flex;flex-direction:column;
   max-height:calc(100vh - 48px)}
 
 /* ── toast ── */
 @keyframes ni-toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .toast{display:flex;align-items:flex-start;gap:10px;padding:11px 13px;border-radius:var(--r-md);
   border:1px solid;font-size:12.5px;box-shadow:0 12px 34px rgba(0,0,0,.5);backdrop-filter:blur(6px);
-  animation:ni-toastIn .16s ease-out;max-width:360px}
+  animation:ni-toastIn .2s ease-out;max-width:360px}
 .toast.ok{background:rgba(13,38,29,.92);border-color:var(--ok-line);color:#8FE6C3}
 .toast.err{background:rgba(44,17,17,.92);border-color:var(--err-line);color:#F5A3A1}
 .toast.info{background:rgba(22,22,22,.94);border-color:var(--line);color:var(--t-mid)}
@@ -230,7 +230,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   box-shadow:0 0 0 1px rgba(255,255,255,.14), 0 1px 2px rgba(0,0,0,.4)}
 .avatar{display:inline-flex;align-items:center;justify-content:center;border-radius:6px;
   font-weight:700;flex:none;letter-spacing:0}
-.bar-cell{border-radius:2px;flex:1 1 0;max-width:7px;transition:transform .1s}
+.bar-cell{border-radius:2px;flex:1 1 0;max-width:7px;transition:transform .15s}
 .bar-cell:hover{transform:scaleY(1.12)}
 .divider{height:1px;background:var(--line-soft);border:none}
 kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;
@@ -407,7 +407,7 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 /* Glow can be disabled device-wide even under neon (data-glow="off"). */
 :root[data-glow="off"]{ --glow:none; }
 /* Glow utilities — inert wherever --glow is none (apple/console/glow-off). */
-.hover-glow{ transition:box-shadow .18s ease }
+.hover-glow{ transition:box-shadow .2s ease }
 .hover-glow:hover,
 :root[data-skin="neon"] .card:hover,
 :root[data-skin="neon"] .btn-primary,
@@ -483,8 +483,9 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
 /* ════════ Remnawave skin — пятый data-skin, аддитивный (как neon/nodeflow) ════════
    Визуальный язык панели Remnawave: GitHub-dark палитра, Montserrat/Fira Mono,
    cyan-акцент, плоские полупрозрачные поверхности, радиусы 6/8/16, без blur.
-   Тёмный committed (одна палитра на обе темы, светлая — P2). Акцентных токенов
-   тут НЕТ: их ставит тема-зависимый applyAccent (ACCENTS.remnawave), а инлайн
+   Тёмная палитра — GitHub-dark; светлая (P2) — GitHub-light (dark[]→gray[]),
+   акцент cyan-8 #00677a для контраста. Акцентных токенов тут НЕТ: их ставит
+   тема-зависимый applyAccent (ACCENTS.remnawave + его .light-вариант), а инлайн
    перебивает любой stylesheet — как у nodeflow. */
 :root[data-skin="remnawave"]{
   --font:'Montserrat',system-ui,sans-serif;
@@ -496,9 +497,8 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
   /* стекло убрать: Remnawave — плоские/полупрозрачные поверхности, без blur */
   --glass-blur:0px;
 }
-/* Dark-committed: идентичная палитра под light и dark (как --term-bg, см. neon). */
-:root[data-skin="remnawave"]:not([data-theme="light"]),
-:root[data-skin="remnawave"][data-theme="light"]{
+/* Тёмная палитра (GitHub-dark ramp) — data-theme ≠ light. */
+:root[data-skin="remnawave"]:not([data-theme="light"]){
   /* поверхности (GitHub-dark ramp) */
   --bg0:#0d1117;                    /* dark-8 — канвас */
   --bg1:#161b22;                    /* dark-7 — топбар/сайдбар/панели */
@@ -525,6 +525,39 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
   /* data-viz ink — cyan/teal-ориентированный ramp */
   --viz-1:#2ad4f0; --viz-2:#38d9a9; --viz-3:#fcc419; --viz-4:#ff6b6b;
   --viz-5:#99f0ff; --viz-6:#5ee3ff; --viz-7:#63e6be; --viz-8:#ffd43b;
+}
+/* Светлая палитра (GitHub-light ramp, dark[]→gray[]) — P2.
+   Канвас #ffffff, поверхности #f6f8fa, текст #24292f (как «black» в A2).
+   Акцент (cyan-8 #00677a) ставит applyAccent через .light-вариант — тут его
+   нет. Терминал остаётся тёмным (как во всех светлых темах проекта). */
+:root[data-skin="remnawave"][data-theme="light"]{
+  /* поверхности (GitHub-light) */
+  --bg0:#ffffff;                     /* canvas default */
+  --bg1:#f6f8fa;                     /* canvas-subtle — топбар/сайдбар/панели */
+  --bg2:#ffffff;                     /* карточки/инпуты — белые, отделены бордером */
+  --bg3:#eaeef2;                     /* hover/raised */
+  --line:#d0d7de;                    /* border default */
+  --line-soft:#d8dee4;               /* hairline/border muted */
+  /* текст (GitHub-light fg ramp; faint затемнён до #5f6b78, чтобы держать
+     AA ≥4.5 на #f6f8fa/#eaeef2 — дефолтный fg-subtle #6e7781 даёт 4.26) */
+  --t-hi:#24292f;
+  --t-mid:#424a53;
+  --t-low:#57606a;
+  --t-faint:#5f6b78;
+  /* статусы (GitHub Primer light: success/attention/danger) */
+  --ok:#1a7f37;   --ok-dim:rgba(26,127,55,.12);   --ok-line:rgba(26,127,55,.30);
+  --warn:#9a6700; --warn-dim:rgba(154,103,0,.12); --warn-line:rgba(154,103,0,.28);
+  --err:#cf222e;  --err-dim:rgba(207,34,46,.10);  --err-line:rgba(207,34,46,.30);
+  --raised:#f6f8fa; --row-hover:rgba(208,215,222,.40); --overlay:rgba(0,0,0,.40);
+  --topbar-bg:#f6f8fa;
+  --sidebar-bg:linear-gradient(135deg,#f6f8fa,#eaeef2);
+  --term-bg:#0d1117; --scroll-thumb:#c1c9d2;
+  /* тени — мягче на светлом */
+  --shadow-pop:0 8px 32px rgba(0,0,0,.12),0 2px 8px rgba(0,0,0,.06);
+  --shadow-modal:0 16px 48px rgba(0,0,0,.22);
+  /* data-viz ink — тот же cyan/teal ramp (chart hues фиксированы по проекту) */
+  --viz-1:#0096b5; --viz-2:#1a7f37; --viz-3:#9a6700; --viz-4:#cf222e;
+  --viz-5:#2ad4f0; --viz-6:#38d9a9; --viz-7:#63e6be; --viz-8:#fcc419;
 }
 /* Кнопки перестают быть пилюлями — радиус 8px везде. Primary — cyan-заливка +
    accent-ink; soft — мягкая cyan-подсветка (B4.1/B4.4). */

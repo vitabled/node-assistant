@@ -50,8 +50,12 @@ export const ACCENTS: Record<AccentKey, AccentDef> = {
   // Remnawave cyan (GitHub-dark акцент): заливка cyan-6, активный текст cyan-4.
   // Ink тёмный: белый на #0096b5 даёт 3.47 (<AA 4.5), а тёмные чернила проходят
   // — как и для всех прочих акцентов (см. contrast.test.ts «ink on accents»).
-  // Skin dark-committed → light-варианта нет (светлая тема Remnawave — P2).
-  remnawave: { base: "#0096b5", hi: "#2ad4f0", ink: "#00161a" },
+  // Light-вариант (P2): cyan-8 #00677a — достаточно тёмный для белых чернил
+  // (6.52) и сам читается как текст на белом (6.52). hi свёрнут в base (как у
+  // nodeflow): яркий cyan-4 #2ad4f0 на белом даёт <4.5, поэтому в светлой теме
+  // активный текст/иконки берут тот же тёмный cyan.
+  remnawave: { base: "#0096b5", hi: "#2ad4f0", ink: "#00161a",
+              light: { base: "#00677a", hi: "#00677a", ink: "#FFFFFF" } },
 };
 
 function hexA(hex: string, a: number): string {
