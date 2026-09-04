@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -107,6 +108,65 @@ def _jobs_for_response() -> list[dict[str, Any]]:
     return jobs
 
 
+def create_server_job(req: Any, task_id: str, started_at: float | None = None) -> DeployJob:
+    """Persist the server-owned card before a deployment is handed to a worker."""
+    saved_form = req.model_dump(mode="json")
+    job = DeployJob(
+        taskId=task_id,
+        domain=req.domain or "",
+        ip=req.ip,
+        newSshPort=req.new_ssh_port or req.current_ssh_port or 22,
+        startedAt=started_at if started_at is not None else time.time() * 1000,
+        savedForm=saved_form,
+        finalStatus="running",
+    )
+    upsert_server_job(job)
+    return job
+
+
+def upsert_server_job(job: DeployJob) -> None:
+    """Synchronous storage primitive shared by HTTP, deploy and backfill paths."""
+    with _LOCK:
+        records = _read()
+        records = [record for record in records if record.get("taskId") != job.taskId]
+        records.append(_encrypt_job(job))
+        _write(records)
+
+
+def ensure_server_job(req: Any, task_id: str, started_at: float | None = None) -> DeployJob | None:
+    """Create a card only when a worker receives a task from a legacy path."""
+    with _LOCK:
+        for record in _read():
+            if isinstance(record, dict) and record.get("taskId") == task_id:
+                return _decrypt_job(record)
+    return create_server_job(req, task_id, started_at)
+
+
+def update_server_job_status(task_id: str, final_status: str) -> None:
+    """Set a terminal verdict without changing the card's start time or form."""
+    with _LOCK:
+        records = _read()
+        for index, record in enumerate(records):
+            if not isinstance(record, dict) or record.get("taskId") != task_id:
+                continue
+            job = _decrypt_job(record)
+            if job is None:
+                return
+            records[index] = _encrypt_job(job.model_copy(update={"finalStatus": final_status}))
+            _write(records)
+            return
+
+
+def list_server_jobs(account_id: str) -> list[dict[str, Any]]:
+    """Read decrypted cards for one account for maintenance/backfill callers."""
+    token = accounts.current_account.set(account_id)
+    try:
+        with _LOCK:
+            return _jobs_for_response()
+    finally:
+        accounts.current_account.reset(token)
+
+
 @router.get("")
 async def list_jobs() -> dict[str, list[dict[str, Any]]]:
     """Return this account's cards; malformed/encryption-broken rows are skipped."""
@@ -125,11 +185,7 @@ async def replace_jobs(body: DeployJobsBody) -> dict[str, list[dict[str, Any]]]:
 @router.post("")
 async def upsert_job(job: DeployJob) -> dict[str, dict[str, Any]]:
     """Create or replace the card identified by its deployment task id."""
-    with _LOCK:
-        records = _read()
-        records = [record for record in records if record.get("taskId") != job.taskId]
-        records.append(_encrypt_job(job))
-        _write(records)
+    upsert_server_job(job)
     return {"job": job.model_dump(exclude_none=True)}
 
 

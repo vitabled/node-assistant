@@ -5,6 +5,7 @@ from app.models.deploy import DeployRequest
 from app.services.task_store import task_store, STEP_LABELS, TaskStatus
 from app.services.pipeline import run_pipeline
 from app.services import accounts, job_runner, shared_task_store, worker_lease
+from app.api import deploy_jobs
 from app.config import settings
 
 router = APIRouter(prefix="/api")
@@ -36,6 +37,7 @@ async def deploy(req: DeployRequest):
         )
     task    = task_store.create(total_steps=len(STEP_LABELS))
     task_id = task.task_id
+    deploy_jobs.create_server_job(req, task_id)
 
     # Hand off to the deploy-worker container when one is live; otherwise run it
     # right here, exactly as the monolith always has.
@@ -87,6 +89,10 @@ async def restart_deploy(req: StopRequest):
         except Exception:
             task.finish(TaskStatus.FAILED, "Не удалось восстановить параметры деплоя")
             raise HTTPException(409, "Не удалось восстановить параметры деплоя")
+        # HTTP requests always have an account context. The guard keeps the
+        # low-level shared-store recovery primitive usable for pre-account rows.
+        if accounts.current_account.get():
+            deploy_jobs.create_server_job(deploy_req, task.task_id)
         loop_task = asyncio.create_task(_run_pipeline_safe(deploy_req, task.task_id))
         _running_tasks[task.task_id] = loop_task
         loop_task.add_done_callback(lambda _: _running_tasks.pop(task.task_id, None))
@@ -130,12 +136,21 @@ async def _run_pipeline_safe(req: DeployRequest, task_id: str) -> None:
         raise  # CancelledError must always be re-raised
     except Exception:
         pass  # status already set to FAILED inside run_pipeline
+    finally:
+        if task.status in (TaskStatus.SUCCESS, TaskStatus.FAILED):
+            deploy_jobs.update_server_job_status(task_id, task.status.value)
 
 
 async def _job_deploy(payload: dict, task) -> None:
     """deploy-worker entry for a queued deploy. The 14-step pipeline is imported
     and run unchanged — the split moves WHERE it runs, never WHAT it does."""
-    await run_pipeline(DeployRequest(**payload), task)
+    req = DeployRequest(**payload)
+    deploy_jobs.ensure_server_job(req, task.task_id)
+    try:
+        await run_pipeline(req, task)
+    finally:
+        if task.status in (TaskStatus.SUCCESS, TaskStatus.FAILED):
+            deploy_jobs.update_server_job_status(task.task_id, task.status.value)
 
 
 job_runner.register("deploy", _job_deploy)
