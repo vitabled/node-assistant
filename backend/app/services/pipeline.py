@@ -1132,7 +1132,7 @@ services:
     command: sh -c 'rm -f /dev/shm/nginx.sock && exec nginx -g "daemon off;"'
 
   remnanode:
-    image: remnawave/node:latest
+    image: remnawave/node:$image_tag
     container_name: remnanode
     hostname: remnanode
     <<: [*common, *logging]
@@ -1205,7 +1205,8 @@ server {
 
 
 def _render_remnanode_files(
-    *, domain: str, domaincert: str, node_port: int, token: str, xhttp_path: str
+    *, domain: str, domaincert: str, node_port: int, token: str, xhttp_path: str,
+    image_tag: str = "latest",
 ) -> tuple[str, str]:
     """Render (compose, nginx_conf). Substitutes ONLY our system variables.
 
@@ -1227,6 +1228,7 @@ def _render_remnanode_files(
         ("$domaincert", domaincert),
         ("$nodeport", str(node_port)),
         ("$token", token),
+        ("$image_tag", image_tag),
     ):
         compose = compose.replace(key, val)
 
@@ -1318,6 +1320,7 @@ async def step_remnanode(
     *,
     node_port: int = 2222,
     xhttp_path: str = "",
+    image_tag: str = "latest",
 ) -> None:
     _begin_step(task, 11)
 
@@ -1330,10 +1333,12 @@ async def step_remnanode(
         node_port=node_port,
         token=remnanode_token,
         xhttp_path=xhttp_path,
+        image_tag=image_tag,
     )
     task.add_log(
         f"\x1b[90m[remnanode] domain={domain} domaincert={domaincert} "
-        f"node_port={node_port} xhttp_path={xhttp_path or '—'}\x1b[0m"
+        f"node_port={node_port} image=remnawave/node:{image_tag} "
+        f"xhttp_path={xhttp_path or '—'}\x1b[0m"
     )
 
     # ── Ensure Docker is present ──────────────────────────────

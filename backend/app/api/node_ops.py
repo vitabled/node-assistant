@@ -15,8 +15,10 @@ here); the SSH-port network steps are intentionally excluded too — rolling the
 port back on a live box is lockout-prone and out of scope.
 """
 import re
+from urllib.parse import urljoin
 from typing import Callable, Literal, Optional
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import Field, field_validator
 
@@ -30,6 +32,9 @@ from app.services import job_runner
 from app.services import pipeline
 
 router = APIRouter(prefix="/api/node")
+
+_REMNANODE_REPOSITORY = "remnawave/node"
+_DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
 Component = Literal[
     "node_accelerator", "trafficguard", "test_tools", "remnanode",
@@ -62,6 +67,87 @@ class NodeOpRequest(DeployRequest):
     shell-safety etc.), so a hostile field can't reach the reinstall scripts."""
     component: Component
     action: Action
+    # Docker image tag selected from the official remnawave/node registry. This
+    # is only acted on for a remnanode reinstall; omitted keeps :latest.
+    version: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("version")
+    @classmethod
+    def _validate_version(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        if not _DOCKER_TAG_RE.fullmatch(v):
+            raise ValueError("version must be a valid Docker image tag")
+        return v
+
+
+class NodeRemnanodeVersionsRequest(SshCreds):
+    """Per-request SSH credentials for reporting the node's current image tag."""
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+
+
+async def _list_remnanode_versions() -> list[str]:
+    """Read tags from the same Docker Hub repository used by the installer."""
+    auth_url = "https://auth.docker.io/token"
+    tags_url = f"https://registry-1.docker.io/v2/{_REMNANODE_REPOSITORY}/tags/list?n=1000"
+    params = {
+        "service": "registry.docker.io",
+        "scope": f"repository:{_REMNANODE_REPOSITORY}:pull",
+    }
+    tags: set[str] = set()
+    async with httpx.AsyncClient(timeout=20) as client:
+        token_response = await client.get(auth_url, params=params)
+        token_response.raise_for_status()
+        token = token_response.json().get("token")
+        if not isinstance(token, str) or not token:
+            raise RuntimeError("Docker Hub did not return a pull token")
+
+        while tags_url:
+            response = await client.get(tags_url, headers={"Authorization": f"Bearer {token}"})
+            response.raise_for_status()
+            payload = response.json()
+            tags.update(
+                tag for tag in payload.get("tags", [])
+                if isinstance(tag, str) and _DOCKER_TAG_RE.fullmatch(tag)
+            )
+            next_link = response.links.get("next", {}).get("url")
+            tags_url = urljoin(str(response.url), next_link) if next_link else ""
+    return sorted(tags)
+
+
+async def _current_remnanode_version(req: NodeRemnanodeVersionsRequest) -> Optional[str]:
+    """Best-effort read of the running container's configured image tag."""
+    ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, **await ssh_auth.resolve(req))
+    try:
+        await ssh.connect()
+        image = (await ssh.get_output(
+            "docker inspect --format '{{.Config.Image}}' remnanode 2>/dev/null || true"
+        )).strip().splitlines()
+        image = image[-1].strip() if image else ""
+        prefix = f"{_REMNANODE_REPOSITORY}:"
+        tag = image[len(prefix):] if image.startswith(prefix) else ""
+        return tag if _DOCKER_TAG_RE.fullmatch(tag) else None
+    finally:
+        await ssh.close()
+
+
+@router.get("/remnanode/versions")
+async def remnanode_versions(req: NodeRemnanodeVersionsRequest):
+    """List live Docker Hub tags and, when reachable, the node's current tag."""
+    try:
+        versions = await _list_remnanode_versions()
+    except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+        raise HTTPException(502, f"Не удалось получить версии Remnanode из Docker Hub: {exc}")
+
+    body: dict[str, object] = {"versions": versions}
+    try:
+        current = await _current_remnanode_version(req)
+    except Exception:
+        current = None
+    if current:
+        body["current"] = current
+    return body
 
 
 # ── Read-only detection of already-installed components ────────
@@ -233,6 +319,22 @@ async def node_detect(req: NodeDetectRequest):
 
 @router.post("/step")
 async def node_step(req: NodeOpRequest, background_tasks: BackgroundTasks):
+    if req.component == "remnanode" and req.action == "reinstall" and req.version:
+        try:
+            versions: Optional[list[str]] = await _list_remnanode_versions()
+        except (httpx.HTTPError, ValueError, RuntimeError):
+            # The registry being unavailable must not turn a previously valid
+            # manual operation into a hard failure. When it answered, however,
+            # its list is authoritative, including an unexpectedly empty one.
+            versions = None
+        if versions is not None and req.version not in versions:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Версия Remnanode '{req.version}' недоступна в Docker Hub. "
+                    "Обновите список версий и выберите значение из него."
+                ),
+            )
     task = task_store.create(total_steps=1)
     # Reinstall re-runs pipeline.step_* over SSH and can be long, so it is
     # offloaded to the deploy-worker when one is live; otherwise unchanged.
@@ -314,6 +416,7 @@ async def _reinstall(ssh: SSHSession, task, req: NodeOpRequest) -> None:
         await pipeline.step_remnanode(
             ssh, task, token, req.domain,
             node_port=req.remnanode_port, xhttp_path=req.xhttp_path,
+            image_tag=req.version or "latest",
         )
     elif c == "masking":
         await pipeline.step_sni_masking(ssh, task)

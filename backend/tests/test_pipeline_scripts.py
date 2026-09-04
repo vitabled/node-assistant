@@ -59,6 +59,14 @@ def test_vanilla_compose():
     assert "/etc/letsencrypt" not in c        # no local cert bridge
 
 
+def test_remnanode_compose_uses_selected_image_tag():
+    compose, _ = pipeline._render_remnanode_files(
+        domain="node1.example.com", domaincert="node1.example.com",
+        node_port=2222, token="SECRET.tok", xhttp_path="", image_tag="v2.8.0",
+    )
+    assert "remnawave/node:v2.8.0" in compose
+
+
 def test_step_labels_count_and_key_renames():
     assert len(STEP_LABELS) == 14
     assert STEP_LABELS[4] == "Тест-инструменты"         # step 5 (Ф2 wave1, in «Оптимизация ОС»)

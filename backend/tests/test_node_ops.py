@@ -1,13 +1,31 @@
 """Ф7 — per-component node management endpoint + uninstall script builders."""
+import asyncio
 import typing
+import uuid
+from typing import Any, cast
 
 import pytest
+from fastapi import BackgroundTasks, HTTPException
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+import app.api.node_ops as node_ops
 from app.api.node_ops import (
     NodeOpRequest, Component, Action,
     _UNINSTALL_SCRIPTS, _COMPONENT_LABEL, _effective_port,
 )
+from app.main import app
+
+
+client = TestClient(app)
+
+
+def _auth():
+    response = client.post(
+        "/api/auth/register",
+        json={"login": f"no-{uuid.uuid4().hex[:8]}", "password": "pw"},
+    )
+    return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
 def _req(**over):
@@ -43,6 +61,61 @@ def test_inherits_deploy_validators_shell_safety():
     # domain/email shell-safety from DeployRequest still applies to ops
     with pytest.raises(ValidationError):
         _req(domain='n.example.com"; reboot #')
+
+
+def test_remnanode_reinstall_passes_selected_image_tag(monkeypatch):
+    captured = {}
+
+    async def fake_step_remnanode(*_args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(node_ops.pipeline, "step_remnanode", fake_step_remnanode)
+    asyncio.run(node_ops._reinstall(
+        cast(Any, object()), object(),
+        _req(component="remnanode", action="reinstall", version="v2.8.0"),
+    ))
+    assert captured["image_tag"] == "v2.8.0"
+
+
+def test_remnanode_reinstall_rejects_tag_absent_from_registry(monkeypatch):
+    async def fake_versions():
+        return ["latest", "v2.8.0"]
+
+    monkeypatch.setattr(node_ops, "_list_remnanode_versions", fake_versions)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(node_ops.node_step(
+            _req(component="remnanode", action="reinstall", version="v0.0.0"),
+            BackgroundTasks(),
+        ))
+    assert error.value.status_code == 422
+    assert "недоступна" in error.value.detail
+
+
+def test_remnanode_versions_reads_registry_tags_and_current_image(monkeypatch):
+    class FakeSSH:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def connect(self):
+            pass
+
+        async def get_output(self, _command):
+            return "remnawave/node:v2.8.0\n"
+
+        async def close(self):
+            pass
+
+    async def fake_versions():
+        return ["latest", "v2.8.0"]
+
+    monkeypatch.setattr(node_ops, "SSHSession", FakeSSH)
+    monkeypatch.setattr(node_ops, "_list_remnanode_versions", fake_versions)
+    response = client.request(
+        "GET", "/api/node/remnanode/versions", headers=_auth(),
+        json={"ip": "1.2.3.4", "ssh_password": "pw"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"versions": ["latest", "v2.8.0"], "current": "v2.8.0"}
 
 
 # ── uninstall scripts: right teardown command per component, idempotent ──
