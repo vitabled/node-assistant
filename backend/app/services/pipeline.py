@@ -956,6 +956,26 @@ def ssl_needs_cf_dns(cert_provider: str) -> bool:
     return cert_provider == "cloudflare"
 
 
+_HTTP01_OPEN80 = """\
+# ACME HTTP-01: временно открыть порт 80 (ufw или iptables) на время челленджа;
+# trap закрывает правило при выходе из шага (успех или ошибка).
+OPENED_UFW=0
+OPENED_IPT=0
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw allow 80/tcp >/dev/null 2>&1 || true
+    OPENED_UFW=1
+elif ! iptables -C INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1; then
+    iptables -I INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1 || true
+    OPENED_IPT=1
+fi
+cleanup_http01() {
+    if [ "$OPENED_UFW" = "1" ]; then ufw delete allow 80/tcp >/dev/null 2>&1 || true; fi
+    if [ "$OPENED_IPT" = "1" ]; then iptables -D INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1 || true; fi
+}
+trap cleanup_http01 EXIT
+"""
+
+
 def build_ssl_script(domain: str, email: str, cf_api_key: str, cert_provider: str) -> str:
     """The acme.sh install + per-provider issue + install-cert bash script,
     shared by the deploy pipeline (`step_ssl`) and the SSL-management endpoint
@@ -966,12 +986,13 @@ def build_ssl_script(domain: str, email: str, cf_api_key: str, cert_provider: st
         issue_flags = "--dns dns_cf --server letsencrypt"
     elif cert_provider == "zerossl":
         provider_prep = (
-            "fuser -k 80/tcp 2>/dev/null || true\n"
-            f'/root/.acme.sh/acme.sh --register-account --server zerossl -m "{email}" || true'
+            _HTTP01_OPEN80
+            + "fuser -k 80/tcp 2>/dev/null || true\n"
+            + f'/root/.acme.sh/acme.sh --register-account --server zerossl -m "{email}" || true'
         )
         issue_flags = "--standalone --server zerossl"
     else:  # letsencrypt (HTTP-01 standalone)
-        provider_prep = "fuser -k 80/tcp 2>/dev/null || true"
+        provider_prep = _HTTP01_OPEN80 + "fuser -k 80/tcp 2>/dev/null || true"
         issue_flags = "--standalone --server letsencrypt"
 
     # cloudflare + letsencrypt share the Let's Encrypt CA (DNS-01 vs HTTP-01);
