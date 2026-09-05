@@ -165,7 +165,7 @@ export function StepProgress({ currentStep, totalSteps, status, steps = DEPLOY_S
       <div className="flex items-center gap-2">
         <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg3)" }}>
           <div
-            className="h-full rounded-full transition-all duration-500"
+            className={`h-full rounded-full transition-all duration-500 ${isRunning ? "ni-progress-pulse" : ""}`}
             style={{ width: `${pct}%`, background: barColor }}
           />
         </div>

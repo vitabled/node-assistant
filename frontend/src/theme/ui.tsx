@@ -56,23 +56,25 @@ export function Seg({ options, value, onChange, accent, mini, style }: {
 
 // Единое пустое состояние (B8): мягкая cyan-иконка → яркий заголовок →
 // приглушённый подсказка → (опц.) действие. Заменяет разрозненные «серый текст
-// в рамке» пустые состояния по всем экранам.
-export function EmptyState({ icon, title, hint, action }: {
+// в рамке» пустые состояния по всем экранам. `compact` — для встраивания внутрь
+// уже обёрнутого блока (виджеты UsersStats): без собственной `.card`-рамки.
+export function EmptyState({ icon, title, hint, action, compact }: {
   icon?: ReactNode; title: ReactNode; hint?: ReactNode; action?: ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div className="card" style={{
-      padding: 32, textAlign: "center", display: "flex",
-      flexDirection: "column", alignItems: "center", gap: 8,
+    <div className={compact ? undefined : "card"} style={{
+      padding: compact ? "18px 8px" : 32, textAlign: "center", display: "flex",
+      flexDirection: "column", alignItems: "center", gap: compact ? 4 : 8,
     }}>
       {icon && (
         <span style={{
-          width: 40, height: 40, borderRadius: 8, display: "grid", placeItems: "center",
+          width: compact ? 32 : 40, height: compact ? 32 : 40, borderRadius: 8, display: "grid", placeItems: "center",
           background: "var(--accent-dim)", border: "1px solid var(--accent-line)",
           color: "var(--accent-hi)",
         }}>{icon}</span>
       )}
-      <p style={{ fontSize: 14, fontWeight: 600, color: "var(--t-hi)", margin: 0 }}>{title}</p>
+      <p style={{ fontSize: compact ? 13 : 14, fontWeight: 600, color: "var(--t-hi)", margin: 0 }}>{title}</p>
       {hint && <p className="sub" style={{ margin: 0 }}>{hint}</p>}
       {action}
     </div>

@@ -1,6 +1,7 @@
 import { useState, useEffect, type ReactNode } from "react";
 import { Pencil, Plus, Trash2, ChevronUp, ChevronDown, Columns2, EyeOff, Download } from "lucide-react";
-import { Seg } from "../../theme/ui";
+import { Seg, EmptyState } from "../../theme/ui";
+import { Stagger, StaggerItem, Skeleton } from "../../theme/motion";
 import {
   useStatWidgets, WIDGET_KINDS, type WidgetKind,
   filterNodeLoad, filterMigrations, filterCheckerNodes, hiddenCount,
@@ -87,12 +88,23 @@ function Card({ title, Icon, settings, children }:
 
 function State({ loading, err, empty, allHidden, children }:
   { loading: boolean; err: boolean; empty: boolean; allHidden?: boolean; children: ReactNode }) {
-  if (loading) return <p style={{ fontSize: 12, color: "var(--t-faint)" }}>Загрузка…</p>;
+  // Скелетон вместо «Загрузка…» — карточка держит высоту и не мигает текстом.
+  if (loading) return <Skeleton style={{ height: 48 }} />;
   if (err) return <p style={{ fontSize: 12, color: "var(--err)" }}>Не удалось загрузить данные</p>;
   // «Данных нет» и «всё скрыто вручную» — разные состояния: во втором случае
   // пользователь иначе решит, что статистика сломалась.
   if (empty && allHidden) return <p style={{ fontSize: 12, color: "var(--t-faint)" }}>Все серверы скрыты</p>;
-  if (empty) return <p style={{ fontSize: 12, color: "var(--t-faint)" }}>Данных пока нет</p>;
+  // Единое пустое состояние (S4): иконка + заголовок + подсказка. Кнопки
+  // «Обновить» нет — виджеты подтягиваются только при смене периода/инстанса,
+  // поэтому подсказка, а не пустое действие.
+  if (empty) return (
+    <EmptyState
+      compact
+      icon={<BarChart3 size={16} />}
+      title="Данных пока нет"
+      hint="Метрики появятся, когда накопятся исторические снимки (обычно в течение часа)."
+    />
+  );
   return <>{children}</>;
 }
 
@@ -481,7 +493,7 @@ export function UsersStats() {
           onChange={v => setSeg(v as SegFilter)}
         />
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2" style={{ display: "grid", gap: 16 }}>
+      <Stagger className="grid grid-cols-1 lg:grid-cols-2" style={{ display: "grid", gap: 16 }}>
         {[...layout]
           .sort((a, b) => a.order - b.order)
           .filter(inst => seg === "all" || KIND_SEGMENT[inst.kind] === seg)
@@ -489,7 +501,7 @@ export function UsersStats() {
           const def = WIDGETS[inst.kind];
           if (!def) return null;
           return (
-            <div key={inst.instanceId} style={{ gridColumn: inst.w === 2 ? "1 / -1" : undefined, position: "relative" }}>
+            <StaggerItem key={inst.instanceId} style={{ gridColumn: inst.w === 2 ? "1 / -1" : undefined, position: "relative" }}>
               {editing && (
                 <div style={{ position: "absolute", top: 6, right: 6, zIndex: 10, display: "flex", gap: 2,
                   background: "var(--bg2)", border: "1px solid var(--line-soft)", borderRadius: "var(--r-sm)", padding: 2 }}>
@@ -506,10 +518,10 @@ export function UsersStats() {
                 </div>
               )}
               {def.render({ nameMap, instances })}
-            </div>
+            </StaggerItem>
           );
         })}
-      </div>
+      </Stagger>
     </div>
   );
 }

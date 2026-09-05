@@ -7,7 +7,7 @@ import { toast } from "./infra/Toast";
 import { deployJobsKey } from "../auth/store";
 import type { DeployJobSummary } from "./DeployDashboard";
 import { FlagChip } from "./common/FlagChip";
-import { InputShell } from "../theme/ui";
+import { InputShell, EmptyState } from "../theme/ui";
 
 /**
  * «Fail2Ban list» (Wave-5 PR-2): список IP/CIDR, который backend применяет
@@ -444,6 +444,20 @@ export function F2bList() {
                 ))
               )}
             </div>
+          )}
+
+          {allLines.length === 0 && (
+            <EmptyState
+              compact
+              icon={<ShieldAlert size={16} />}
+              title="Список пуст"
+              hint="Добавьте IP/CIDR по строке, вставьте из буфера или импортируйте TXT/CSV/JSON."
+              action={
+                <button onClick={() => setImportOpen(true)} className="btn btn-soft" style={{ marginTop: 4 }}>
+                  <FilePlus size={13} /> Импорт
+                </button>
+              }
+            />
           )}
 
           <textarea className="input font-mono text-xs" rows={6} value={text}

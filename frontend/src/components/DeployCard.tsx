@@ -453,7 +453,7 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
                 stepStatus.status === "success" ? "bg-[var(--ok)]"
                 : stepStatus.status === "failed"  ? "bg-[var(--err)]"
                 : "bg-[var(--accent)]"
-              }`}
+              } ${isRunning ? "ni-progress-pulse" : ""}`}
               style={{ width: `${stepStatus.status === "success" ? 100 : pct}%` }}
             />
           </div>

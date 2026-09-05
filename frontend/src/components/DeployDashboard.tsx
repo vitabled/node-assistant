@@ -6,7 +6,8 @@ import {
 import { DeployCard } from "./DeployCard";
 import { DeployForm, type FormData } from "./DeployForm";
 import { deployJobsKey } from "../auth/store";
-import { Page, Seg } from "../theme/ui";
+import { Page, Seg, EmptyState } from "../theme/ui";
+import { Stagger, StaggerItem } from "../theme/motion";
 import {
   fetchDeployJobs, upsertDeployJob, deleteDeployJob, reconcileJobs,
 } from "./deployJobsSync";
@@ -298,7 +299,17 @@ export function DeployDashboard() {
         </div>
 
         {jobs.length === 0 ? (
-          <DeployEmptyState onAdd={() => setShowForm(true)} />
+          <EmptyState
+            icon={<Rocket size={18} />}
+            title="Нет задач деплоя"
+            hint="Задеплойте первую ноду или добавьте существующий сервер — карточки появятся здесь."
+            action={
+              <button onClick={() => setShowForm(true)}
+                className="btn btn-primary" style={{ marginTop: 6 }}>
+                <Plus size={14} /> Добавить сервер
+              </button>
+            }
+          />
         ) : (
           <>
             {/* S2 toolbar: поиск (ip/имя/домен) + фильтр статуса + «Новая нода». */}
@@ -330,25 +341,34 @@ export function DeployDashboard() {
             </div>
 
             {filtered.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <p className="text-sm mb-1" style={{ color: "var(--t-low)" }}>Ничего не найдено</p>
-                <p className="text-xs" style={{ color: "var(--t-faint)" }}>Измените запрос поиска или фильтр статуса</p>
-              </div>
+              <EmptyState
+                icon={<Search size={18} />}
+                title="Ничего не найдено"
+                hint="Измените запрос поиска или фильтр статуса."
+                action={
+                  <button
+                    onClick={() => { setQuery(""); setStatusFilter("all"); }}
+                    className="btn btn-soft" style={{ marginTop: 6 }}>
+                    Сбросить фильтры
+                  </button>
+                }
+              />
             ) : (
-              <div className="ni-deploy-grid">
+              <Stagger className="ni-deploy-grid">
                 {filtered.map(job => (
-                  <DeployCard
-                    key={job.taskId}
-                    job={job}
-                    onRemove={removeJob}
-                    onEdit={j  => setEditJob(j)}
-                    onRetry={retryJob}
-                    onRestart={restartWaitingJob}
-                    onStatusChange={updateJobStatus}
-                    onColorChange={changeJobColor}
-                  />
+                  <StaggerItem key={job.taskId}>
+                    <DeployCard
+                      job={job}
+                      onRemove={removeJob}
+                      onEdit={j  => setEditJob(j)}
+                      onRetry={retryJob}
+                      onRestart={restartWaitingJob}
+                      onStatusChange={updateJobStatus}
+                      onColorChange={changeJobColor}
+                    />
+                  </StaggerItem>
                 ))}
-              </div>
+              </Stagger>
             )}
           </>
         )}
@@ -684,22 +704,6 @@ function FieldLite({ label, value, onChange, placeholder, type = "text" }: {
         spellCheck={false}
         className="input transition-colors"
       />
-    </div>
-  );
-}
-
-// ── Empty state ───────────────────────────────────────────────
-
-function DeployEmptyState({ onAdd }: { onAdd: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-24 text-center">
-      <Rocket size={40} className="mb-4" style={{ color: "var(--t-faint)" }} />
-      <p className="text-sm mb-1" style={{ color: "var(--t-low)" }}>Нет задач деплоя</p>
-      <p className="text-xs mb-5" style={{ color: "var(--t-faint)" }}>Нажмите «Добавить сервер» чтобы запустить деплой ноды</p>
-      <button onClick={onAdd}
-        className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm btn btn-primary">
-        <Plus size={14} /> Добавить сервер
-      </button>
     </div>
   );
 }

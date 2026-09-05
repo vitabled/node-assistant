@@ -9,6 +9,7 @@ import { ImportFromSubscription } from "./ImportFromSubscription";
 import { resolveCountryCode, splitFlagEmoji } from "../utils/countryAliases";
 import { nodeColorLookup } from "../utils/nodeColors";
 import { Page, Seg, EmptyState, Table, Stat as StatTile } from "../theme/ui";
+import { Stagger, StaggerItem, Skeleton } from "../theme/motion";
 import { deployJobsKey } from "../auth/store";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
@@ -531,37 +532,68 @@ function ServerUptime() {
         </div>
       </div>
 
-      {/* S2: верхние Stat-карточки (Всего / Онлайн / Офлайн / Аптайм) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-        <StatCard label="Всего серверов" value={g?.total ?? "—"} />
-        <StatCard label="Онлайн" value={g?.online ?? "—"}
-          valueColor={g?.online ? "var(--ok)" : undefined} />
-        <StatCard label="Офлайн" value={g?.offline ?? "—"}
-          valueColor={g?.offline ? "var(--err)" : undefined} />
-        <StatCard label="Аптайм 30 дней" value={g?.uptime30d != null ? `${g.uptime30d}%` : "—"}
-          valueColor={g?.uptime30d != null ? uptimeColor(g.uptime30d) : undefined} />
-      </div>
+      {/* S2: верхние Stat-карточки (Всего / Онлайн / Офлайн / Аптайм) — fade+slide-up
+          при монтировании; пока грузится — skeleton вместо «—». */}
+      <Stagger className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <StaggerItem key={i}><Skeleton style={{ height: 72, borderRadius: "var(--r-lg)" }} /></StaggerItem>
+          ))
+        ) : (
+          <>
+            <StaggerItem><StatCard label="Всего серверов" value={g?.total ?? "—"} /></StaggerItem>
+            <StaggerItem><StatCard label="Онлайн" value={g?.online ?? "—"}
+              valueColor={g?.online ? "var(--ok)" : undefined} /></StaggerItem>
+            <StaggerItem><StatCard label="Офлайн" value={g?.offline ?? "—"}
+              valueColor={g?.offline ? "var(--err)" : undefined} /></StaggerItem>
+            <StaggerItem><StatCard label="Аптайм 30 дней" value={g?.uptime30d != null ? `${g.uptime30d}%` : "—"}
+              valueColor={g?.uptime30d != null ? uptimeColor(g.uptime30d) : undefined} /></StaggerItem>
+          </>
+        )}
+      </Stagger>
 
-      {servers.length === 0 ? (
+      {loading ? (
+        <Table head={["Страна", "Сервер", "Статус", "Аптайм 30д", "Нагрузка", ""]}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <tr key={i}>
+              <td><Skeleton style={{ height: 14, width: 84 }} /></td>
+              <td><Skeleton style={{ height: 14, width: 150 }} /></td>
+              <td><Skeleton style={{ height: 14, width: 64 }} /></td>
+              <td><Skeleton style={{ height: 14, width: 52 }} /></td>
+              <td><Skeleton style={{ height: 14, width: 110 }} /></td>
+              <td><Skeleton style={{ height: 14, width: 40 }} /></td>
+            </tr>
+          ))}
+        </Table>
+      ) : servers.length === 0 ? (
         <EmptyState
           icon={<Server size={18} />}
           title="Нет отслеживаемых серверов"
-          hint={loading ? "Загрузка…" : "Нажмите «Добавить сервер» или задеплойте ноду."}
+          hint="Добавьте сервер вручную, импортируйте из подписки или задеплойте ноду — он появится здесь."
+          action={
+            <button onClick={() => setModal({})} className="btn btn-primary" style={{ marginTop: 6 }}>
+              <Plus size={14} /> Добавить сервер
+            </button>
+          }
         />
       ) : (
-        <Table head={["Страна", "Сервер", "Статус", "Аптайм 30д", "Нагрузка", ""]}>
-          {servers.map(n => (
-            <ServerRow
-              key={n.stableId}
-              node={n}
-              onHide={() => setHidden(n.stableId, true)}
-              onEdit={n.source === "manual" ? () => setModal({ editing: n }) : undefined}
-              onRemove={n.source === "manual"
-                ? () => { if (confirm("Удалить сервер? История проб будет стёрта.")) removeServer(n.stableId); }
-                : undefined}
-            />
-          ))}
-        </Table>
+        <Stagger>
+          <StaggerItem>
+            <Table head={["Страна", "Сервер", "Статус", "Аптайм 30д", "Нагрузка", ""]}>
+              {servers.map(n => (
+                <ServerRow
+                  key={n.stableId}
+                  node={n}
+                  onHide={() => setHidden(n.stableId, true)}
+                  onEdit={n.source === "manual" ? () => setModal({ editing: n }) : undefined}
+                  onRemove={n.source === "manual"
+                    ? () => { if (confirm("Удалить сервер? История проб будет стёрта.")) removeServer(n.stableId); }
+                    : undefined}
+                />
+              ))}
+            </Table>
+          </StaggerItem>
+        </Stagger>
       )}
 
       {hiddenNodes.length > 0 && (

@@ -123,6 +123,10 @@ strong{color:var(--t-hi);font-weight:600}
 .dot{width:7px;height:7px;border-radius:99px;flex:none}
 @keyframes ni-pulse{50%{opacity:.35}}
 .dot.pulse{animation:ni-pulse 1.3s ease-in-out infinite}
+/* Тонкий pulse для прогресс-баров запущенного деплоя (S4): лёгкое «дыхание»
+   opacity поверх transition-width. Глушится глобальным reduced-motion kill-switch. */
+@keyframes ni-progress-pulse{50%{opacity:.55}}
+.ni-progress-pulse{animation:ni-progress-pulse 1.6s ease-in-out infinite}
 
 /* ── cards / surfaces ── */
 .card{background:var(--bg2);border:1px solid var(--line-soft);border-radius:var(--r-lg)}
