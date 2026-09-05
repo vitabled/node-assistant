@@ -6,7 +6,8 @@ import {
   useId, useState, useEffect, useRef,
   type ReactNode, type CSSProperties, type InputHTMLAttributes,
 } from "react";
-import { ChevronDown, Eye, EyeOff } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, X } from "lucide-react";
+import { AnimatePresence, motion, type Variants } from "motion/react";
 
 export function Page({ children, max = 1060 }: { children: ReactNode; max?: number }) {
   // .ni-pagebody — чтобы применялся мобильный padding-override из index.css.
@@ -329,5 +330,151 @@ export function Table({ head, children, className, style }: {
         <tbody>{children}</tbody>
       </table>
     </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────
+   S3: общий модальный примитив (Modal / FormDialog)
+   ──────────────────────────────────────────────────────────────── */
+
+export type ModalSize = "sm" | "md" | "lg";
+
+const MODAL_MAX: Record<ModalSize, number> = { sm: 420, md: 560, lg: 860 };
+
+// Enter/exit — единый ритм 150–200ms (fade оверлея, slide-up панели).
+const overlayV: Variants = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1, transition: { duration: 0.18, ease: "easeOut" } },
+  exit:    { opacity: 0, transition: { duration: 0.15, ease: "easeIn" } },
+};
+const panelV: Variants = {
+  initial: { opacity: 0, y: 18, scale: 0.99 },
+  animate: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.18, ease: "easeOut" } },
+  exit:    { opacity: 0, y: 12, scale: 0.99, transition: { duration: 0.15, ease: "easeIn" } },
+};
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// Overlay с blur + центрирование (на мобиле — slide-up снизу через
+// `.ni-modal-overlay` в index.css). Esc / клик по оверлею закрывают, фокус
+// замыкается внутри панели и возвращается на прежний элемент при закрытии.
+// `open` управляет появлением; родитель рендерит <Modal> безусловно, чтобы
+// AnimatePresence могла проиграть exit-анимацию.
+export function Modal({ open, onClose, size = "md", ariaLabel, children,
+  className, panelClassName, closeOnOverlay = true, closeOnEsc = true }: {
+  open: boolean;
+  onClose: () => void;
+  size?: ModalSize;
+  ariaLabel?: string;
+  children: ReactNode;
+  className?: string;
+  panelClassName?: string;
+  closeOnOverlay?: boolean;
+  closeOnEsc?: boolean;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const prevActive = document.activeElement as HTMLElement | null;
+
+    // Переносим фокус внутрь диалога (первый focusable, иначе сама панель).
+    const panel = panelRef.current;
+    if (panel) {
+      const first = panel.querySelector<HTMLElement>(FOCUSABLE);
+      (first ?? panel).focus();
+    }
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (closeOnEsc) { e.preventDefault(); onClose(); }
+        return;
+      }
+      if (e.key !== "Tab" || !panelRef.current) return;
+      const focusables = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey) {
+        if (active === first || !panelRef.current.contains(active)) { e.preventDefault(); last.focus(); }
+      } else if (active === last || !panelRef.current.contains(active)) {
+        e.preventDefault(); first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      prevActive?.focus?.();
+    };
+  }, [open, onClose, closeOnEsc]);
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          className={`ni-modal-overlay ${className ?? ""}`}
+          variants={overlayV}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          onMouseDown={e => { if (closeOnOverlay && e.target === e.currentTarget) onClose(); }}
+        >
+          <motion.div
+            ref={panelRef}
+            className={`ni-modal-panel ${panelClassName ?? ""}`}
+            style={{ maxWidth: MODAL_MAX[size] }}
+            variants={panelV}
+            role="dialog"
+            aria-modal="true"
+            aria-label={ariaLabel}
+            tabIndex={-1}
+          >
+            {children}
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+// FormDialog — Modal с готовой шапкой (title/subtitle/закрыть), телом и опц.
+// футером. Для «Сменить домен» / «Образ remnanode» и любых простых диалогов.
+export function FormDialog({ open, onClose, title, subtitle, icon, size = "md",
+  footer, children, closeOnOverlay = true }: {
+  open: boolean;
+  onClose: () => void;
+  title: ReactNode;
+  subtitle?: ReactNode;
+  icon?: ReactNode;
+  size?: ModalSize;
+  footer?: ReactNode;
+  children: ReactNode;
+  closeOnOverlay?: boolean;
+}) {
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      size={size}
+      closeOnOverlay={closeOnOverlay}
+      ariaLabel={typeof title === "string" ? title : undefined}
+    >
+      <div className="ni-modal-head">
+        <div className="flex items-center gap-2.5 min-w-0">
+          {icon && <span style={{ color: "var(--accent-hi)", display: "flex", flex: "none" }}>{icon}</span>}
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold truncate" style={{ color: "var(--t-hi)", margin: 0 }}>{title}</h2>
+            {subtitle && <p className="text-xs truncate" style={{ color: "var(--t-low)", margin: 0 }}>{subtitle}</p>}
+          </div>
+        </div>
+        <button type="button" onClick={onClose} className="iconbtn" aria-label="Закрыть" title="Закрыть">
+          <X size={15} />
+        </button>
+      </div>
+      <div className="ni-modal-body">{children}</div>
+      {footer && <div className="ni-modal-foot">{footer}</div>}
+    </Modal>
   );
 }

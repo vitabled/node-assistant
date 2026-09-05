@@ -155,6 +155,7 @@ describe("expanded success card — domain + remnanode image controls", () => {
       onRestart={vi.fn()} onStatusChange={vi.fn()}
     />);
     expand();
+    fireEvent.click(screen.getByRole("button", { name: "Сменить образ remnanode" }));
 
     const select = await screen.findByRole("combobox", { name: "Версия образа remnanode" });
     expect((select as HTMLSelectElement).value).toBe("v2.8.0");
@@ -171,6 +172,7 @@ describe("expanded success card — domain + remnanode image controls", () => {
       onRestart={vi.fn()} onStatusChange={vi.fn()}
     />);
     expand();
+    fireEvent.click(screen.getByRole("button", { name: "Сменить образ remnanode" }));
 
     const input = await screen.findByRole("textbox", { name: "Тег образа remnanode" });
     expect(input).toBeInTheDocument();

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { Rocket, Loader2, AlertCircle, ChevronDown, Zap, KeyRound, X } from "lucide-react";
-import { Field as FieldShell, InputShell, Select, Toggle } from "../theme/ui";
+import { Rocket, Loader2, AlertCircle, KeyRound, X } from "lucide-react";
+import { Field as FieldShell, InputShell, Select, Toggle, Card } from "../theme/ui";
 import { type SelectOption } from "./MultiSelect";
 import { CountrySelect } from "./CountrySelect";
 import { VaultPicker } from "./vault/VaultPicker";
@@ -224,13 +224,8 @@ export function validateForm(f: FormData): Partial<Record<keyof FormData, string
 }
 
 // Which collapsible section each errorable field lives in (so a failed submit
-// can auto-open the section hiding the error).
-type SectionKey = "domain" | "network" | "remnawave";
-const FIELD_SECTION: Partial<Record<keyof FormData, SectionKey>> = {
-  domain: "domain", email: "domain", cloudflare_api_key: "domain",
-  current_ssh_port: "network", new_ssh_port: "network", open_ports: "network",
-  remnanode_token: "remnawave", template_id: "remnawave",
-};
+// can auto-open the section hiding the error). Sections are always-visible cards
+// after S3, so this mapping is no longer needed.
 
 // ── Field components ──────────────────────────────────────────
 
@@ -264,36 +259,12 @@ function Field({ label, name, value, onChange, error, type = "text",
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+// Однострочная ячейка sticky-summary («Развёртывание» справа на десктопе).
+function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
-    <p className="text-[11px] font-semibold uppercase tracking-widest mt-1"
-       style={{ color: "var(--t-low)", borderBottom: "1px solid var(--line-soft)", paddingBottom: 5 }}>
-      {children}
-    </p>
-  );
-}
-
-// Collapsible section shell (matches the existing Оптимизация pattern).
-function Collapsible({ title, icon, open, onToggle, children }: {
-  title: string; icon?: React.ReactNode; open: boolean; onToggle: () => void; children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-lg border" style={{ borderColor: "var(--line-soft)", background: "var(--bg2)" }}>
-      <button type="button" onClick={onToggle}
-        className="w-full flex items-center justify-between gap-2 px-3 py-2.5
-                   text-left hover:bg-[var(--bg3)] transition-colors rounded-lg">
-        <span className="flex items-center gap-2" style={{ color: "var(--t-hi)", fontWeight: 600, fontSize: 13 }}>
-          {icon}{title}
-        </span>
-        <ChevronDown size={14}
-          className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-          style={{ color: "var(--t-faint)" }} />
-      </button>
-      {open && (
-        <div className="px-3 pb-3 flex flex-col gap-3 border-t pt-3" style={{ borderColor: "var(--line-soft)" }}>
-          {children}
-        </div>
-      )}
+    <div className="flex items-center justify-between gap-2 text-xs">
+      <span style={{ color: "var(--t-low)" }}>{label}</span>
+      <span className="truncate tabular-nums" style={{ color: "var(--t-hi)" }}>{value}</span>
     </div>
   );
 }
@@ -321,10 +292,7 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
   // (`ssh_key_ref`); при открытии на редактирование имени нет, показываем id.
   const [keyLabel,   setKeyLabel]   = useState("");
 
-  // Collapsible section open-state. Required-field sections default open;
-  // optional ones (Remnawave, Оптимизация) default collapsed.
-  const [sec, setSec] = useState({ domain: true, network: true, remnawave: false, opt: false });
-  const toggleSec = (k: keyof typeof sec) => setSec(s => ({ ...s, [k]: !s[k] }));
+  // Sections are always-visible cards after S3 (no collapse state needed).
 
   // Remnawave state (squad selectors removed — squads auto-resolve at deploy, 5a)
   const [plugins,        setPlugins]        = useState<SelectOption[]>([]);
@@ -449,15 +417,6 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
     const errs = validateForm(form);
     if (Object.keys(errs).length > 0) {
       setErrors(errs);
-      // Open any collapsed section that hides an errored field.
-      setSec(s => {
-        const n = { ...s };
-        for (const k of Object.keys(errs) as (keyof FormData)[]) {
-          const target = FIELD_SECTION[k];
-          if (target) n[target] = true;
-        }
-        return n;
-      });
       return;
     }
     setErrors({});
@@ -488,50 +447,89 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
 
   return (
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3">
+      <div className="flex flex-col lg:flex-row lg:items-start gap-4">
 
-      {/* ── Режим деплоя (горизонтальные вкладки) ── */}
-      <div className="seg accent">
-        {([
-          { id: "remnanode" as DeployMode, label: "Remnanode" },
-          { id: "haproxy"   as DeployMode, label: "HAProxy" },
-        ]).map(t => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setForm(prev => {
-              const updated = { ...prev, mode: t.id };
-              if (touched) setErrors(validateForm(updated));
-              return updated;
-            })}
-            disabled={f}
-            className={`flex-1 text-sm font-medium
-                        focus:outline-none disabled:opacity-50
-                        ${form.mode === t.id ? "on" : ""}`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+        {/* ── Секции ── */}
+        <div className="flex-1 min-w-0 flex flex-col gap-4">
 
-      {/* ── Сервер ── */}
-      <SectionLabel>Сервер</SectionLabel>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="IP-адрес"  name="ip"       value={form.ip}       onChange={set}
-          placeholder="1.2.3.4" error={errors.ip} disabled={f} />
-        <Field label="SSH логин" name="ssh_user"  value={form.ssh_user} onChange={set}
-          placeholder="root" error={errors.ssh_user} disabled={f} />
-      </div>
-      <Field label="SSH пароль" name="ssh_password" value={form.ssh_password}
-        onChange={set} error={errors.ssh_password} disabled={f} secret />
-      <Toggle label="Обновить систему перед стартом"
-        checked={form.update_system}
-        onChange={() => set("update_system", !form.update_system)} disabled={f} />
+          {/* ── Режим деплоя (горизонтальные вкладки) ── */}
+          <div className="seg accent">
+            {([
+              { id: "remnanode" as DeployMode, label: "Remnanode" },
+              { id: "haproxy"   as DeployMode, label: "HAProxy" },
+            ]).map(t => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setForm(prev => {
+                  const updated = { ...prev, mode: t.id };
+                  if (touched) setErrors(validateForm(updated));
+                  return updated;
+                })}
+                disabled={f}
+                className={`flex-1 text-sm font-medium
+                            focus:outline-none disabled:opacity-50
+                            ${form.mode === t.id ? "on" : ""}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-      {/* ── Remnanode (только Remnanode) ── */}
-      {showRemnanode && (
-      <>
-      <SectionLabel>Remnanode</SectionLabel>
-      {/* eGames / Vanilla install variant (Plan B 2b) */}
+          {/* ── Сервер и SSH ── */}
+          <Card title="Сервер и SSH">
+            <div className="flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="IP-адрес"  name="ip"       value={form.ip}       onChange={set}
+                  placeholder="1.2.3.4" error={errors.ip} disabled={f} />
+                <Field label="SSH логин" name="ssh_user"  value={form.ssh_user} onChange={set}
+                  placeholder="root" error={errors.ssh_user} disabled={f} />
+              </div>
+              <Field label="SSH пароль" name="ssh_password" value={form.ssh_password}
+                onChange={set} error={errors.ssh_password} disabled={f} secret />
+              <Toggle label="Обновить систему перед стартом"
+                checked={form.update_system}
+                onChange={() => set("update_system", !form.update_system)} disabled={f} />
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Текущий SSH порт" name="current_ssh_port" value={form.current_ssh_port}
+                  onChange={(name, v) => {
+                    set(name, v);
+                    if (!form.change_ssh_port) set("new_ssh_port", v);
+                  }}
+                  placeholder="22" error={errors.current_ssh_port} disabled={f} />
+                <Field label="Новый SSH порт"   name="new_ssh_port"     value={form.new_ssh_port}
+                  onChange={(name, v) => { set(name, v); intendedNewPort.current = v; }}
+                  placeholder="2222" error={errors.new_ssh_port}
+                  disabled={f || !form.change_ssh_port} />
+              </div>
+              <Toggle
+                label="Сменить порт SSH"
+                checked={form.change_ssh_port}
+                onChange={() => {
+                  const next = !form.change_ssh_port;
+                  setForm(prev => {
+                    const updated = {
+                      ...prev,
+                      change_ssh_port: next,
+                      new_ssh_port: next ? intendedNewPort.current : prev.current_ssh_port,
+                    };
+                    if (touched) setErrors(validateForm(updated));
+                    return updated;
+                  });
+                }}
+                disabled={f}
+              />
+              <Field label="Порты UFW" name="open_ports" value={form.open_ports}
+                onChange={set} placeholder="80,443" error={errors.open_ports} disabled={f} />
+            </div>
+          </Card>
+
+          {/* ── Нода (Remnawave) ── */}
+          {showRemnanode && (
+          <Card title="Нода (Remnawave)">
+          <div className="flex flex-col gap-3">
+          {/* eGames / Vanilla install variant (Plan B 2b) */}
       <div className="flex rounded-lg border overflow-hidden w-full" style={{ borderColor: "var(--line-soft)" }}>
         {([["egames", "eGames"], ["vanilla", "Vanilla"]] as const).map(([id, label]) => (
           <button key={id} type="button" disabled={f}
@@ -582,8 +580,7 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
           onChange={() => set("cookie_gate", !form.cookie_gate)} disabled={f} />
       )}
 
-      {/* ── Remnawave (сворачиваемая) ── */}
-      <Collapsible title="Remnawave" open={sec.remnawave} onToggle={() => toggleSec("remnawave")}>
+      {/* ── Remnawave (регистрация в панели) ── */}
         <Field label="Токен Remnanode" name="remnanode_token" value={form.remnanode_token}
           onChange={set} error={errors.remnanode_token}
           disabled={f || form.create_in_remnawave} secret
@@ -702,14 +699,15 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
             </div>
           </div>
         </div>
-      </Collapsible>
-      </>
+      </div>
+      </Card>
       )}
 
-      {/* ── Домен и SSL (сворачиваемая) ── */}
-      {showSsl && (
-      <Collapsible title="Домен и SSL" open={sec.domain} onToggle={() => toggleSec("domain")}>
-        <div className="flex flex-col gap-1">
+          {/* ── Домен/SSL ── */}
+          {showSsl && (
+          <Card title="Домен/SSL">
+          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
           <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
             Провайдер сертификата
           </label>
@@ -732,13 +730,13 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
             value={form.cloudflare_api_key} onChange={set}
             placeholder="DNS:Edit permission" error={errors.cloudflare_api_key} disabled={f} secret />
         )}
-      </Collapsible>
-      )}
+          </div>
+          </Card>
+          )}
 
-      {/* ── Настройки HAProxy (только HAProxy) — выше «Сети» ── */}
+          {/* ── Настройки HAProxy (только HAProxy) ── */}
       {!isRemna && wantsComponent("haproxy") && (
-      <>
-      <SectionLabel>Настройки HAProxy</SectionLabel>
+      <Card title="Настройки HAProxy">
       <div className="grid grid-cols-2 gap-3">
         <Field label="Порт HAProxy" name="haproxy_source_port" value={form.haproxy_source_port}
           onChange={set} placeholder="443" error={errors.haproxy_source_port} disabled={f} />
@@ -761,51 +759,16 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
         <Field label="Timeout туннеля" name="haproxy_timeout_tunnel" value={form.haproxy_timeout_tunnel}
           onChange={set} placeholder="1h" disabled={f} />
       </div>
-      </>
+      </Card>
       )}
 
-      {/* ── Сеть (сворачиваемая) ── */}
-      <Collapsible title="Сеть" open={sec.network} onToggle={() => toggleSec("network")}>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Текущий SSH порт" name="current_ssh_port" value={form.current_ssh_port}
-            onChange={(name, v) => {
-              set(name, v);
-              if (!form.change_ssh_port) set("new_ssh_port", v);
-            }}
-            placeholder="22" error={errors.current_ssh_port} disabled={f} />
-          <Field label="Новый SSH порт"   name="new_ssh_port"     value={form.new_ssh_port}
-            onChange={(name, v) => { set(name, v); intendedNewPort.current = v; }}
-            placeholder="2222" error={errors.new_ssh_port}
-            disabled={f || !form.change_ssh_port} />
-        </div>
-        <Toggle
-          label="Сменить порт SSH"
-          checked={form.change_ssh_port}
-          onChange={() => {
-            const next = !form.change_ssh_port;
-            setForm(prev => {
-              const updated = {
-                ...prev,
-                change_ssh_port: next,
-                new_ssh_port: next ? intendedNewPort.current : prev.current_ssh_port,
-              };
-              if (touched) setErrors(validateForm(updated));
-              return updated;
-            });
-          }}
-          disabled={f}
-        />
-        <Field label="Порты UFW" name="open_ports" value={form.open_ports}
-          onChange={set} placeholder="80,443" error={errors.open_ports} disabled={f} />
-      </Collapsible>
-
-      {/* ── Оптимизация ОС (сворачиваемая, оба режима) ── */}
-      {showOptimization && (
-      <Collapsible title="Оптимизация ОС" open={sec.opt} onToggle={() => toggleSec("opt")}
-        icon={<Zap size={12} style={{ color: form.optimize ? "var(--warn)" : "var(--t-faint)" }} />}>
-        {wantsComponent("node_accelerator") && <>
-        <Toggle
-          label="Применить оптимизацию ОС"
+          {/* ── Опции ── */}
+          {showOptimization && (
+          <Card title="Опции">
+          <div className="flex flex-col gap-3">
+          {wantsComponent("node_accelerator") && <>
+          <Toggle
+            label="Применить оптимизацию ОС"
           checked={form.optimize}
           onChange={() => set("optimize", !form.optimize)}
           disabled={f || isSkipped("node_accelerator")}
@@ -874,34 +837,51 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
           checked={form.allow_ssh_all}
           onChange={() => set("allow_ssh_all", !form.allow_ssh_all)} disabled={f} />
         </>}
-      </Collapsible>
-      )}
+          </div>
+          </Card>
+          )}
 
-      {apiError && (
-        <div className="mt-2 px-3 py-2 rounded-md border text-xs"
-             style={{ background: "var(--err-dim)", borderColor: "var(--err-line)", color: "var(--err)" }}>{apiError}</div>
-      )}
+          {apiError && (
+            <div className="px-3 py-2 rounded-md border text-xs"
+                 style={{ background: "var(--err-dim)", borderColor: "var(--err-line)", color: "var(--err)" }}>{apiError}</div>
+          )}
+        </div>
 
-      <div className="mt-3 flex gap-2">
-        <button type="submit" disabled={submitting}
-          className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg
-                     font-semibold text-sm transition-all bg-[var(--accent)] text-[var(--primary-ink)]
-                     hover:bg-[var(--accent-hi)]
-                     active:bg-[var(--accent)] disabled:bg-[var(--accent-dim)] disabled:cursor-not-allowed
-                     focus:outline-none focus:ring-2 focus:ring-[var(--accent-line)]">
-          {submitting
-            ? <><Loader2 size={15} className="animate-spin" /> Запуск...</>
-            : <><Rocket size={15} /> Запустить деплой</>
-          }
-        </button>
-        {onCancel && !submitting && (
-          <button type="button" onClick={onCancel}
-            className="px-4 py-2.5 rounded-lg text-sm font-medium
-                       text-[var(--t-low)] hover:text-[var(--t-hi)] hover:bg-[var(--bg3)] transition-colors
-                       focus:outline-none focus:ring-1 focus:ring-[var(--line)]">
-            Отмена
-          </button>
-        )}
+        {/* ── Summary (sticky на десктопе, снизу на мобиле) ── */}
+        <aside className="w-full lg:w-[300px] lg:flex-none">
+          <div className="lg:sticky lg:top-4">
+            <Card title="Развёртывание">
+              <div className="flex flex-col gap-2">
+                <SummaryRow label="Режим" value={form.mode === "haproxy" ? "HAProxy" : "Remnanode"} />
+                <SummaryRow label="IP" value={form.ip || "—"} />
+                {isRemna && <SummaryRow label="Домен" value={form.domain || "—"} />}
+                {showRemnanode && <SummaryRow label="Страна" value={form.country_code || "—"} />}
+                <SummaryRow label="SSH порт" value={form.change_ssh_port ? form.new_ssh_port : form.current_ssh_port} />
+              </div>
+              <div className="mt-4 flex flex-col gap-2">
+                <button type="submit" disabled={submitting}
+                  className="flex items-center justify-center gap-2 py-2.5 rounded-lg
+                             font-semibold text-sm transition-all bg-[var(--accent)] text-[var(--primary-ink)]
+                             hover:bg-[var(--accent-hi)]
+                             active:bg-[var(--accent)] disabled:bg-[var(--accent-dim)] disabled:cursor-not-allowed
+                             focus:outline-none focus:ring-2 focus:ring-[var(--accent-line)]">
+                  {submitting
+                    ? <><Loader2 size={15} className="animate-spin" /> Развёртывание...</>
+                    : <><Rocket size={15} /> Развернуть ноду</>
+                  }
+                </button>
+                {onCancel && !submitting && (
+                  <button type="button" onClick={onCancel}
+                    className="py-2.5 rounded-lg text-sm font-medium
+                               text-[var(--t-low)] hover:text-[var(--t-hi)] hover:bg-[var(--bg3)] transition-colors
+                               focus:outline-none focus:ring-1 focus:ring-[var(--line)]">
+                    Отмена
+                  </button>
+                )}
+              </div>
+            </Card>
+          </div>
+        </aside>
       </div>
     </form>
   );

@@ -120,7 +120,7 @@ describe("DeployForm skip-components preset", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Оптимизация ОС" }));
+    // Sections are always-visible cards after S3 — switches are directly reachable.
     expect(screen.getByRole("switch", { name: "Установить WARP Native" })).toBeDisabled();
     expect(screen.getByRole("switch", { name: "Установить Hysteria2" })).toBeDisabled();
     expect(screen.getByRole("switch", { name: "Установить TrafficGuard" })).toBeDisabled();
@@ -194,17 +194,17 @@ describe("existing-server install component contract", () => {
       <DeployForm onSubmit={async () => {}} preset={{ install_components: [] }} />,
     );
     expect(screen.queryByText("Токен Remnanode")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Домен и SSL" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Оптимизация ОС" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Домен/SSL")).not.toBeInTheDocument();
+    expect(screen.queryByText("Опции")).not.toBeInTheDocument();
 
     rerender(<DeployForm key="remnanode" onSubmit={async () => {}} preset={{ install_components: ["remnanode"] }} />);
-    expect(screen.getByRole("button", { name: "Remnawave" })).toBeInTheDocument();
+    expect(screen.getByText("Нода (Remnawave)")).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Установить WARP Native" })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Установить Hysteria2" })).not.toBeInTheDocument();
 
     rerender(<DeployForm key="ssl" onSubmit={async () => {}} preset={{ install_components: ["ssl"] }} />);
     expect(screen.queryByText("Токен Remnanode")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Домен и SSL" })).toBeInTheDocument();
+    expect(screen.getByText("Домен/SSL")).toBeInTheDocument();
   });
 });
 
@@ -258,10 +258,9 @@ describe("DeployForm mode-specific rendering", () => {
 
     renderPreset(preset);
 
-    expect(screen.getByText("Remnanode", { selector: "p" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remnawave" })).toBeInTheDocument();
+    expect(screen.getByText("Нода (Remnawave)")).toBeInTheDocument();
     expect(screen.getByText("Домен ноды")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Домен и SSL" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Домен/SSL")).not.toBeInTheDocument();
     expect(screen.queryByText("Email (ACME)")).not.toBeInTheDocument();
   });
 
@@ -273,9 +272,8 @@ describe("DeployForm mode-specific rendering", () => {
 
     renderPreset(preset);
 
-    expect(screen.getByText("Remnanode", { selector: "p" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remnawave" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Домен и SSL" })).toBeInTheDocument();
+    expect(screen.getByText("Нода (Remnawave)")).toBeInTheDocument();
+    expect(screen.getByText("Домен/SSL")).toBeInTheDocument();
     expect(screen.getByText("Email (ACME)")).toBeInTheDocument();
     expect(screen.getByText("Cloudflare API токен")).toBeInTheDocument();
   });

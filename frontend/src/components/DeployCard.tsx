@@ -11,6 +11,7 @@ import { NODE_COLOR_PRESETS, colorHex, cardTint, setJobColor } from "../utils/no
 import { StepProgress, DEPLOY_STEPS } from "./StepProgress";
 import { TerminalOutput } from "./TerminalOutput";
 import { ReplaceDomainModal } from "./rw/ReplaceDomainModal";
+import { FormDialog } from "../theme/ui";
 import { useTaskStream, type StatusFrame, type TaskStatus } from "../hooks/useTaskStream";
 import { toast } from "./infra/Toast";
 import type { DeployJobSummary } from "./DeployDashboard";
@@ -151,6 +152,7 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
   const [showDetail, setShowDetail] = useState(false);
   const [retrying,   setRetrying]   = useState(false);
   const [showReplace, setShowReplace] = useState(false);  // «Сменить домен» wizard (Plan E)
+  const [showImage,  setShowImage]  = useState(false);  // «Образ remnanode» modal (S3)
   // Свёрнутое представление успешной карточки (мало DOM → плавный скролл).
   const [expanded,      setExpanded]      = useState(false);
   const [confirmStop,   setConfirmStop]   = useState(false);
@@ -525,7 +527,21 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
             <SpeedtestBlock form={job.savedForm} />
             <ManageBlock form={job.savedForm} onOp={runOp} busy={opBusy} />
             {job.savedForm.mode !== "haproxy" && (
-              <RemnanodeVersionBlock form={job.savedForm} onReplace={replaceRemnanodeImage} busy={opBusy} />
+              <div className="ni-card-section" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center gap-1.5">
+                  <Boxes size={12} className="text-[var(--t-low)]" />
+                  <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest flex-1">
+                    Образ remnanode
+                  </span>
+                  <ActionButton
+                    label="Сменить образ"
+                    icon={<RefreshCw size={11} />}
+                    variant="ghost"
+                    title="Сменить образ remnanode"
+                    onClick={e => { e.stopPropagation(); setShowImage(true); }}
+                  />
+                </div>
+              </div>
             )}
           </>
         )}
@@ -656,6 +672,16 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
           onClose={() => setShowReplace(false)}
         />
       )}
+
+      {/* Образ remnanode — modal (S3). Рендерится безусловно, чтобы Modal мог
+          проиграть enter/exit; содержимое/логика — прежние. */}
+      <RemnanodeImageModal
+        form={job.savedForm}
+        open={showImage}
+        onClose={() => setShowImage(false)}
+        onReplace={replaceRemnanodeImage}
+        busy={opBusy}
+      />
     </>
   );
 }
@@ -1574,8 +1600,10 @@ function CollapsedCard({ job, security, cert, statsReady, markHex, onExpand }: {
 // это уже тег, а не репозиторий), длина 1–128.
 const REMNANODE_TAG_RE = /^[A-Za-z0-9._-]{1,128}$/;
 
-function RemnanodeVersionBlock({ form, onReplace, busy }: {
+function RemnanodeImageModal({ form, open, onClose, onReplace, busy }: {
   form:      FormData;
+  open:      boolean;
+  onClose:   () => void;
   onReplace: (version: string) => void;
   busy:      boolean;
 }) {
@@ -1587,6 +1615,7 @@ function RemnanodeVersionBlock({ form, onReplace, busy }: {
   const [manual,   setManual]   = useState("");
 
   useEffect(() => {
+    if (!open) return;
     let alive = true;
     setLoading(true);
     // GET /api/node/remnanode/versions несёт SSH-креды в теле запроса (как
@@ -1619,21 +1648,19 @@ function RemnanodeVersionBlock({ form, onReplace, busy }: {
       .catch(() => { if (alive) setVersions([]); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [form]);
+  }, [open, form]);
 
   const manualTag   = manual.trim();
   const manualValid = REMNANODE_TAG_RE.test(manualTag);
 
   return (
-    <div className="ni-card-section"
-      onClick={e => e.stopPropagation()}>
-      <div className="flex items-center gap-1.5 mb-2">
-        <Boxes size={12} className="text-[var(--t-low)]" />
-        <span className="text-[10px] font-semibold text-[var(--t-low)] uppercase tracking-widest">
-          Образ remnanode
-        </span>
-      </div>
-
+    <FormDialog
+      open={open}
+      onClose={onClose}
+      title="Образ remnanode"
+      icon={<Boxes size={14} />}
+      size="sm"
+    >
       {loading ? (
         <p className="text-[11px] text-[var(--t-faint)] flex items-center gap-1.5">
           <Loader2 size={10} className="animate-spin" /> Загружаем доступные версии…
@@ -1698,6 +1725,6 @@ function RemnanodeVersionBlock({ form, onReplace, busy }: {
           />
         </div>
       )}
-    </div>
+    </FormDialog>
   );
 }

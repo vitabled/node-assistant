@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { X, Loader2, CheckCircle2, XCircle, ArrowLeftRight, AlertTriangle } from "lucide-react";
 import { TerminalOutput } from "../TerminalOutput";
+import { Modal } from "../../theme/ui";
 import { useTaskStream, type StatusFrame, type TaskStatus } from "../../hooks/useTaskStream";
 
 // Wave-4 Plan E (E7) — domain-replacement wizard (node + panel). Self-contained:
@@ -105,19 +106,24 @@ export function ReplaceDomainModal(props: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{ background: "var(--overlay)" }}
-      onMouseDown={e => { if (e.target === e.currentTarget && !running) onClose(); }}>
-      <div className="w-full max-w-lg rounded-xl overflow-hidden flex flex-col max-h-[88vh]"
-        style={{ background: "var(--bg1)", border: "1px solid var(--line)" }}>
-        <div className="flex items-center gap-2 px-5 py-3.5 shrink-0" style={{ borderBottom: "1px solid var(--line-soft)" }}>
-          <ArrowLeftRight size={15} style={{ color: "var(--accent-hi)" }} />
-          <h2 className="text-sm font-semibold flex-1" style={{ color: "var(--t-hi)" }}>
-            Сменить домен {mode === "node" ? "ноды" : "панели"}
-          </h2>
-          <button onClick={onClose} disabled={running} className="iconbtn disabled:opacity-40"><X size={15} /></button>
-        </div>
+    <Modal
+      open
+      onClose={() => { if (!running) onClose(); }}
+      size="md"
+      ariaLabel={`Сменить домен ${mode === "node" ? "ноды" : "панели"}`}
+      closeOnOverlay={!running}
+      closeOnEsc={!running}
+      panelClassName="max-h-[88vh]"
+    >
+      <div className="flex items-center gap-2 px-5 py-3.5 shrink-0" style={{ borderBottom: "1px solid var(--line-soft)" }}>
+        <ArrowLeftRight size={15} style={{ color: "var(--accent-hi)" }} />
+        <h2 className="text-sm font-semibold flex-1" style={{ color: "var(--t-hi)" }}>
+          Сменить домен {mode === "node" ? "ноды" : "панели"}
+        </h2>
+        <button onClick={onClose} disabled={running} className="iconbtn disabled:opacity-40"><X size={15} /></button>
+      </div>
 
-        <div className="p-5 flex flex-col gap-3 overflow-y-auto">
+      <div className="p-5 flex flex-col gap-3 overflow-y-auto">
           {!started ? (
             <>
               {props.mode === "node" ? (
@@ -178,8 +184,7 @@ export function ReplaceDomainModal(props: Props) {
             </>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

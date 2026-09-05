@@ -255,6 +255,29 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   box-shadow:var(--shadow-modal);animation:ni-riseIn .2s ease-out;display:flex;flex-direction:column;
   max-height:calc(100vh - 48px)}
 
+/* ── S3: общий модальный примитив (Modal / FormDialog в theme/ui.tsx) ── */
+.ni-modal-overlay{
+  position:fixed; inset:0; z-index:60; background:var(--overlay);
+  backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+  display:flex; align-items:center; justify-content:center; padding:20px;
+}
+.ni-modal-panel{
+  background:var(--bg1); border:1px solid var(--line); border-radius:var(--r-lg);
+  box-shadow:var(--shadow-modal); width:100%; max-height:calc(100vh - 40px);
+  display:flex; flex-direction:column; overflow:hidden; outline:none;
+}
+.ni-modal-head{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:14px 20px; border-bottom:1px solid var(--line-soft); flex:none;
+}
+.ni-modal-body{ padding:20px; overflow-y:auto; }
+.ni-modal-foot{ padding:12px 20px; border-top:1px solid var(--line-soft); flex:none; }
+/* На мобиле панель — bottom-sheet (slide-up), на десктопе — по центру. */
+@media (max-width:640px){
+  .ni-modal-overlay{ align-items:flex-end; padding:0; }
+  .ni-modal-panel{ max-height:92vh; border-radius:var(--r-lg) var(--r-lg) 0 0; border-bottom:none; }
+}
+
 /* ── toast ── */
 @keyframes ni-toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .toast{display:flex;align-items:flex-start;gap:10px;padding:11px 13px;border-radius:var(--r-md);
