@@ -1,5 +1,6 @@
 import { useState, useEffect, type ReactNode } from "react";
-import { Pencil, Plus, Trash2, ChevronUp, ChevronDown, Columns2, EyeOff } from "lucide-react";
+import { Pencil, Plus, Trash2, ChevronUp, ChevronDown, Columns2, EyeOff, Download } from "lucide-react";
+import { Seg } from "../../theme/ui";
 import {
   useStatWidgets, WIDGET_KINDS, type WidgetKind,
   filterNodeLoad, filterMigrations, filterCheckerNodes, hiddenCount,
@@ -52,6 +53,21 @@ function fmtBytes(n: number): string {
 }
 
 // ── shared UI atoms ──────────────────────────────────────────
+
+// Экспорт-заглушка (S2): эндпоинта экспорта статистики ещё нет, поэтому кнопка
+// рисуется отключённой и НЕ дёргает API. Появится бэкенд — заменим на реальный экспорт.
+function ExportStub() {
+  return (
+    <button type="button" disabled title="Экспорт данных появится позже"
+      aria-label="Экспорт (недоступно)"
+      style={{ display: "grid", placeItems: "center", width: 26, height: 26,
+        borderRadius: "var(--r-sm)", color: "var(--t-faint)", background: "transparent",
+        border: "none", cursor: "not-allowed", opacity: 0.45 }}>
+      <Download size={14} />
+    </button>
+  );
+}
+
 function Card({ title, Icon, settings, children }:
   { title: string; Icon: typeof Users; settings?: ReactNode; children: ReactNode }) {
   return (
@@ -59,7 +75,10 @@ function Card({ title, Icon, settings, children }:
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <span className="ni-stat-icon"><Icon size={15} /></span>
         <span style={{ fontSize: 13, fontWeight: 600, color: "var(--t-hi)" }} className="trunc">{title}</span>
-        {settings && <div style={{ marginLeft: "auto", flex: "none" }}>{settings}</div>}
+        <div style={{ marginLeft: "auto", flex: "none", display: "flex", alignItems: "center", gap: 2 }}>
+          <ExportStub />
+          {settings}
+        </div>
       </div>
       {children}
     </div>
@@ -386,6 +405,14 @@ const WIDGETS: Record<WidgetKind, { title: string; render: (c: WidgetCtx) => Rea
   "fast-nodes":    { title: "Быстрые ноды",       render: c => <WFastNodes instances={c.instances} /> },
 };
 
+// S2: сегменты-фильтры виджетов — чисто фронтовый фильтр по категории (без backend).
+type SegFilter = "all" | "load" | "users" | "nodes";
+const KIND_SEGMENT: Record<WidgetKind, SegFilter> = {
+  "node-load": "load", "avg-per-node": "load",
+  "top-users": "users", "migrations": "users",
+  "stable-nodes": "nodes", "fast-nodes": "nodes",
+};
+
 export function UsersStats() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [nameMap, setNameMap] = useState<Record<string, string>>({});
@@ -393,6 +420,7 @@ export function UsersStats() {
   const [palette, setPalette] = useState(false);
   const [pickServers, setPickServers] = useState(false);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [seg, setSeg] = useState<SegFilter>("all");
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
     getJson("/api/checker/instances").then(d => setInstances(d.instances ?? [{ id: "local", name: "Локальный чекер", kind: "local" }])).catch(() => setInstances([{ id: "local", name: "Локальный чекер", kind: "local" }]));
@@ -440,8 +468,24 @@ export function UsersStats() {
           </button>
         </div>
       </div>
+      <div style={{ marginBottom: 14 }}>
+        <Seg
+          mini
+          options={[
+            { v: "all",   l: "Все" },
+            { v: "load",  l: "Нагрузка" },
+            { v: "users", l: "Пользователи" },
+            { v: "nodes", l: "Ноды" },
+          ]}
+          value={seg}
+          onChange={v => setSeg(v as SegFilter)}
+        />
+      </div>
       <div className="grid grid-cols-1 lg:grid-cols-2" style={{ display: "grid", gap: 16 }}>
-        {[...layout].sort((a, b) => a.order - b.order).map(inst => {
+        {[...layout]
+          .sort((a, b) => a.order - b.order)
+          .filter(inst => seg === "all" || KIND_SEGMENT[inst.kind] === seg)
+          .map(inst => {
           const def = WIDGETS[inst.kind];
           if (!def) return null;
           return (

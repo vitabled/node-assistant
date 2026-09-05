@@ -8,7 +8,7 @@ import { FlagChip } from "./common/FlagChip";
 import { ImportFromSubscription } from "./ImportFromSubscription";
 import { resolveCountryCode, splitFlagEmoji } from "../utils/countryAliases";
 import { nodeColorLookup } from "../utils/nodeColors";
-import { Page, Seg, EmptyState } from "../theme/ui";
+import { Page, Seg, EmptyState, Table, Stat as StatTile } from "../theme/ui";
 import { deployJobsKey } from "../auth/store";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
@@ -473,7 +473,6 @@ function ServerUptime() {
   }, [load, ticks]);
 
   const g = data?.global;
-  const state: GState = g?.state ?? "unknown";
 
   const removeServer = async (id: string) => {
     await fetch(`/api/server-monitor/servers/${id}`, { method: "DELETE" }).catch(() => {});
@@ -493,15 +492,16 @@ function ServerUptime() {
 
   const hiddenNodes = useMemo(() => (data?.nodes ?? []).filter(n => n.hidden), [data]);
 
-  // Group by country — скрытые в страновые группы не попадают.
-  const groups = useMemo(() => {
-    const map = new Map<string, Node[]>();
-    (data?.nodes ?? []).filter(n => !n.hidden).forEach(n => {
-      const key = n.country || n.groupName || "Прочее";
-      (map.get(key) ?? map.set(key, []).get(key)!).push(n);
-    });
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [data]);
+  // Плоский список видимых серверов (S2): таблица без страновой группировки,
+  // отсортированная по стране, затем по имени.
+  const servers = useMemo(() =>
+    (data?.nodes ?? [])
+      .filter(n => !n.hidden)
+      .sort((a, b) => {
+        const ca = (a.country || a.groupName || "Прочее").localeCompare(b.country || b.groupName || "Прочее");
+        return ca !== 0 ? ca : (a.name || "").localeCompare(b.name || "");
+      }),
+  [data]);
 
   return (
     <>
@@ -531,58 +531,37 @@ function ServerUptime() {
         </div>
       </div>
 
-      <HealthBanner
-        state={state}
-        secondary={g?.state
-          ? `${g.online} из ${g.total} серверов онлайн`
-          : loading ? "Загрузка…" : "Серверы не добавлены — добавьте вручную или задеплойте ноду"}
-        stats={<Stat label="Аптайм 30 дней" value={g?.uptime30d != null ? `${g.uptime30d}%` : "—"} />}
-      />
+      {/* S2: верхние Stat-карточки (Всего / Онлайн / Офлайн / Аптайм) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <StatCard label="Всего серверов" value={g?.total ?? "—"} />
+        <StatCard label="Онлайн" value={g?.online ?? "—"}
+          valueColor={g?.online ? "var(--ok)" : undefined} />
+        <StatCard label="Офлайн" value={g?.offline ?? "—"}
+          valueColor={g?.offline ? "var(--err)" : undefined} />
+        <StatCard label="Аптайм 30 дней" value={g?.uptime30d != null ? `${g.uptime30d}%` : "—"}
+          valueColor={g?.uptime30d != null ? uptimeColor(g.uptime30d) : undefined} />
+      </div>
 
-      {groups.length === 0 ? (
+      {servers.length === 0 ? (
         <EmptyState
           icon={<Server size={18} />}
           title="Нет отслеживаемых серверов"
-          hint="Нажмите «Добавить сервер» или задеплойте ноду."
+          hint={loading ? "Загрузка…" : "Нажмите «Добавить сервер» или задеплойте ноду."}
         />
       ) : (
-        <div className="flex flex-col gap-3">
-          {groups.map(([country, nodes]) => {
-            const cc = flagFor(country);
-            return (
-              <div key={country} className="rounded-xl border border-[var(--line-soft)] overflow-hidden">
-                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-[var(--bg2)]">
-                  <FlagChip code={cc} size={20} />
-                  <span className="text-sm font-medium text-[var(--t-hi)]">{country || "Прочее"}</span>
-                  <span className="text-[11px] text-[var(--t-faint)]">Серверов: {nodes.length}</span>
-                </div>
-                <div className="divide-y divide-[var(--line-soft)]">
-                  {nodes.map(n => (
-                    <NodeRow key={n.stableId} node={n} cc={cc} ticks={ticks}
-                      trailing={
-                        <div className="flex items-center gap-1 shrink-0">
-                          {n.source !== "manual" && (
-                            <span className="text-[10px] text-[var(--t-faint)]" title="Из деплоя">авто</span>
-                          )}
-                          <button className="iconbtn" title="Скрыть из списка"
-                            onClick={() => setHidden(n.stableId, true)}><EyeOff size={13} /></button>
-                          {n.source === "manual" && (
-                            <>
-                              <button className="iconbtn" title="Редактировать"
-                                onClick={() => setModal({ editing: n })}><Pencil size={13} /></button>
-                              <button className="iconbtn danger" title="Удалить (сотрёт историю)"
-                                onClick={() => { if (confirm("Удалить сервер? История проб будет стёрта.")) removeServer(n.stableId); }}>
-                                <Trash2 size={13} /></button>
-                            </>
-                          )}
-                        </div>
-                      } />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <Table head={["Страна", "Сервер", "Статус", "Аптайм 30д", "Нагрузка", ""]}>
+          {servers.map(n => (
+            <ServerRow
+              key={n.stableId}
+              node={n}
+              onHide={() => setHidden(n.stableId, true)}
+              onEdit={n.source === "manual" ? () => setModal({ editing: n }) : undefined}
+              onRemove={n.source === "manual"
+                ? () => { if (confirm("Удалить сервер? История проб будет стёрта.")) removeServer(n.stableId); }
+                : undefined}
+            />
+          ))}
+        </Table>
       )}
 
       {hiddenNodes.length > 0 && (
@@ -622,6 +601,87 @@ function ServerUptime() {
         />
       )}
     </>
+  );
+}
+
+// ── S2: сервер-таблица (страна/флаг, имя/IP, статус-дот, аптайм, спарклайн) ──
+
+// Мини-спарклайн доступности: одна колонка на проверку, цвет = up/slow/down.
+// Это ЕДИНСТВЕННЫЙ временной ряд в server-monitor — числовой «нагрузки» в API нет.
+function Sparkline({ bars }: { bars: Bar[] }) {
+  if (!bars.length) return <span className="sub" style={{ margin: 0 }}>—</span>;
+  const W = 110, H = 20;
+  const bw = W / bars.length;
+  return (
+    <svg width={W} height={H} style={{ display: "block" }} aria-hidden="true">
+      {bars.map((b, i) => (
+        <rect key={i} x={i * bw} y={0} width={Math.max(0.8, bw - 0.5)} height={H} rx={1}
+          fill={barColor[b.status]} />
+      ))}
+    </svg>
+  );
+}
+
+function StatCard({ label, value, valueColor }: {
+  label: string; value: React.ReactNode; valueColor?: string;
+}) {
+  return (
+    <div className="ni-stat-card" style={{ padding: "14px 16px" }}>
+      <StatTile label={label} value={valueColor
+        ? <span style={{ color: valueColor }}>{value}</span>
+        : value} />
+    </div>
+  );
+}
+
+function ServerRow({ node, onHide, onEdit, onRemove }: {
+  node: Node; onHide: () => void; onEdit?: () => void; onRemove?: () => void;
+}) {
+  const cc = flagFor(node.country || node.groupName);
+  const country = node.country || "Прочее";
+  return (
+    <tr>
+      <td>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <FlagChip code={cc} size={18} />
+          <span style={{ color: "var(--t-mid)" }}>{country}</span>
+        </span>
+      </td>
+      <td>
+        <div style={{ minWidth: 0 }}>
+          <p style={{ margin: 0, color: "var(--t-hi)", fontWeight: 500 }} className="trunc">{node.name}</p>
+          {node.ip && (
+            <p style={{ margin: 0, fontSize: 11, color: "var(--t-faint)" }} className="tabular-nums trunc">
+              {node.ip}:{node.port ?? 443}
+            </p>
+          )}
+        </div>
+      </td>
+      <td>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span className="dot" style={{ background: !node.online ? "var(--err)" : node.latencyMs >= 800 ? "var(--warn)" : "var(--ok)" }} />
+          <span style={{ color: !node.online ? "var(--err)" : latencyColor(node.online, node.latencyMs), fontSize: 12 }}>
+            {node.online ? `${node.latencyMs} мс` : "офлайн"}
+          </span>
+        </span>
+      </td>
+      <td className="r tabular-nums" style={{ color: uptimeColor(node.uptime30d) }}>
+        {node.uptime30d != null ? `${node.uptime30d}%` : "—"}
+      </td>
+      <td>
+        <Sparkline bars={node.bars} />
+      </td>
+      <td>
+        <div style={{ display: "flex", alignItems: "center", gap: 2, justifyContent: "flex-end" }}>
+          {node.source !== "manual" && (
+            <span className="text-[10px] text-[var(--t-faint)]" title="Из деплоя">авто</span>
+          )}
+          <button className="iconbtn" title="Скрыть из списка" onClick={onHide}><EyeOff size={13} /></button>
+          {onEdit && <button className="iconbtn" title="Редактировать" onClick={onEdit}><Pencil size={13} /></button>}
+          {onRemove && <button className="iconbtn danger" title="Удалить (сотрёт историю)" onClick={onRemove}><Trash2 size={13} /></button>}
+        </div>
+      </td>
+    </tr>
   );
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus, Rocket, X, ServerCog, Search, Loader2,
   CheckCircle2, XCircle, HelpCircle,
@@ -6,7 +6,7 @@ import {
 import { DeployCard } from "./DeployCard";
 import { DeployForm, type FormData } from "./DeployForm";
 import { deployJobsKey } from "../auth/store";
-import { Page } from "../theme/ui";
+import { Page, Seg } from "../theme/ui";
 import {
   fetchDeployJobs, upsertDeployJob, deleteDeployJob, reconcileJobs,
 } from "./deployJobsSync";
@@ -22,6 +22,9 @@ export interface DeployJobSummary {
   finalStatus?: "success" | "failed";
   color?:     string;            // цветовая маркировка виджета (Wave-4 PR-9)
 }
+
+// S2 toolbar: локальный фильтр по статусу (running = ещё без finalStatus).
+type StatusFilter = "all" | "running" | "success" | "failed";
 
 function loadJobs(): DeployJobSummary[] {
   try { return JSON.parse(localStorage.getItem(deployJobsKey()) ?? "[]"); }
@@ -56,6 +59,22 @@ export function DeployDashboard() {
   // Unsynced-state flag: true once a server push has failed, so we only toast
   // once per outage (and the next successful push clears it).
   const dirtyRef = useRef(false);
+
+  // S2 toolbar: локальный поиск + фильтр статуса. Фильтрация идёт только по уже
+  // загруженным джобам — сервер-источник и синк (deployJobsSync) не затрагиваются.
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return jobs.filter(j => {
+      if (statusFilter === "success" && j.finalStatus !== "success") return false;
+      if (statusFilter === "failed"  && j.finalStatus !== "failed")  return false;
+      if (statusFilter === "running" && j.finalStatus)               return false;
+      if (q && !`${j.domain} ${j.ip}`.toLowerCase().includes(q))     return false;
+      return true;
+    });
+  }, [jobs, query, statusFilter]);
 
   const notifyDirty = useCallback(() => {
     if (!dirtyRef.current) {
@@ -275,31 +294,63 @@ export function DeployDashboard() {
               style={{ borderColor: "var(--line)", color: "var(--t-mid)", background: "var(--bg2)" }}>
               <ServerCog size={13} /> Существующий сервер
             </button>
-            <button onClick={() => setShowForm(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-                         bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--primary-ink)] transition-colors">
-              <Plus size={13} /> Добавить сервер
-            </button>
           </div>
         </div>
 
         {jobs.length === 0 ? (
           <DeployEmptyState onAdd={() => setShowForm(true)} />
         ) : (
-          <div className="ni-deploy-grid">
-            {jobs.map(job => (
-              <DeployCard
-                key={job.taskId}
-                job={job}
-                onRemove={removeJob}
-                onEdit={j  => setEditJob(j)}
-                onRetry={retryJob}
-                onRestart={restartWaitingJob}
-                onStatusChange={updateJobStatus}
-                onColorChange={changeJobColor}
+          <>
+            {/* S2 toolbar: поиск (ip/имя/домен) + фильтр статуса + «Новая нода». */}
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--t-faint)]" />
+                <input
+                  className="input pl-8"
+                  placeholder="Поиск по IP, имени или домену"
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  aria-label="Поиск нод"
+                />
+              </div>
+              <Seg
+                mini
+                options={[
+                  { v: "all",     l: "Все" },
+                  { v: "running", l: "В работе" },
+                  { v: "success", l: "Успех" },
+                  { v: "failed",  l: "Ошибка" },
+                ]}
+                value={statusFilter}
+                onChange={v => setStatusFilter(v as StatusFilter)}
               />
-            ))}
-          </div>
+              <button onClick={() => setShowForm(true)} className="btn btn-primary">
+                <Plus size={13} /> Новая нода
+              </button>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <p className="text-sm mb-1" style={{ color: "var(--t-low)" }}>Ничего не найдено</p>
+                <p className="text-xs" style={{ color: "var(--t-faint)" }}>Измените запрос поиска или фильтр статуса</p>
+              </div>
+            ) : (
+              <div className="ni-deploy-grid">
+                {filtered.map(job => (
+                  <DeployCard
+                    key={job.taskId}
+                    job={job}
+                    onRemove={removeJob}
+                    onEdit={j  => setEditJob(j)}
+                    onRetry={retryJob}
+                    onRestart={restartWaitingJob}
+                    onStatusChange={updateJobStatus}
+                    onColorChange={changeJobColor}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
 
       {/* New deploy modal — pass NO `initial` so DeployForm pulls global
