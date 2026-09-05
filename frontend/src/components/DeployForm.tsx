@@ -32,6 +32,7 @@ export interface FormData {
   behind_cdn:          boolean;
   install_warp:        boolean;
   install_psiphon:     boolean;
+  psiphon_region:      string;
   install_reshala:     boolean;
   yt_bot_token:        string;
   yt_chat_id:          string;
@@ -87,6 +88,9 @@ const CERT_PROVIDERS: { value: string; label: string }[] = [
   { value: "zerossl",     label: "ZeroSSL (acme.sh + EAB)" },
 ];
 
+// vps-psiphon supported proxy regions (value = ISO country code).
+const PSIPHON_REGIONS = ["AT", "AU", "BE", "BR", "CA", "CH", "CZ", "DE", "DK", "ES", "FR", "GB", "ID", "IE", "IN", "IT", "JP", "NL", "NO", "PL", "RS", "SE", "SG", "US"];
+
 export const FORM_DEFAULT: FormData = {
   mode:                "remnanode",
   ip:                  "",
@@ -110,6 +114,7 @@ export const FORM_DEFAULT: FormData = {
   behind_cdn:          false,
   install_warp:        false,
   install_psiphon:     false,
+  psiphon_region:      "DE",
   install_reshala:     false,
   yt_bot_token:        "",
   yt_chat_id:          "",
@@ -565,9 +570,25 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       {wantsComponent("warp") && <Toggle label="Установить WARP Native"
         checked={form.install_warp}
         onChange={() => set("install_warp", !form.install_warp)} disabled={f || isSkipped("warp")} />}
-      {wantsComponent("psiphon") && <Toggle label="Установить Psiphon Proxy"
-        checked={form.install_psiphon}
-        onChange={() => set("install_psiphon", !form.install_psiphon)} disabled={f || isSkipped("psiphon")} />}
+      {wantsComponent("psiphon") && (
+        <div className="flex flex-col gap-2">
+          <Toggle label="Установить Psiphon Proxy"
+            checked={form.install_psiphon}
+            onChange={() => set("install_psiphon", !form.install_psiphon)} disabled={f || isSkipped("psiphon")} />
+          {form.install_psiphon && (
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
+                Регион прокси
+              </label>
+              <select className="selectbox" value={form.psiphon_region}
+                onChange={e => set("psiphon_region", e.target.value)}
+                disabled={f || isSkipped("psiphon")}>
+                {PSIPHON_REGIONS.map(code => <option key={code} value={code}>{code}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
       {wantsComponent("reshala") && <Toggle label="Установить Решалу (Саппорт бот)"
         checked={form.install_reshala}
         onChange={() => set("install_reshala", !form.install_reshala)} disabled={f || isSkipped("reshala")} />}

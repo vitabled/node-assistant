@@ -1913,21 +1913,19 @@ async def _apply_host_balancers(task: Task, client, balancers: list, host_uuid: 
             task.add_log(f"\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Балансер «{tag_prefix}»: {exc}\x1b[0m")
 
 
-async def step_psiphon(ssh: SSHSession, task: Task) -> None:
+async def step_psiphon(ssh: SSHSession, task: Task, region: str = "DE") -> None:
     """Install Psiphon VPS proxy (vps-psiphon from Chara-Freedom).
-    Sets up Psiphon as an egress proxy for xray-outbound to bypass restrictions.
-    Clones the repo, configures docker-compose, and starts the service."""
+    Sets up Psiphon as an internal egress proxy for xray-outbound."""
     task.add_log(f"\n\x1b[36m{'─' * 56}\x1b[0m")
     task.add_log(f"\x1b[1;36m[Установка] Psiphon Proxy\x1b[0m")
     task.add_log(f"\x1b[36m{'─' * 56}\x1b[0m")
 
     psiphon_script = f"""\
 {_APT_WAIT}
-{_apt_install("curl", "git", "docker.io", "docker-compose")}
+{_apt_install("curl", "git", "docker.io")}
 
 # Start docker service
-systemctl start docker 2>/dev/null || true
-systemctl enable docker 2>/dev/null || true
+systemctl enable --now docker 2>/dev/null || true
 
 # Clone or update vps-psiphon repository
 if [ ! -d /opt/vps-psiphon ]; then
@@ -1940,39 +1938,21 @@ fi
 
 cd /opt/vps-psiphon
 
-# Create/update docker-compose configuration if needed
-if [ ! -f docker-compose.yml ] || [ ! -f .env ]; then
-    echo "[psiphon] Создаю конфигурацию..."
-    
-    # Create basic .env if missing
-    if [ ! -f .env ]; then
-        cat > .env << 'ENV_EOF'
-# Psiphon VPS Proxy Configuration
-PSIPHON_HOST=0.0.0.0
-PSIPHON_PORT=8080
-PSIPHON_LOG_LEVEL=info
-ENV_EOF
-    fi
-fi
+# The installer keeps the SOCKS listener on docker0/loopback; do not expose it.
+echo "[psiphon] Запускаю установщик для региона {region}..."
+bash psiphon_install.sh --region {region}
 
-# Build and start the docker-compose stack
-echo "[psiphon] Запускаю docker-compose стек..."
-docker compose up -d 2>/dev/null || docker-compose up -d
-
-# Wait for service to start
-sleep 3
-
-# Check if service is running
-if docker compose ps 2>/dev/null | grep -q "Up\\|running" || docker-compose ps 2>/dev/null | grep -q "Up\\|running"; then
-    echo "[psiphon] ✓ Psiphon запущен и работает."
-else
-    echo "[psiphon] ⚠ Сервис может быть недоступен, проверьте логи:"
-    docker compose logs 2>/dev/null || docker-compose logs || true
-fi
+echo "[psiphon] Статус:"
+vps-psiphon status || true
 
 echo "[psiphon] Установка завершена."
 """
     await ssh.run_script(psiphon_script, task, timeout=300)
+    task.add_log(
+        "\x1b[36m[psiphon] Xray outbound для Remnawave:\n"
+        '{ "tag": "psiphon-out", "protocol": "socks", "settings": '
+        '{ "address": "172.17.0.1", "port": 1080 } }\x1b[0m'
+    )
 
 
 async def step_yt_monitoring(ssh: SSHSession, task: Task, req: "DeployRequest") -> None:
@@ -2658,7 +2638,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                 _skip_component(task, 14, "psiphon", reason=skip_reason)
             elif getattr(req, "install_psiphon", False):
                 try:
-                    await step_psiphon(ssh, task)
+                    await step_psiphon(ssh, task, getattr(req, "psiphon_region", "DE") or "DE")
                 except Exception as _psiphon_exc:
                     task.add_log(
                         f"\n\x1b[33m[ПРЕДУПРЕЖДЕНИЕ] Psiphon завершился с ошибкой: {_psiphon_exc}\n"

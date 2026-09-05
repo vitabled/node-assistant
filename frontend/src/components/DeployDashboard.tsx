@@ -555,6 +555,7 @@ function ExistingServerModal({ onClose, onProceed }: {
       install_test_tools: install_components.includes("test_tools"),
       install_warp: install_components.includes("warp"),
       install_psiphon: install_components.includes("psiphon"),
+      psiphon_region: "DE",
       install_reshala: install_components.includes("reshala"),
       install_hysteria2: install_components.includes("hysteria2"),
       install_vnstat: false,

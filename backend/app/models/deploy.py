@@ -36,6 +36,7 @@ class DeployRequest(SshCreds):
     behind_cdn: bool = Field(default=False)
     install_warp: bool = Field(default=False)
     install_psiphon: bool = Field(default=False)
+    psiphon_region: str = Field(default="DE", max_length=2)
     install_reshala: bool = Field(default=False)
     yt_bot_token: Optional[str] = Field(default=None)
     yt_chat_id: Optional[str] = Field(default=None)
@@ -180,6 +181,13 @@ class DeployRequest(SshCreds):
             if not p.isdigit() or not (1 <= int(p) <= 65535):
                 raise ValueError(f"Invalid port: {p}")
         return ",".join(ports)
+
+    @field_validator("psiphon_region")
+    @classmethod
+    def validate_psiphon_region(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Za-z]{2}", v):
+            raise ValueError("psiphon_region must be a 2-letter code")
+        return v.upper()
 
 
 class DeployCertRequest(SshCreds):

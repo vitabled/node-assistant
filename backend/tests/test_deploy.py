@@ -37,11 +37,18 @@ def _haproxy(**over):
 def test_valid_remnanode():
     r = DeployRequest(**_remna())
     assert r.cert_provider == "cloudflare"
+    assert r.psiphon_region == "DE"
     # new fields default sensibly
     assert r.install_vnstat is True
     assert r.install_trafficguard is True
     assert r.allow_ssh_all is False
     assert r.whitelist_ips == ""
+
+
+def test_psiphon_region_is_uppercase_two_letter_code():
+    assert DeployRequest(**_remna(psiphon_region="nl")).psiphon_region == "NL"
+    with pytest.raises(ValidationError):
+        DeployRequest(**_remna(psiphon_region="N1"))
 
 
 @pytest.mark.parametrize(
