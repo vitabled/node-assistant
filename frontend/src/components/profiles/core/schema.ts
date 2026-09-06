@@ -19,6 +19,7 @@ export const PROTOCOLS = [
 export const NETWORKS = [
   'tcp', 'raw', 'kcp', 'mkcp', 'ws', 'http', 'h2', 'grpc', 'gun',
   'httpupgrade', 'xhttp', 'splithttp', 'quic', 'domainsocket', 'udp',
+  'hysteria', 'hysteria2',
 ] as const;
 
 export const SECURITIES = ['none', 'tls', 'reality', 'xtls'] as const;
