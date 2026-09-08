@@ -90,10 +90,21 @@ def _skip_component(
 
 
 def _effective_open_ports(req: "DeployRequest") -> str:
-    """User-specified UFW/accelerator ports, plus the HAProxy relay source port
-    in haproxy mode (so the host firewall passes transit traffic)."""
+    """User-specified UFW/accelerator ports, plus defaults the node needs.
+
+    - remnanode mode: always expose 80/443 (TLS sites, XHTTP/REALITY on 443,
+      hysteria2 on 443/udp) even when the user leaves "open_ports" empty —
+      otherwise protect.sh builds an allowlist that locks the node's public
+      ports and the node's own domains stop opening (403/refused externally).
+    - haproxy mode: additionally pass the relay source port so transit
+      traffic is allowed through the host firewall.
+    """
     ports = [p.strip() for p in req.open_ports.split(",") if p.strip()]
-    if req.mode == "haproxy":
+    if req.mode != "haproxy":
+        for default in ("80", "443"):
+            if default not in ports:
+                ports.append(default)
+    else:
         sp = str(req.haproxy_source_port)
         if sp not in ports:
             ports.append(sp)
@@ -214,6 +225,17 @@ SSH_PORT={ssh_port} TCP_PORTS="{all_ports}" UDP_PORTS="{all_ports}" NODE_PORT={n
     REMNAWAVE_URL="{panel_url}" REMNAWAVE_TOKEN="{api_token}" \\
     REMNAWAVE_NONINTERACTIVE=1 \\
     bash scripts/protect.sh
+# Страховка: гарантировать публичный доступ к сервисным портам ноды
+# (80/443 tcp+udp). Если protect.sh собрал na_filter в strict-режиме без них,
+# домены ноды не открываются снаружи (403/refused) — как было на akenade/hostesnl2.
+FW=/etc/node-accelerator/na_filter.nft
+if [ -f "$FW" ] && grep -q "policy drop;" "$FW"; then
+  if ! grep -q "80, 443" "$FW"; then
+    sed -i '0,/policy drop;/s//tcp dport { 80, 443 } accept\n        udp dport { 80, 443 } accept\n        policy drop;/' "$FW"
+    echo "[accelerator] na_filter.nft: добавлены публичные порты 80/443 (tcp+udp)"
+  fi
+  systemctl restart na-firewall 2>/dev/null || nft -f "$FW" 2>/dev/null || true
+fi
 """
     await ssh.run_script(protect_script, task, timeout=300)
 
@@ -1241,7 +1263,7 @@ def _render_remnanode_files(
 _VANILLA_COMPOSE_TPL = """\
 services:
   remnanode:
-    image: remnawave/node:latest
+    image: remnawave/node:$image_tag
     container_name: remnanode
     hostname: remnanode
     restart: always
@@ -1261,21 +1283,30 @@ services:
 """
 
 
-def _render_vanilla_compose(node_port: int, token: str) -> str:
+def _render_vanilla_compose(node_port: int, token: str, image_tag: str = "latest") -> str:
     compose = _VANILLA_COMPOSE_TPL
-    for key, val in (("$nodeport", str(node_port)), ("$token", token)):
+    for key, val in (
+        ("$nodeport", str(node_port)),
+        ("$token", token),
+        ("$image_tag", image_tag),
+    ):
         compose = compose.replace(key, val)
     return compose
 
 
 async def step_remnanode_vanilla(
-    ssh: SSHSession, task: Task, remnanode_token: str, *, node_port: int = 2222,
+    ssh: SSHSession,
+    task: Task,
+    remnanode_token: str,
+    *,
+    node_port: int = 2222,
+    image_tag: str = "latest",
 ) -> None:
     """Official remnawave/node install (Plan B 2b) — no local domain/SSL/masking.
     Mirrors step_remnanode's flow (ensure Docker → write compose → up), minus the
     nginx front, masking site and per-FQDN cert bridge."""
     _begin_step(task, 11)
-    compose = _render_vanilla_compose(node_port, remnanode_token)
+    compose = _render_vanilla_compose(node_port, remnanode_token, image_tag)
     task.add_log(
         f"\x1b[90m[remnanode/vanilla] node_port={node_port} — официальный "
         f"remnawave/node без nginx/маскировки (SSL от панели).\x1b[0m"
@@ -2600,13 +2631,18 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                     )
                 if is_vanilla:
                     await step_remnanode_vanilla(
-                        ssh, task, remnanode_token, node_port=req.remnanode_port,
+                        ssh,
+                        task,
+                        remnanode_token,
+                        node_port=req.remnanode_port,
+                        image_tag=req.remnanode_version,
                     )
                 else:
                     await step_remnanode(
                         ssh, task, remnanode_token, req.domain,
                         node_port=req.remnanode_port,
                         xhttp_path=req.xhttp_path,
+                        image_tag=req.remnanode_version,
                     )
 
             # ── Step 12: uniquize the masking decoy site — runs BEFORE WARP ──
