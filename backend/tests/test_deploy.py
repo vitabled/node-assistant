@@ -43,6 +43,21 @@ def test_valid_remnanode():
     assert r.install_trafficguard is True
     assert r.allow_ssh_all is False
     assert r.whitelist_ips == ""
+    # remnanode_version defaults to None (→ :latest in the compose render)
+    assert r.remnanode_version is None
+
+
+def test_remnanode_version_validator():
+    # explicit tags pass (incl. dotted/latest style)
+    assert DeployRequest(**_remna(remnanode_version="3.4.1")).remnanode_version == "3.4.1"
+    assert DeployRequest(**_remna(remnanode_version="latest")).remnanode_version == "latest"
+    assert DeployRequest(**_remna(remnanode_version="  v2.8.0 ")).remnanode_version == "v2.8.0"
+    # empty string normalizes to None (→ :latest)
+    assert DeployRequest(**_remna(remnanode_version="  ")).remnanode_version is None
+    # shell metacharacters / spaces inside are rejected (compose-injection guard)
+    for bad in ["3.4.1;rm -rf /", "a b", "$(id)", "latest\nx", "..", "tag with space"]:
+        with pytest.raises(ValidationError):
+            DeployRequest(**_remna(remnanode_version=bad))
 
 
 def test_psiphon_region_is_uppercase_two_letter_code():

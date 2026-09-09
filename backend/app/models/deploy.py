@@ -20,6 +20,10 @@ class DeployRequest(SshCreds):
     cloudflare_api_key: str = Field(default="")
     email: str = Field(default="", description="Email for Let's Encrypt registration")
     remnanode_token: Optional[str] = Field(default=None)
+    # Docker image tag for remnawave/node (egames/vanilla full deploy). Omitted
+    # keeps :latest. Mirrors NodeOpRequest.version (reinstall); validated as a
+    # Docker tag so it can't smuggle shell metacharacters into the compose file.
+    remnanode_version: Optional[str] = Field(default=None, min_length=1, max_length=128)
     open_ports: str = Field(..., description="Comma-separated ports to open in UFW")
     # Firewall/fail2ban whitelist: IPs/CIDRs (any separator); normalized in the
     # pipeline (Ф5). allow_ssh_all opens the SSH port to any source.
@@ -188,6 +192,20 @@ class DeployRequest(SshCreds):
         if not re.fullmatch(r"[A-Za-z]{2}", v):
             raise ValueError("psiphon_region must be a 2-letter code")
         return v.upper()
+
+    @field_validator("remnanode_version")
+    @classmethod
+    def _validate_remnanode_version(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        # Docker image tag: alnum, dots, dashes, underscores (plus the repo
+        # prefix is NOT expected here — callers prepend remnawave/node:).
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", v):
+            raise ValueError("remnanode_version must be a valid Docker image tag")
+        return v
 
 
 class DeployCertRequest(SshCreds):

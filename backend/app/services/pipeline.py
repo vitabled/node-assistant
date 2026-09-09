@@ -1139,7 +1139,7 @@ x-logging: &logging
 
 services:
   remnawave-nginx:
-    image: nginx:1.28
+    image: nginx:1.30
     container_name: remnawave-nginx
     hostname: remnawave-nginx
     <<: [*common, *logging]
@@ -2635,14 +2635,14 @@ echo "[vnstat] Демон vnstat установлен и запущен."
                         task,
                         remnanode_token,
                         node_port=req.remnanode_port,
-                        image_tag=req.remnanode_version,
+                        image_tag=req.remnanode_version or "latest",
                     )
                 else:
                     await step_remnanode(
                         ssh, task, remnanode_token, req.domain,
                         node_port=req.remnanode_port,
                         xhttp_path=req.xhttp_path,
-                        image_tag=req.remnanode_version,
+                        image_tag=req.remnanode_version or "latest",
                     )
 
             # ── Step 12: uniquize the masking decoy site — runs BEFORE WARP ──
