@@ -300,6 +300,15 @@ export function DeployDashboard() {
               <div className="relative flex-1 min-w-[200px]">
                 <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--t-faint)]" />
                 <input
+                  type="search"
+                  name="node-search"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  data-form-type="other"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
                   className="input pl-8"
                   placeholder="Поиск по IP, имени или домену"
                   value={query}

@@ -11,6 +11,7 @@ import { NODE_COLOR_PRESETS, colorHex, cardTint, setJobColor } from "../utils/no
 import { StepProgress, DEPLOY_STEPS } from "./StepProgress";
 import { TerminalOutput } from "./TerminalOutput";
 import { ReplaceDomainModal } from "./rw/ReplaceDomainModal";
+import { FlagChip } from "./common/FlagChip";
 import { FormDialog } from "../theme/ui";
 import { useTaskStream, type StatusFrame, type TaskStatus } from "../hooks/useTaskStream";
 import { toast } from "./infra/Toast";
@@ -399,7 +400,10 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
             <StatusIcon status={stepStatus.status} isRunning={isRunning} />
             <div className="min-w-0">
               <p className="text-sm font-medium text-[var(--t-hi)] truncate">{job.domain}</p>
-              <p className="text-xs text-[var(--t-low)]">{job.ip}:{job.newSshPort}</p>
+              <p className="text-xs text-[var(--t-low)] flex items-center gap-1.5">
+                <FlagChip code={job.savedForm.country_code} size={14} />
+                <span>{job.ip}:{job.newSshPort}</span>
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -1122,6 +1126,8 @@ function SecurityBlock({ stats, onUpdateXray, xrayUpdateBusy }: {
               <div className="flex items-center gap-1 flex-1 justify-end min-w-0">
                 <input value={xrayInput} onChange={e => setXrayInput(e.target.value)}
                   placeholder="latest / v25.9.11" disabled={xrayUpdateBusy}
+                  autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+                  data-form-type="other" data-lpignore="true" data-1p-ignore="true"
                   className="input text-[10px] px-1.5 py-1 w-[104px] min-w-0" />
                 <button type="button" disabled={xrayUpdateBusy || !xrayInput.trim()}
                   onClick={() => onUpdateXray(xrayInput.trim())}
@@ -1568,7 +1574,10 @@ function CollapsedCard({ job, security, cert, statsReady, markHex, onExpand }: {
         <StatusIcon status="success" isRunning={false} />
         <div className="min-w-0 flex-1" style={{ minWidth: 140 }}>
           <p className="text-sm font-medium text-[var(--t-hi)] truncate">{job.domain}</p>
-          <p className="text-xs text-[var(--t-low)]">{job.ip}:{job.newSshPort}</p>
+          <p className="text-xs text-[var(--t-low)] flex items-center gap-1.5">
+            <FlagChip code={job.savedForm.country_code} size={14} />
+            <span>{job.ip}:{job.newSshPort}</span>
+          </p>
         </div>
 
         {!statsReady ? (

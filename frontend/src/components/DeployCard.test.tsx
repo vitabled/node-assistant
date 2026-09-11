@@ -111,6 +111,41 @@ describe("collapsed success card", () => {
   });
 });
 
+describe("country flag in the card header", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ online: true, securityStats: null, trafficStats: null, certInfo: null }),
+    }));
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const renderCard = (country_code: string) => {
+    const { container } = render(<DeployCard
+      job={{
+        taskId: "flag-1", domain: "node.example", ip: "1.2.3.4",
+        newSshPort: 2222, startedAt: Date.now(),
+        savedForm: { ...remna, country_code },
+        finalStatus: "success",
+      }}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+    return container;
+  };
+
+  it("renders a fi-de flag when country_code is DE", () => {
+    const container = renderCard("DE");
+    expect(container.querySelector(".fi.fi-de")).toBeTruthy();
+  });
+
+  it("falls back to the Globe icon when country_code is empty", () => {
+    const container = renderCard("");
+    expect(container.querySelector(".fi")).toBeNull();
+    expect(container.querySelector(".lucide-globe")).toBeTruthy();
+  });
+});
+
 describe("expanded success card — domain + remnanode image controls", () => {
   const expand = () =>
     fireEvent.click(screen.getByRole("button", { name: "Развернуть карточку ok.example" }));

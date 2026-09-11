@@ -73,6 +73,13 @@ describe("DeployDashboard", () => {
     expect(screen.getAllByText("Нет задач деплоя").length).toBeGreaterThan(0);
   });
 
+  it("protects the node search field from browser autofill", () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example")]));
+    render(<DeployDashboard />);
+    const search = screen.getByRole("searchbox", { name: "Поиск нод" });
+    expect(search).toHaveAttribute("autoComplete", "off");
+  });
+
   it("ignores the legacy un-suffixed deploy_jobs key (isolation)", () => {
     // Old global key must NOT leak into an account's view.
     localStorage.setItem("deploy_jobs", JSON.stringify([job("leaked.example")]));

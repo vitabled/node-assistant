@@ -133,12 +133,13 @@ strong{color:var(--t-hi);font-weight:600}
 .card-p{padding:var(--card-p)}
 .panel{background:var(--bg1);border:1px solid var(--line-soft);border-radius:var(--r-lg)}
 
-/* ── deploy-card masonry + section rails (Remnawave redesign, skin-agnostic) ──
-   CSS-колонки вместо grid: карточки живут своей высотой, сетка не растягивает их
-   по высоте ряда (устраняет «рваные» ряды). Секции — плоские блоки на общем фоне
-   карточки, разделённые hairline, вместо вложенных «серых коробочек». */
-.ni-deploy-grid{ column-width:340px; column-gap:16px; }
-.ni-deploy-card{ break-inside:avoid; margin-bottom:16px; }
+/* ── deploy-card list + section rails (Remnawave redesign, skin-agnostic) ──
+   Одна карточка в ряду, во всю ширину контейнера (на десктопе тоже): вместо
+   CSS-колонок — вертикальный стек, карточки не «рвутся» по колонкам. Секции —
+   плоские блоки на общем фоне карточки, разделённые hairline, вместо вложенных
+   «серых коробочек». */
+.ni-deploy-grid{ display:flex; flex-direction:column; }
+.ni-deploy-card{ margin-bottom:16px; }
 .ni-card-section{ border-top:1px solid var(--line-soft); padding:10px 16px; }
 .ni-card-section-head{ display:flex; align-items:center; gap:6px; margin-bottom:8px; }
 .ni-kv{ display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; padding:3px 0; }
