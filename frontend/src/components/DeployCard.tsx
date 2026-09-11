@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, memo } from "react";
 import {
-  X, Square, Server, CheckCircle2, XCircle, Loader2,
+  X, Square, Server, CheckCircle2, XCircle, Loader2, Circle,
   Terminal as TermIcon, Clock, Pencil, RotateCcw, ShieldCheck, Youtube,
   Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
   ShieldAlert, RefreshCw, Trash2, Wrench, Gauge, Play, ArrowLeftRight, Palette,
@@ -397,11 +397,11 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
         {/* Header */}
         <div className="px-4 pt-4 pb-3 flex items-start justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
-            <StatusIcon status={stepStatus.status} isRunning={isRunning} />
+            <StatusIcon status={stepStatus.status} isRunning={isRunning} noCreds={isSuccess && lacksSshCreds(job.savedForm)} />
             <div className="min-w-0">
               <p className="text-sm font-medium text-[var(--t-hi)] truncate">{job.domain}</p>
               <p className="text-xs text-[var(--t-low)] flex items-center gap-1.5">
-                <FlagChip code={job.savedForm.country_code} size={14} />
+                <FlagChip code={job.savedForm.country_code} size={20} />
                 <span>{job.ip}:{job.newSshPort}</span>
               </p>
             </div>
@@ -1010,10 +1010,20 @@ function OpStreamModal({ title, logs, status, onClose }: {
 
 // ── Status helpers ────────────────────────────────────────────
 
-function StatusIcon({ status, isRunning }: { status: TaskStatus; isRunning: boolean }) {
+// У ноды нет SSH-кредов (ни пароля, ни ключа из Хранилища) — статистику по SSH
+// собрать нечем, поэтому вместо зелёной галочки «деплой прошёл» показываем
+// жёлтый кружок «нет доступа». Цвет берём из темы (--warn), как у банов в
+// «Безопасности», без хардкода hex.
+function lacksSshCreds(f: FormData): boolean {
+  return !(f.ssh_password || "").trim() && !(f.ssh_key_ref || "").trim();
+}
+
+function StatusIcon({ status, isRunning, noCreds }: { status: TaskStatus; isRunning: boolean; noCreds?: boolean }) {
   const base = "rounded-lg p-1.5 shrink-0";
   if (isRunning)            return <div className={`${base} bg-[var(--accent-dim)] text-[var(--accent-hi)]`}><Loader2 size={14} className="animate-spin" /></div>;
-  if (status === "success") return <div className={`${base} bg-[var(--ok-dim)] text-[var(--ok)]`}><CheckCircle2 size={14} /></div>;
+  if (status === "success") return noCreds
+    ? <div className={`${base} bg-[var(--warn-dim)] text-[var(--warn)]`} title="Нет SSH-пароля — статистика недоступна" aria-label="Нет SSH-пароля — статистика недоступна"><Circle size={14} fill="currentColor" /></div>
+    : <div className={`${base} bg-[var(--ok-dim)] text-[var(--ok)]`}><CheckCircle2 size={14} /></div>;
   if (status === "failed")  return <div className={`${base} bg-[var(--err-dim)] text-[var(--err)]`}><XCircle size={14} /></div>;
   return <div className={`${base} bg-[var(--bg3)] text-[var(--t-low)]`}><Server size={14} /></div>;
 }
@@ -1571,11 +1581,11 @@ function CollapsedCard({ job, security, cert, statsReady, markHex, onExpand }: {
                  hover:bg-[var(--bg3)] transition-colors flex flex-col"
     >
       <div className="px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 min-w-0">
-        <StatusIcon status="success" isRunning={false} />
+        <StatusIcon status="success" isRunning={false} noCreds={lacksSshCreds(job.savedForm)} />
         <div className="min-w-0 flex-1" style={{ minWidth: 140 }}>
           <p className="text-sm font-medium text-[var(--t-hi)] truncate">{job.domain}</p>
           <p className="text-xs text-[var(--t-low)] flex items-center gap-1.5">
-            <FlagChip code={job.savedForm.country_code} size={14} />
+            <FlagChip code={job.savedForm.country_code} size={20} />
             <span>{job.ip}:{job.newSshPort}</span>
           </p>
         </div>

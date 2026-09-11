@@ -144,6 +144,53 @@ describe("country flag in the card header", () => {
     expect(container.querySelector(".fi")).toBeNull();
     expect(container.querySelector(".lucide-globe")).toBeTruthy();
   });
+
+  it("renders the flag at 20px in the header", () => {
+    const container = renderCard("DE");
+    const flag = container.querySelector(".fi.fi-de") as HTMLElement;
+    expect(flag.style.width).toBe("20px");
+  });
+});
+
+describe("success node without SSH creds shows a yellow dot", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ online: true, securityStats: null, trafficStats: null, certInfo: null }),
+    }));
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const renderSuccess = (savedForm: FormData) => {
+    const { container } = render(<DeployCard
+      job={{
+        taskId: "ok-creds", domain: "node.example", ip: "1.2.3.4",
+        newSshPort: 2222, startedAt: Date.now(), savedForm, finalStatus: "success",
+      }}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+    return container;
+  };
+
+  it("shows the green check when an SSH password is present", () => {
+    const container = renderSuccess({ ...remna, ssh_password: "secret" });
+    expect(container.querySelector(".lucide-circle-check")).toBeTruthy();
+    expect(screen.queryByTitle("Нет SSH-пароля — статистика недоступна")).toBeNull();
+  });
+
+  it("shows the green check when only an SSH key is present", () => {
+    const container = renderSuccess({ ...remna, ssh_password: "", ssh_key_ref: "key-1" });
+    expect(container.querySelector(".lucide-circle-check")).toBeTruthy();
+    expect(screen.queryByTitle("Нет SSH-пароля — статистика недоступна")).toBeNull();
+  });
+
+  it("shows a yellow dot instead of the check when both password and key are empty", () => {
+    const container = renderSuccess({ ...remna, ssh_password: "", ssh_key_ref: "" });
+    expect(container.querySelector(".lucide-circle-check")).toBeNull();
+    const yellow = screen.getByTitle("Нет SSH-пароля — статистика недоступна");
+    expect(yellow.querySelector("svg.lucide-circle")).toBeTruthy();
+  });
 });
 
 describe("expanded success card — domain + remnanode image controls", () => {
