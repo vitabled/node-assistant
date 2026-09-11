@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  fetchDeployJobs, upsertDeployJob, deleteDeployJob, reconcileJobs,
+  fetchDeployJobs, upsertDeployJob, deleteDeployJob, reconcileJobs, syncDeployJobs,
 } from "./deployJobsSync";
 
 const j = (taskId: string) => ({
@@ -58,5 +58,85 @@ describe("wire calls", () => {
   it("deleteDeployJob treats a 404 as success (idempotent)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
     await expect(deleteDeployJob("gone")).resolves.toBeUndefined();
+  });
+});
+
+describe("syncDeployJobs", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const ids = (arr: { taskId: string }[]) => arr.map(x => x.taskId);
+  const deletes = (m: ReturnType<typeof vi.fn>) =>
+    m.mock.calls.filter(c => (c[1] as RequestInit | undefined)?.method === "DELETE");
+
+  it("merges server cards into a short local cache and never DELETEs", async () => {
+    const server = [j("s1"), j("s2"), j("s3")];
+    const local = [j("s1")]; // stale/short local cache
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ jobs: server }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const saved: { taskId: string }[][] = [];
+    const res = await syncDeployJobs({
+      loadLocal: () => local,
+      saveLocal: jobs => { saved.push(jobs); },
+    });
+
+    expect(res.offline).toBe(false);
+    expect(res.pushFailed).toBe(false);
+    // merged list contains every server card
+    expect(ids(res.jobs)).toEqual(["s1", "s2", "s3"]);
+    // cache was written once with the full merged list (server cards ADDED)
+    expect(saved).toHaveLength(1);
+    expect(ids(saved[0])).toEqual(["s1", "s2", "s3"]);
+    // no DELETE ever issued
+    expect(deletes(fetchMock)).toHaveLength(0);
+  });
+
+  it("uploads a local-only card to the server (POST)", async () => {
+    const server = [j("s1")];
+    const local = [j("s1"), j("local")];
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ jobs: server }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await syncDeployJobs({ loadLocal: () => local, saveLocal: () => {} });
+
+    expect(res.pushFailed).toBe(false);
+    expect(ids(res.jobs)).toEqual(["s1", "local"]);
+    const posts = fetchMock.mock.calls.filter(c => (c[1] as RequestInit | undefined)?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String(posts[0][1] && (posts[0][1] as RequestInit).body))).toEqual(j("local"));
+    expect(deletes(fetchMock)).toHaveLength(0);
+  });
+
+  it("degrades to the local cache when the API is down, without deleting", async () => {
+    const local = [j("a"), j("b")];
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await syncDeployJobs({ loadLocal: () => local, saveLocal: () => {} });
+
+    expect(res.offline).toBe(true);
+    expect(res.jobs).toEqual(local); // local data preserved
+    expect(deletes(fetchMock)).toHaveLength(0);
+  });
+
+  it("keeps a local-only card in the cache when its upload fails", async () => {
+    const server = [j("s1")];
+    const local = [j("local")];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: server }) }) // GET
+      .mockRejectedValueOnce(new Error("500"));                                   // POST fails
+    vi.stubGlobal("fetch", fetchMock);
+
+    const saved: { taskId: string }[][] = [];
+    const res = await syncDeployJobs({
+      loadLocal: () => local,
+      saveLocal: jobs => { saved.push(jobs); },
+    });
+
+    expect(res.offline).toBe(false);
+    expect(res.pushFailed).toBe(true);
+    expect(ids(res.jobs)).toEqual(["s1", "local"]);
+    expect(ids(saved[0])).toEqual(["s1", "local"]); // pending card not lost
+    expect(deletes(fetchMock)).toHaveLength(0);
   });
 });

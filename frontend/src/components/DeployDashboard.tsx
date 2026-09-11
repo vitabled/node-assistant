@@ -9,7 +9,7 @@ import { deployJobsKey } from "../auth/store";
 import { Page, Seg, EmptyState } from "../theme/ui";
 import { Stagger, StaggerItem } from "../theme/motion";
 import {
-  fetchDeployJobs, upsertDeployJob, deleteDeployJob, reconcileJobs,
+  upsertDeployJob, deleteDeployJob, syncDeployJobs,
 } from "./deployJobsSync";
 import { toast } from "./infra/Toast";
 
@@ -37,9 +37,11 @@ function saveJobs(jobs: DeployJobSummary[]) {
   catch {}
 }
 
-// localStorage is now only a "pending" buffer: cards that were changed locally but
-// not yet confirmed by the server. (Confirmed cards live on the server and come
-// back via GET.) bufferUpsert/bufferRemove mutate just that pending set.
+// localStorage is a local CACHE mirroring the merged list (server + still-pending
+// local-only cards). It is authoritative only for offline fallback; the server
+// stays the source of truth and the cache is never used to drive a server delete.
+// bufferUpsert/bufferRemove keep the cache in step with the in-memory list on
+// every mutation (add/edit/status/color/remove).
 function bufferUpsert(job: DeployJobSummary) {
   saveJobs([...loadJobs().filter(j => j.taskId !== job.taskId), job]);
 }
@@ -84,16 +86,18 @@ export function DeployDashboard() {
     dirtyRef.current = true;
   }, []);
 
-  // Sync a mutation's diff to the server WITHOUT a full-list PUT: removed taskIds
-  // are DELETE'd, added/changed cards are upserted one at a time. This keeps the
-  // server as the source of truth — a client with a stale local list can never
-  // clobber cards another browser pushed. A change is buffered in localStorage
-  // (pending) first, so a failed op survives a reload; a confirmed upsert drains
-  // its taskId from the buffer.
+  // Sync a mutation's diff to the server WITHOUT a full-list PUT. Only a card that
+  // actually left the list (explicit delete/replace) is DELETEd; every added or
+  // in-place-changed card (status/color/edit) is upserted one at a time. `removed`
+  // is keyed by taskId, NOT object identity — a status/color update builds a fresh
+  // object for the same taskId, and treating that as a "removal" would DELETE a
+  // server card we still have (the 29->1 data-loss bug). The server stays the
+  // source of truth; a stale local list can never clobber another browser's cards.
   const syncDiff = useCallback((prev: DeployJobSummary[], next: DeployJobSummary[]) => {
-    // Reference identity is enough: mutations keep untouched cards as the SAME
-    // object and build a fresh object only for the cards they touch.
-    const removed = prev.filter(p => !next.includes(p));
+    const nextIds = new Set(next.map(n => n.taskId));
+    const removed = prev.filter(p => !nextIds.has(p.taskId));
+    // `changed` is by reference: a fresh object (new OR re-created card) is
+    // upserted so its status/color/savedForm reaches the server.
     const changed = next.filter(n => !prev.includes(n));
 
     for (const j of removed) {
@@ -105,7 +109,7 @@ export function DeployDashboard() {
     for (const j of changed) {
       bufferUpsert(j);
       upsertDeployJob(j)
-        .then(() => { dirtyRef.current = false; bufferRemove(j.taskId); })
+        .then(() => { dirtyRef.current = false; })
         .catch(notifyDirty);
     }
   }, [notifyDirty]);
@@ -122,44 +126,23 @@ export function DeployDashboard() {
     });
   }, [syncDiff]);
 
-  // On mount, load the authoritative list from the server. localStorage is only an
-  // offline buffer here:
-  //  - the server list is rendered as-is (server is the source of truth);
-  //  - local-only taskIds (cards that never reached the server) are pushed one at
-  //    a time and, once confirmed, drained from the buffer — always, not only when
-  //    the server list is empty;
-  //  - server unreachable (network/5xx/401) -> degrade to the buffer (the initial
-  //    state is already loadJobs(); nothing to do).
+  // On mount, run the one-shot additive sync (syncDeployJobs):
+  //  - pull the authoritative server list and merge it into the local cache
+  //    (server wins on taskId conflicts) — server cards we didn't know about are
+  //    ADDED to localStorage, never removed;
+  //  - upload local-only cards (POST, one at a time) — never DELETE anything;
+  //  - server unreachable (network/5xx/401) -> degrade to the local cache.
   useEffect(() => {
     let live = true;
     (async () => {
-      let serverJobs: DeployJobSummary[];
-      try {
-        serverJobs = await fetchDeployJobs<DeployJobSummary>();
-      } catch {
-        return; // offline — the buffer is already the render list.
-      }
+      const { jobs: synced, offline, pushFailed } = await syncDeployJobs({
+        loadLocal: loadJobs,
+        saveLocal: saveJobs,
+      });
       if (!live) return;
-      const local = loadJobs();
-      const { merged, localOnly } = reconcileJobs(serverJobs, local);
-      if (localOnly.length > 0) {
-        const confirmed = new Set<string>();
-        await Promise.all(localOnly.map(async j => {
-          try {
-            await upsertDeployJob(j);
-            confirmed.add(j.taskId);
-            dirtyRef.current = false;
-          } catch {
-            notifyDirty();
-          }
-        }));
-        if (!live) return;
-        // Drain the confirmed cards from the buffer; keep only still-pending ones.
-        saveJobs(localOnly.filter(j => !confirmed.has(j.taskId)));
-      } else {
-        saveJobs([]);
-      }
-      if (live) setJobs(merged);
+      if (!offline && !pushFailed) dirtyRef.current = false;
+      else if (pushFailed) notifyDirty();
+      setJobs(synced);
     })();
     return () => { live = false; };
   }, [notifyDirty]);
@@ -435,7 +418,7 @@ function DeployFormModal({
       style={{ background: "var(--overlay)" }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="rounded-xl w-full max-w-lg
+      <div className="rounded-xl w-full max-w-4xl
                       max-h-[90vh] overflow-y-auto shadow-2xl"
            style={{ background: "var(--bg1)", border: "1px solid var(--line)" }}>
         <div className="sticky top-0 flex items-center justify-between px-5 py-3.5 z-10"

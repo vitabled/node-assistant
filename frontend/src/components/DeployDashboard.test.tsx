@@ -83,7 +83,7 @@ describe("DeployDashboard", () => {
 
   // ── server sync (server is the source of truth) ──────────────
 
-  it("renders the server list as-is and leaves the buffer empty when nothing is pending", async () => {
+  it("renders the server list and mirrors it into the local cache when nothing is pending", async () => {
     const serverJob = job("server.example", "t1");
     const { calls } = stubFetch((url, init) => {
       const method = (init?.method ?? "GET").toUpperCase();
@@ -93,12 +93,15 @@ describe("DeployDashboard", () => {
     render(<DeployDashboard />);
 
     await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
-    // No local-only card → no write calls on mount.
+    // No local-only card → no write calls on mount (no POST/DELETE).
     expect(calls.some(c => c.url.includes("/api/deploy-jobs") && c.method !== "GET")).toBe(false);
-    expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]")).toEqual([]);
+    // Server cards are ADDED to the local cache (server is the source of truth).
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]")).toEqual([serverJob]);
+    });
   });
 
-  it("uploads a local-only card to the server and removes it from localStorage", async () => {
+  it("uploads a local-only card to the server and mirrors it in the cache", async () => {
     const local = job("local.example", "t-local");
     localStorage.setItem("deploy_jobs_id-a", JSON.stringify([local]));
     const { calls } = stubFetch((url, init) => {
@@ -116,8 +119,9 @@ describe("DeployDashboard", () => {
     });
     expect(calls.some(c => c.method === "PUT")).toBe(false);
     expect(screen.getByText("CARD:local.example")).toBeInTheDocument();
+    // Confirmed card stays mirrored in the local cache (no drain-to-empty).
     await waitFor(() => {
-      expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]")).toEqual([]);
+      expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]")).toEqual([local]);
     });
   });
 
@@ -177,7 +181,7 @@ describe("DeployDashboard", () => {
     expect(calls.some(c => c.method === "PUT")).toBe(false);
   });
 
-  it("keeps a card buffered locally when its upsert fails (no loss)", async () => {
+  it("keeps a local-only card cached when its upsert fails (no loss)", async () => {
     const serverJob = job("server.example", "t-server");
     const localNew = job("new.example", "t-new");
     localStorage.setItem("deploy_jobs_id-a", JSON.stringify([localNew]));
@@ -190,8 +194,12 @@ describe("DeployDashboard", () => {
     render(<DeployDashboard />);
 
     await waitFor(() => expect(screen.getByText("CARD:new.example")).toBeInTheDocument());
-    // Upsert failed → the card stays in the local buffer for the next sync.
-    expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]").map((j: { taskId: string }) => j.taskId)).toEqual(["t-new"]);
+    // Upsert failed → the pending card stays in the cache, alongside the merged
+    // server card (nothing is lost).
+    await waitFor(() => {
+      const ids = JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]").map((j: { taskId: string }) => j.taskId);
+      expect(ids).toEqual(["t-server", "t-new"]);
+    });
   });
 
   it("degrades to localStorage when the server is unreachable", async () => {
