@@ -13,7 +13,7 @@ import { TerminalOutput } from "./TerminalOutput";
 import { ReplaceDomainModal } from "./rw/ReplaceDomainModal";
 import { FlagChip } from "./common/FlagChip";
 import { FormDialog } from "../theme/ui";
-import { useTaskStream, type StatusFrame, type TaskStatus } from "../hooks/useTaskStream";
+import { useTaskStream, isTaskNotFound, type StatusFrame, type TaskStatus } from "../hooks/useTaskStream";
 import { toast } from "./infra/Toast";
 import type { DeployJobSummary } from "./DeployDashboard";
 import type { FormData } from "./DeployForm";
@@ -21,6 +21,12 @@ import type { FormData } from "./DeployForm";
 interface CertInfo { daysLeft: number; notAfter: string }
 
 type NodeAction = "reinstall" | "reconfigure" | "uninstall";
+
+// Нейтральное состояние вместо сырого «Task not found»: задача пропала из
+// in-memory store бэкенда (перезапуск сервиса / карточка из другого процесса),
+// но сама нода и её статистика при этом живы. Без слова «Error» и без красного.
+export const LOGS_UNAVAILABLE_MSG =
+  "Логи этой задачи недоступны — сервис перезапускался после деплоя. Нода продолжает работать, статистика собирается.";
 
 // Coerce a saved deploy form into the /api/node/step payload (mirrors
 // DeployDashboard.submitDeploy — NodeOpRequest extends DeployRequest, so the
@@ -160,6 +166,10 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
   const [expanded,      setExpanded]      = useState(false);
   const [confirmStop,   setConfirmStop]   = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // Задача пропала из бэкенда (перезапуск / другой процесс). Стрим WS закрыт
+  // хуком, карточка переключается в нейтральное «нет данных» вместо сырого
+  // «Task not found»; статистика/управление при этом работают (им task_id не нужен).
+  const [taskUnavailable, setTaskUnavailable] = useState(false);
 
   const addLog   = useCallback((line: string) => setLogs(l => [...l, line]), []);
   const onStatus = useCallback((frame: StatusFrame) =>
@@ -169,7 +179,9 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
       total_steps:  frame.total_steps  === -1 ? prev.total_steps  : frame.total_steps,
     })), []);
 
-  useTaskStream({ taskId: job.taskId, onLog: addLog, onStatus });
+  const onUnavailable = useCallback(() => setTaskUnavailable(true), []);
+
+  useTaskStream({ taskId: job.taskId, onLog: addLog, onStatus, onUnavailable });
 
   // Persist final status upward when it changes
   useEffect(() => {
@@ -303,11 +315,14 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
     }
   }, [job.savedForm]);
 
-  const isRunning = stepStatus.status === "running" ||
-    (stepStatus.status === "pending" && logs.length === 0 && !job.finalStatus);
+  const isRunning = !taskUnavailable && (stepStatus.status === "running" ||
+    (stepStatus.status === "pending" && logs.length === 0 && !job.finalStatus));
   const isFailed  = stepStatus.status === "failed";
   const isDone    = stepStatus.status === "success" || stepStatus.status === "failed";
   const isSuccess = stepStatus.status === "success";
+  // Задача пропала, а финальный результат (success/failed) не был сохранён —
+  // состояние ноды неизвестно: нейтральное «нет данных», а не ошибка.
+  const isUnknown = taskUnavailable && stepStatus.status !== "success" && stepStatus.status !== "failed";
   const collapsed = isSuccess && !expanded;
   // Status rail — обязательный сигнал состояния (2px слева): cyan=работает,
   // teal=успех, red=ошибка, серый=ожидание (B4.3). Заменяет прежнюю borderLeft-маркировку.
@@ -342,7 +357,14 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
     try {
       await onRestart(job);
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Не удалось перезапустить деплой", "error");
+      const msg = error instanceof Error ? error.message : "";
+      if (isTaskNotFound(msg)) {
+        // REST 404 «Task not found» — та же терминальная ситуация, что и WS-error:
+        // переключаем карточку в нейтральное состояние, без красного снекбара.
+        setTaskUnavailable(true);
+      } else {
+        toast(msg || "Не удалось перезапустить деплой", "error");
+      }
     } finally {
       setRetrying(false);
     }
@@ -454,7 +476,7 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
                 </div>
               )}
             </div>
-            <StatusBadge status={stepStatus.status} isRunning={isRunning} />
+            <StatusBadge status={stepStatus.status} isRunning={isRunning} unknown={isUnknown} />
           </div>
         </div>
 
@@ -487,6 +509,9 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
           )}
           {stepStatus.status === "failed" && (
             <p className="text-xs text-[var(--err)]">Ошибка выполнения</p>
+          )}
+          {isUnknown && (
+            <p className="text-xs text-[var(--t-faint)]">{LOGS_UNAVAILABLE_MSG}</p>
           )}
         </div>
 
@@ -599,8 +624,9 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
             />
           ))}
 
-          {/* Pending: idempotent restart (worker hasn't claimed it yet) */}
-          {stepStatus.status === "pending" && !job.finalStatus && (
+          {/* Pending: idempotent restart (worker hasn't claimed it yet).
+              Скрыт, когда задача пропала — перезапускать очередь бессмысленно. */}
+          {stepStatus.status === "pending" && !job.finalStatus && !isUnknown && (
             <ActionButton
               label="Перезапустить"
               icon={<RotateCcw size={10} />}
@@ -612,8 +638,8 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
             />
           )}
 
-          {/* Failed: Retry */}
-          {isFailed && (
+          {/* Failed / unknown task: Retry (redeploy with the same params) */}
+          {(isFailed || isUnknown) && (
             <ActionButton
               label="Повторить"
               icon={<RotateCcw size={10} />}
@@ -655,6 +681,7 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
           isRunning={isRunning}
           isFailed={isFailed}
           retrying={retrying}
+          taskUnavailable={taskUnavailable}
           onStop={stopDeploy}
           onRetry={handleRetry}
           onEdit={handleEdit}
@@ -901,8 +928,11 @@ function SpeedtestBlock({ form }: { form: FormData }) {
           onChange={e => setXrayLink(e.target.value)}
           disabled={running}
           placeholder="Xray-ссылка (vless/trojan/vmess/ss, опционально)"
-          autoComplete="off"
+          autoComplete="new-password"
           spellCheck={false}
+          data-form-type="other"
+          data-lpignore="true"
+          data-1p-ignore="true"
           className="bg-[var(--bg2)] border border-[var(--line)] rounded px-1.5 py-1
                      text-[11px] text-[var(--t-mid)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-dim)]"
         />
@@ -1037,7 +1067,13 @@ function StatusIcon({ status, isRunning, noCreds }: { status: TaskStatus; isRunn
   return <div className={`${base} bg-[var(--bg3)] text-[var(--t-low)]`}><Server size={14} /></div>;
 }
 
-function StatusBadge({ status, isRunning }: { status: TaskStatus; isRunning: boolean }) {
+function StatusBadge({ status, isRunning, unknown }: { status: TaskStatus; isRunning: boolean; unknown?: boolean }) {
+  if (unknown) return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px]
+                     font-medium bg-[var(--bg3)] border border-[var(--line)] text-[var(--t-low)] shrink-0">
+      Нет данных
+    </span>
+  );
   if (isRunning) return (
     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px]
                      font-medium bg-[var(--accent-dim)] border border-[var(--accent-line)] text-[var(--accent-hi)] shrink-0">
@@ -1414,20 +1450,22 @@ export function VnstatBlock({ form }: { form: FormData }) {
 // ── Detail modal ──────────────────────────────────────────────
 
 function DeployDetailModal({
-  job, logs, stepStatus, isRunning, isFailed, retrying,
+  job, logs, stepStatus, isRunning, isFailed, retrying, taskUnavailable,
   onStop, onRetry, onEdit, onClose,
 }: {
-  job:        DeployJobSummary;
-  logs:       string[];
-  stepStatus: StatusFrame;
-  isRunning:  boolean;
-  isFailed:   boolean;
-  retrying:   boolean;
-  onStop:     (e?: React.MouseEvent) => Promise<void>;
-  onRetry:    (e: React.MouseEvent)  => Promise<void>;
-  onEdit:     (e: React.MouseEvent)  => void;
-  onClose:    () => void;
+  job:             DeployJobSummary;
+  logs:            string[];
+  stepStatus:      StatusFrame;
+  isRunning:       boolean;
+  isFailed:        boolean;
+  retrying:        boolean;
+  taskUnavailable: boolean;
+  onStop:          (e?: React.MouseEvent) => Promise<void>;
+  onRetry:         (e: React.MouseEvent)  => Promise<void>;
+  onEdit:          (e: React.MouseEvent)  => void;
+  onClose:         () => void;
 }) {
+  const unknown = taskUnavailable && stepStatus.status !== "success" && stepStatus.status !== "failed";
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] p-4"
@@ -1479,7 +1517,7 @@ function DeployDetailModal({
             )}
           </div>
 
-          <StatusBadge status={stepStatus.status} isRunning={isRunning} />
+          <StatusBadge status={stepStatus.status} isRunning={isRunning} unknown={unknown} />
 
           <button onClick={onClose}
             title="Закрыть (деплой продолжится в фоне)"
@@ -1497,6 +1535,7 @@ function DeployDetailModal({
               totalSteps={stepStatus.total_steps}
               status={stepStatus.status}
               steps={DEPLOY_STEPS}
+              unavailable={unknown}
             />
           </div>
 
@@ -1517,7 +1556,7 @@ function DeployDetailModal({
                 <div className="h-full flex flex-col items-center justify-center gap-2
                                 text-[var(--t-faint)] text-sm border border-[var(--line-soft)] rounded-lg">
                   <TermIcon size={24} className="opacity-30" />
-                  <span>Ожидание вывода...</span>
+                  <span>{taskUnavailable ? LOGS_UNAVAILABLE_MSG : "Ожидание вывода..."}</span>
                 </div>
               ) : (
                 <TerminalOutput lines={logs} />

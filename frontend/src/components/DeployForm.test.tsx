@@ -21,21 +21,9 @@ const validRemna: FormData = {
   country_code: "DE",
 };
 
-const validHaproxy: FormData = {
-  ...FORM_DEFAULT,
-  mode: "haproxy",
-  ip: "1.2.3.4",
-  ssh_password: "pw",
-  haproxy_dest_ip: "10.0.0.5",
-};
-
 describe("validateForm", () => {
   it("passes a fully-valid remnanode form (happy path)", () => {
     expect(validateForm(validRemna)).toEqual({});
-  });
-
-  it("passes a fully-valid haproxy form", () => {
-    expect(validateForm(validHaproxy)).toEqual({});
   });
 
   // ── empty / required ──
@@ -82,17 +70,6 @@ describe("validateForm", () => {
   it("never rejects whitelist_ips, even garbage", () => {
     expect(validateForm({ ...validRemna, whitelist_ips: "" }).whitelist_ips).toBeUndefined();
     expect(validateForm({ ...validRemna, whitelist_ips: "garbage 1.2.3.4 ;; 10/8" }).whitelist_ips).toBeUndefined();
-  });
-
-  // ── mode-gated: remnanode-only fields are ignored in haproxy mode ──
-  it("does not require domain/email/token/country in haproxy mode", () => {
-    const e = validateForm({ ...validHaproxy, domain: "", email: "", cloudflare_api_key: "", country_code: "" });
-    expect(e.domain).toBeUndefined();
-    expect(e.email).toBeUndefined();
-    expect(e.cloudflare_api_key).toBeUndefined();
-    expect(e.country_code).toBeUndefined();
-    // but haproxy_dest_ip IS required
-    expect(validateForm({ ...validHaproxy, haproxy_dest_ip: "" }).haproxy_dest_ip).toBeTruthy();
   });
 
   // ── remnawave: token not required when auto-registering, template then is ──
@@ -208,47 +185,11 @@ describe("existing-server install component contract", () => {
   });
 });
 
-describe("DeployForm mode-specific rendering", () => {
+describe("DeployForm install-component rendering", () => {
   const renderPreset = (preset: Partial<FormData>) => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     return render(<DeployForm onSubmit={async () => {}} preset={preset} />);
   };
-
-  it("shows only HAProxy-relevant sections for an HAProxy install", () => {
-    const preset = {
-      mode: "haproxy" as const,
-      install_components: ["haproxy"],
-    };
-
-    renderPreset(preset);
-
-    expect(screen.getByText("Настройки HAProxy")).toBeInTheDocument();
-    expect(screen.queryByText("Remnanode", { selector: "p" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Remnawave" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Домен и SSL" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Порт remnanode")).not.toBeInTheDocument();
-    expect(screen.queryByText("Домен ноды")).not.toBeInTheDocument();
-    expect(screen.queryByText("Email (ACME)")).not.toBeInTheDocument();
-    expect(screen.queryByText("Cloudflare API токен")).not.toBeInTheDocument();
-  });
-
-  it("hides HAProxy settings when HAProxy is not selected for an existing server", () => {
-    renderPreset({ mode: "haproxy", install_components: [] });
-
-    expect(screen.queryByText("Настройки HAProxy")).not.toBeInTheDocument();
-  });
-
-  it("shows HAProxy settings when HAProxy is selected for an existing server", () => {
-    renderPreset({ mode: "haproxy", install_components: ["haproxy"] });
-
-    expect(screen.getByText("Настройки HAProxy")).toBeInTheDocument();
-  });
-
-  it("keeps HAProxy settings in the ordinary full HAProxy mode", () => {
-    renderPreset({ mode: "haproxy" });
-
-    expect(screen.getByText("Настройки HAProxy")).toBeInTheDocument();
-  });
 
   it("shows Remnanode fields without the SSL section when SSL is not selected", () => {
     const preset = {
@@ -276,5 +217,45 @@ describe("DeployForm mode-specific rendering", () => {
     expect(screen.getByText("Домен/SSL")).toBeInTheDocument();
     expect(screen.getByText("Email (ACME)")).toBeInTheDocument();
     expect(screen.getByText("Cloudflare API токен")).toBeInTheDocument();
+  });
+});
+
+describe("secret-field autofill protection", () => {
+  const inputForLabel = (labelText: string) => {
+    const label = screen.getByText(labelText);
+    const input = label.parentElement?.querySelector("input");
+    if (!input) throw new Error(`no <input> under label "${labelText}"`);
+    return input;
+  };
+
+  it("marks ssh_password, remnanode_token and cloudflare_api_key as new-password", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<DeployForm onSubmit={async () => {}} />);
+
+    for (const label of ["SSH пароль", "Токен Remnanode", "Cloudflare API токен"]) {
+      const input = inputForLabel(label);
+      expect(input).toHaveAttribute("autocomplete", "new-password");
+      expect(input).toHaveAttribute("data-form-type", "other");
+      expect(input).toHaveAttribute("data-lpignore", "true");
+      expect(input).toHaveAttribute("data-1p-ignore", "true");
+      expect(input).toHaveAttribute("spellcheck", "false");
+    }
+  });
+});
+
+describe("remnanode version selector", () => {
+  it("defaults to latest in FORM_DEFAULT", () => {
+    expect(FORM_DEFAULT.remnanode_version).toBe("latest");
+  });
+
+  it("flags an empty remnanode_version", () => {
+    expect(validateForm({ ...validRemna, remnanode_version: "" }).remnanode_version).toBeTruthy();
+  });
+
+  it("renders the version selector with the latest default", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<DeployForm onSubmit={async () => {}} />);
+    expect(screen.getByRole("combobox", { name: "Версия Remnanode" })).toBeInTheDocument();
+    expect(screen.getByText("latest")).toBeInTheDocument();
   });
 });

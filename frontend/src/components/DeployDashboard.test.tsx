@@ -82,6 +82,102 @@ describe("DeployDashboard", () => {
     render(<DeployDashboard />);
     const search = screen.getByRole("searchbox", { name: "Поиск нод" });
     expect(search).toHaveAttribute("autoComplete", "off");
+    expect(search).toHaveAttribute("inputMode", "search");
+    expect(search).toHaveAttribute("enterKeyHint", "search");
+  });
+
+  it("keeps cards visible when a value is written directly into the search DOM (autofill spill)", () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([
+      job("node1.example", "t1"),
+      job("node2.example", "t2"),
+    ]));
+    render(<DeployDashboard />);
+
+    expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
+    expect(screen.getByText("CARD:node2.example")).toBeInTheDocument();
+
+    const search = screen.getByRole("searchbox", { name: "Поиск нод" }) as HTMLInputElement;
+    expect(search.value).toBe("");
+
+    // A password manager writes a value into the DOM and fires an input event.
+    // The search is controlled: the value comes from state, so this DOM write
+    // must NOT become the filter query and must NOT hide any card.
+    search.value = "vсskahquyythrgse";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
+    expect(screen.getByText("CARD:node2.example")).toBeInTheDocument();
+    expect(screen.queryByText(/совпадений нет/)).not.toBeInTheDocument();
+  });
+
+  it("shows a clear button only while the search query is non-empty", () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example")]));
+    render(<DeployDashboard />);
+
+    expect(screen.queryByRole("button", { name: "Очистить поиск" })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Поиск нод" }), { target: { value: "node" } });
+    expect(screen.getByRole("button", { name: "Очистить поиск" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Очистить поиск" }));
+    expect((screen.getByRole("searchbox", { name: "Поиск нод" }) as HTMLInputElement).value).toBe("");
+    expect(screen.queryByRole("button", { name: "Очистить поиск" })).not.toBeInTheDocument();
+  });
+
+  it("shows a search-specific empty state and resets it", () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example")]));
+    render(<DeployDashboard />);
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Поиск нод" }), { target: { value: "abc" } });
+
+    expect(screen.getByText("Поиск: «abc» — совпадений нет")).toBeInTheDocument();
+    expect(screen.queryByText("CARD:node1.example")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Сбросить поиск" }));
+    expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
+    expect((screen.getByRole("searchbox", { name: "Поиск нод" }) as HTMLInputElement).value).toBe("");
+  });
+
+  it("normal search typing still filters cards (regression)", () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([
+      job("node1.example", "t1"),
+      job("other.example", "t2"),
+    ]));
+    render(<DeployDashboard />);
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Поиск нод" }), { target: { value: "node1" } });
+
+    expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
+    expect(screen.queryByText("CARD:other.example")).not.toBeInTheDocument();
+  });
+
+  it("status filters still work (regression)", () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([
+      { ...job("node1.example", "t1"), finalStatus: "success" },
+      { ...job("node2.example", "t2"), finalStatus: "failed" },
+    ]));
+    render(<DeployDashboard />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Успех" }));
+    expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
+    expect(screen.queryByText("CARD:node2.example")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ошибка" }));
+    expect(screen.queryByText("CARD:node1.example")).not.toBeInTheDocument();
+    expect(screen.getByText("CARD:node2.example")).toBeInTheDocument();
+  });
+
+  it("shows a status-filter empty state and «Показать все» restores the cards", () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example")]));
+    render(<DeployDashboard />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ошибка" }));
+
+    expect(screen.getByText("Фильтр: «Ошибка» — нет карточек")).toBeInTheDocument();
+    expect(screen.queryByText("CARD:node1.example")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Показать все" }));
+    expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
   });
 
   it("ignores the legacy un-suffixed deploy_jobs key (isolation)", () => {

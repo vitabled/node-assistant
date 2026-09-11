@@ -38,6 +38,9 @@ interface Props {
   totalSteps:  number;
   status:      TaskStatus;
   steps?:      string[];   // defaults to DEPLOY_STEPS
+  /** Нейтральное «нет данных»: задача недоступна (сервис перезапускался после
+   *  деплоя) — шаги серые, без ошибки и без прогресса. */
+  unavailable?: boolean;
 }
 
 function useStepTimer(running: boolean): string {
@@ -142,17 +145,23 @@ function StepGroup({ major, title, from, to, steps, s }: {
   );
 }
 
-export function StepProgress({ currentStep, totalSteps, status, steps = DEPLOY_STEPS }: Props) {
-  const isRunning = status === "running";
+export function StepProgress({ currentStep, totalSteps, status, steps = DEPLOY_STEPS, unavailable }: Props) {
+  const isRunning = !unavailable && status === "running";
   const elapsed   = useStepTimer(isRunning);
-  const s: StepState = { currentStep, status, isRunning, elapsed };
+  // Нейтральное состояние: ни один шаг не активен, не завершён и не завален.
+  const effStatus: TaskStatus = unavailable ? "pending" : status;
+  const effStep = unavailable ? 0 : currentStep;
+  const s: StepState = { currentStep: effStep, status: effStatus, isRunning, elapsed };
 
   const doneCount =
-    status === "success" ? totalSteps : Math.max(0, currentStep - 1);
+    unavailable ? 0
+    : status === "success" ? totalSteps
+    : Math.max(0, currentStep - 1);
   const pct = totalSteps > 0 ? Math.round((doneCount / totalSteps) * 100) : 0;
 
   const barColor =
-    status === "success" ? "var(--ok)"
+    unavailable ? "var(--line)"
+    : status === "success" ? "var(--ok)"
     : status === "failed" ? "var(--err)"
     : "var(--accent)";
 
@@ -171,6 +180,10 @@ export function StepProgress({ currentStep, totalSteps, status, steps = DEPLOY_S
         </div>
         <span className="text-xs tabular-nums w-8 text-right dim">{pct}%</span>
       </div>
+
+      {unavailable && (
+        <p className="text-xs text-[var(--t-faint)]">Нет данных о ходе деплоя</p>
+      )}
 
       {/* Step list */}
       <div className="flex flex-col gap-0.5">

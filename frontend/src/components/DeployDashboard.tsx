@@ -27,6 +27,13 @@ export interface DeployJobSummary {
 // S2 toolbar: локальный фильтр по статусу (running = ещё без finalStatus).
 type StatusFilter = "all" | "running" | "success" | "failed";
 
+const STATUS_LABEL: Record<StatusFilter, string> = {
+  all:     "Все",
+  running: "В работе",
+  success: "Успех",
+  failed:  "Ошибка",
+};
+
 function loadJobs(): DeployJobSummary[] {
   try { return JSON.parse(localStorage.getItem(deployJobsKey()) ?? "[]"); }
   catch { return []; }
@@ -326,6 +333,8 @@ export function DeployDashboard() {
                 <input
                   type="search"
                   name="node-search"
+                  inputMode="search"
+                  enterKeyHint="search"
                   autoComplete="off"
                   autoCorrect="off"
                   autoCapitalize="off"
@@ -333,12 +342,24 @@ export function DeployDashboard() {
                   data-form-type="other"
                   data-lpignore="true"
                   data-1p-ignore="true"
-                  className="input pl-8"
+                  className="input pl-8 pr-8"
                   placeholder="Поиск по IP, имени или домену"
                   value={query}
                   onChange={e => setQuery(e.target.value)}
                   aria-label="Поиск нод"
                 />
+                {query !== "" && (
+                  <button
+                    type="button"
+                    onClick={() => setQuery("")}
+                    aria-label="Очистить поиск"
+                    title="Очистить поиск"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--t-faint)]
+                               hover:text-[var(--t-hi)] transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
               </div>
               <Seg
                 mini
@@ -357,18 +378,44 @@ export function DeployDashboard() {
             </div>
 
             {filtered.length === 0 ? (
-              <EmptyState
-                icon={<Search size={18} />}
-                title="Ничего не найдено"
-                hint="Измените запрос поиска или фильтр статуса."
-                action={
-                  <button
-                    onClick={() => { setQuery(""); setStatusFilter("all"); }}
-                    className="btn btn-soft" style={{ marginTop: 6 }}>
-                    Сбросить фильтры
-                  </button>
-                }
-              />
+              query.trim() !== "" ? (
+                <EmptyState
+                  icon={<Search size={18} />}
+                  title={`Поиск: «${query.trim()}» — совпадений нет`}
+                  action={
+                    <button
+                      onClick={() => setQuery("")}
+                      className="btn btn-soft" style={{ marginTop: 6 }}>
+                      Сбросить поиск
+                    </button>
+                  }
+                />
+              ) : statusFilter !== "all" ? (
+                <EmptyState
+                  icon={<Search size={18} />}
+                  title={`Фильтр: «${STATUS_LABEL[statusFilter]}» — нет карточек`}
+                  action={
+                    <button
+                      onClick={() => setStatusFilter("all")}
+                      className="btn btn-soft" style={{ marginTop: 6 }}>
+                      Показать все
+                    </button>
+                  }
+                />
+              ) : (
+                <EmptyState
+                  icon={<Search size={18} />}
+                  title="Ничего не найдено"
+                  hint="Измените запрос поиска или фильтр статуса."
+                  action={
+                    <button
+                      onClick={() => { setQuery(""); setStatusFilter("all"); }}
+                      className="btn btn-soft" style={{ marginTop: 6 }}>
+                      Сбросить фильтры
+                    </button>
+                  }
+                />
+              )
             ) : (
               <Stagger className="ni-deploy-grid">
                 {filtered.map(job => (

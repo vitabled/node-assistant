@@ -96,8 +96,11 @@ export function InputShell({ secret, error, className, ...rest }:
       <input
         {...rest}
         type={type}
-        autoComplete="off"
+        autoComplete={secret ? "new-password" : "off"}
         spellCheck={false}
+        data-form-type={secret ? "other" : undefined}
+        data-lpignore={secret ? "true" : undefined}
+        data-1p-ignore={secret ? "true" : undefined}
         className={`input ${secret ? "pr-9" : ""} ${error ? "err" : ""} ${className ?? ""}`}
       />
       {secret && (

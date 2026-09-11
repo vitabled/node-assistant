@@ -107,6 +107,36 @@ describe("syncDeployJobs", () => {
     expect(deletes(fetchMock)).toHaveLength(0);
   });
 
+  it("never overwrites an existing server card with the local copy (server creds survive)", async () => {
+    const server = [{ ...j("t1"), savedForm: { ssh_password: "SERVER-X" } }];
+    const local  = [{ ...j("t1"), savedForm: { ssh_password: "LOCAL-Y" } }];
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ jobs: server }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await syncDeployJobs({ loadLocal: () => local, saveLocal: () => {} });
+
+    // The server already has this taskId, so the local copy (with password Y)
+    // is NOT re-uploaded. Server password X survives; Y never reaches the server.
+    const posts = fetchMock.mock.calls.filter(c => (c[1] as RequestInit | undefined)?.method === "POST");
+    expect(posts).toHaveLength(0);
+    expect(res.jobs).toEqual(server);
+    expect((res.jobs[0].savedForm as { ssh_password?: string }).ssh_password).toBe("SERVER-X");
+  });
+
+  it("uploads a local-only card (not on the server) to the server", async () => {
+    const server = [j("s1")];
+    const localNew = { ...j("local"), savedForm: { ssh_password: "NEW-PW" } };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ jobs: server }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await syncDeployJobs({ loadLocal: () => [localNew], saveLocal: () => {} });
+
+    const posts = fetchMock.mock.calls.filter(c => (c[1] as RequestInit | undefined)?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String((posts[0][1] as RequestInit).body))).toEqual(localNew);
+    expect(deletes(fetchMock)).toHaveLength(0);
+  });
+
   it("degrades to the local cache when the API is down, without deleting", async () => {
     const local = [j("a"), j("b")];
     const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));

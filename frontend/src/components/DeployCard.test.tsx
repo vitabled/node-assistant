@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { DeployCard, manageableComponents, opPayload, VnstatBlock } from "./DeployCard";
 import { FORM_DEFAULT, type FormData } from "./DeployForm";
@@ -373,5 +373,79 @@ describe("VnstatBlock", () => {
     render(<VnstatBlock form={form} />);
 
     expect(await screen.findByText(/vnstat не установлен/)).toBeInTheDocument();
+  });
+});
+
+// Минимальная подмена WebSocket: ловим инстансы, чтобы (а) посчитать попытки
+// подключения (проверка «нет бесконечного реконнекта») и (б) самим доставить
+// серверное сообщение WS-error «Task not found».
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
+  url: string;
+  closed = false;
+  onmessage: ((e: { data: string }) => void) | null = null;
+  onerror: ((e: unknown) => void) | null = null;
+  onclose: ((e: unknown) => void) | null = null;
+  onopen: ((e: unknown) => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    FakeWebSocket.instances.push(this);
+  }
+  close() {
+    this.closed = true;
+    this.onclose?.({ code: 1000 });
+  }
+  emit(msg: Record<string, unknown>) {
+    this.onmessage?.({ data: JSON.stringify(msg) });
+  }
+}
+
+describe("task gone from the backend (Task not found)", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const pendingJob = (taskId: string) => ({
+    taskId, domain: "node.example", ip: "1.2.3.4",
+    newSshPort: 2222, startedAt: Date.now(), savedForm: remna,
+  });
+
+  it("WS error «Task not found» → no raw text, neutral message, no reconnect", () => {
+    render(<DeployCard
+      job={pendingJob("gone-1")}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.emit({ type: "error", message: "Task not found" }));
+
+    expect(screen.queryByText(/Task not found/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Логи этой задачи недоступны/)).toBeInTheDocument();
+    expect(ws.closed).toBe(true);
+    // Финальное состояние: повторных подключений нет.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("REST 404 «Task not found» on restart → neutral state, «Повторить» offered, no error toast", async () => {
+    const onRestart = vi.fn().mockRejectedValue(new Error("Task not found"));
+    render(<DeployCard
+      job={pendingJob("gone-2")}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={onRestart} onStatusChange={vi.fn()}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Перезапустить ожидающий деплой" }));
+
+    await waitFor(() => expect(screen.getByText(/Логи этой задачи недоступны/)).toBeInTheDocument());
+
+    expect(screen.queryByText(/Task not found/i)).not.toBeInTheDocument();
+    // «Повторить» доступен, а «Перезапустить» (очередь, которой больше нет) — убран.
+    expect(screen.getByRole("button", { name: "Перезапустить деплой с теми же параметрами" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Перезапустить ожидающий деплой" })).not.toBeInTheDocument();
   });
 });
