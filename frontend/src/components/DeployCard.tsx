@@ -138,12 +138,14 @@ interface Props {
   onStatusChange: (taskId: string, status: "success" | "failed") => void;
   /** Цветовая маркировка виджета (null — сброс); родитель обновляет jobs. */
   onColorChange?: (taskId: string, colorKey: string | null) => void;
+  /** Имя ноды из Remnawave (показывается перед ip:порт в шапке). */
+  nodeName?: string;
 }
 
 // memo: карточка перерисовывается только когда меняется её собственный job
 // (статус/цвет) — апдейт соседней карточки (stream шагов) не перерисовывает
 // всю сетку «Деплой нод» (раньше каждый onStatusChange дёргал все карточки).
-function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusChange, onColorChange }: Props) {
+function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusChange, onColorChange, nodeName }: Props) {
   const [logs,       setLogs]       = useState<string[]>([]);
   const [stepStatus, setStepStatus] = useState<StatusFrame>(
     job.finalStatus
@@ -378,6 +380,7 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
       {collapsed ? (
         <CollapsedCard
           job={job}
+          nodeName={nodeName}
           security={security}
           cert={cert}
           statsReady={statsReady}
@@ -402,6 +405,12 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
               <p className="text-sm font-medium text-[var(--t-hi)] truncate">{job.domain}</p>
               <p className="text-xs text-[var(--t-low)] flex items-center gap-1.5">
                 <FlagChip code={job.savedForm.country_code} size={20} />
+                {nodeName && (
+                  <>
+                    <span className="font-medium text-[var(--t-hi)]">{nodeName}</span>
+                    <span className="text-[var(--t-faint)]">·</span>
+                  </>
+                )}
                 <span>{job.ip}:{job.newSshPort}</span>
               </p>
             </div>
@@ -1557,8 +1566,9 @@ function CompactCert({ cert }: { cert: CertInfo | null }) {
   );
 }
 
-function CollapsedCard({ job, security, cert, statsReady, markHex, onExpand }: {
+function CollapsedCard({ job, nodeName, security, cert, statsReady, markHex, onExpand }: {
   job:        DeployJobSummary;
+  nodeName?:  string;
   security:   SecurityStats | null;
   cert:       CertInfo | null;
   statsReady: boolean;
@@ -1586,6 +1596,12 @@ function CollapsedCard({ job, security, cert, statsReady, markHex, onExpand }: {
           <p className="text-sm font-medium text-[var(--t-hi)] truncate">{job.domain}</p>
           <p className="text-xs text-[var(--t-low)] flex items-center gap-1.5">
             <FlagChip code={job.savedForm.country_code} size={20} />
+            {nodeName && (
+              <>
+                <span className="font-medium text-[var(--t-hi)]">{nodeName}</span>
+                <span className="text-[var(--t-faint)]">·</span>
+              </>
+            )}
             <span>{job.ip}:{job.newSshPort}</span>
           </p>
         </div>

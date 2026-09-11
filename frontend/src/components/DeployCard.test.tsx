@@ -152,6 +152,43 @@ describe("country flag in the card header", () => {
   });
 });
 
+describe("node name in the card header", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ online: true, securityStats: null, trafficStats: null, certInfo: null }),
+    }));
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const renderCard = (nodeName?: string) =>
+    render(<DeployCard
+      job={{
+        taskId: "name-1", domain: "node.example", ip: "1.2.3.4",
+        newSshPort: 2222, startedAt: Date.now(), savedForm: remna,
+      }}
+      nodeName={nodeName}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+
+  it("renders the node name before ip:port when provided", () => {
+    renderCard("astra1nl");
+    const name = screen.getByText("astra1nl");
+    const ip = screen.getByText("1.2.3.4:2222");
+    expect(name).toBeInTheDocument();
+    expect(ip).toBeInTheDocument();
+    // Имя стоит ПЕРЕД ip:порт в разметке (ip следует за именем в порядке документа).
+    expect(name.compareDocumentPosition(ip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps ip:port and renders no name when nodeName is absent", () => {
+    renderCard();
+    expect(screen.queryByText("astra1nl")).not.toBeInTheDocument();
+    expect(screen.getByText("1.2.3.4:2222")).toBeInTheDocument();
+  });
+});
+
 describe("success node without SSH creds shows a yellow dot", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({

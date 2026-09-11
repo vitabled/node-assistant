@@ -5,8 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // the per-account localStorage key, and the server sync. The stub renders a
 // "remove" button so we can drive a real mutation (remove → PUT) end-to-end.
 vi.mock("./DeployCard", () => ({
-  DeployCard: ({ job, onRemove }: { job: { domain: string; taskId: string }; onRemove: (id: string) => void }) => (
-    <div>CARD:{job.domain}<button onClick={() => onRemove(job.taskId)}>remove</button></div>
+  DeployCard: ({ job, nodeName, onRemove }: { job: { domain: string; taskId: string }; nodeName?: string; onRemove: (id: string) => void }) => (
+    <div>
+      CARD:{job.domain}
+      {nodeName ? <span data-testid="node-name">{nodeName}</span> : null}
+      <button onClick={() => onRemove(job.taskId)}>remove</button>
+    </div>
   ),
 }));
 let capturedPreset: Record<string, unknown> | undefined;
@@ -218,6 +222,41 @@ describe("DeployDashboard", () => {
     expect(screen.getByText("CARD:offline.example")).toBeInTheDocument();
     await new Promise(r => setTimeout(r, 0));
     expect(screen.getByText("CARD:offline.example")).toBeInTheDocument();
+  });
+
+  // ── node names from Remnawave ──────────────────────────────
+
+  it("passes the node name from /api/remnawave/nodes into the card", async () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example", "t1")]));
+    stubFetch((url, init) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/remnawave/nodes")) {
+        return { ok: true, json: async () => [{ uuid: "u1", name: "astra1nl", address: "1.2.3.4" }] };
+      }
+      if (url.includes("/api/deploy-jobs") && method === "GET") {
+        return { ok: true, json: async () => ({ jobs: [job("node1.example", "t1")] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    render(<DeployDashboard />);
+
+    await waitFor(() => expect(screen.getByTestId("node-name")).toHaveTextContent("astra1nl"));
+  });
+
+  it("renders without a node name when /api/remnawave/nodes fails", async () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example", "t1")]));
+    stubFetch((url, init) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/remnawave/nodes")) throw new Error("no nodes");
+      if (url.includes("/api/deploy-jobs") && method === "GET") {
+        return { ok: true, json: async () => ({ jobs: [job("node1.example", "t1")] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    render(<DeployDashboard />);
+
+    await waitFor(() => expect(screen.getByText("CARD:node1.example")).toBeInTheDocument());
+    expect(screen.queryByTestId("node-name")).not.toBeInTheDocument();
   });
 
   it.each([

@@ -68,6 +68,10 @@ export function DeployDashboard() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
+  // Имена нод Remnawave (Map<address, name>) — лучший-effort источник для шапок
+  // карточек. Пустая карта = «имя неизвестно», карточки рисуются как раньше.
+  const [nodeNames, setNodeNames] = useState<Map<string, string>>(() => new Map());
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return jobs.filter(j => {
@@ -146,6 +150,26 @@ export function DeployDashboard() {
     })();
     return () => { live = false; };
   }, [notifyDirty]);
+
+  // Один best-effort запрос имён нод Remnawave на монтирование: карта
+  // address → name. Ошибка/401 → пустая карта, без блокирующих состояний.
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/remnawave/nodes");
+        if (!res.ok) return;
+        const nodes: { address?: string; name?: string }[] = await res.json();
+        if (!live) return;
+        const map = new Map<string, string>();
+        for (const n of nodes) {
+          if (n.address && n.name) map.set(n.address, n.name);
+        }
+        setNodeNames(map);
+      } catch { /* ignore: карта остаётся пустой */ }
+    })();
+    return () => { live = false; };
+  }, []);
 
   const submitDeploy = useCallback(async (data: FormData): Promise<string> => {
     const res = await fetch("/api/deploy", {
@@ -351,6 +375,7 @@ export function DeployDashboard() {
                   <StaggerItem key={job.taskId}>
                     <DeployCard
                       job={job}
+                      nodeName={nodeNames.get(job.ip)}
                       onRemove={removeJob}
                       onEdit={j  => setEditJob(j)}
                       onRetry={retryJob}
