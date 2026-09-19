@@ -453,7 +453,8 @@ export function Subnets() {
               <span className="flex items-center gap-1.5" style={{ pointerEvents: "none" }}>
                 {rec?.icon && (
                   <img src={`/api/subnets/asns/${encodeURIComponent(asn)}/icon`} alt=""
-                    width={14} height={14} data-testid={`asn-row-icon-${r.id}`}
+                    width={14} height={14} loading="lazy" decoding="async"
+                    data-testid={`asn-row-icon-${r.id}`}
                     style={{ borderRadius: 3, objectFit: "contain", flex: "none" }} />
                 )}
                 <ScanRowIcon id={r.id} state={rowScanStatus.get(r.id) ?? "none"} />
@@ -1163,7 +1164,7 @@ export function Subnets() {
                       <td>
                         {a.icon ? (
                           <img src={`/api/subnets/asns/${encodeURIComponent(a.asn)}/icon`} alt=""
-                            width={14} height={14}
+                            width={14} height={14} loading="lazy" decoding="async"
                             style={{ borderRadius: 3, objectFit: "contain", flex: "none" }} />
                         ) : (
                           <span style={{ width: 14, flex: "none" }} />
@@ -1580,6 +1581,7 @@ export function Subnets() {
 function OpIcon({ op, dim }: { op: string; dim?: boolean }) {
   return (
     <img src={`/operators/${op}.png`} alt={op} width={16} height={16}
+      loading="lazy" decoding="async"
       style={{ borderRadius: 4, opacity: dim ? 0.25 : 1, flex: "none", objectFit: "contain" }} />
   );
 }
