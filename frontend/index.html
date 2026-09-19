@@ -5,12 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0a0a0a" />
     <title>Node Assistant</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Шрифты (Inter / JetBrains Mono) теперь self-hosted — их CSS собирается
+         из src/fonts.css, внешних запросов к fonts.googleapis.com больше нет:
+         минус два сторонних DNS/TLS-раундтрипа на критическом пути отрисовки. -->
+    <!-- Флаги стран — 420 КБ CSS (86% всего CSS панели). Грузим их АСИНХРОННО,
+         чтобы не блокировать первую отрисовку; чипы флагов имеют фиксированный
+         размер (.fi), поэтому подгрузка стилей не сдвигает раскладку (CLS = 0). -->
+    <link rel="stylesheet" href="/flag-icons.min.css" media="print" onload="this.media='all'" />
+    <noscript><link rel="stylesheet" href="/flag-icons.min.css" /></noscript>
   </head>
   <body data-density="comfortable">
     <div id="root"></div>

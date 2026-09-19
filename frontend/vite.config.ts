@@ -8,6 +8,20 @@ const backend = process.env.NI_BACKEND || "http://localhost:8000";
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        // React выносится в отдельный хешированный чанк: он не меняется между
+        // деплоями панели, поэтому на повторных загрузках перекачивается только
+        // код приложения (637 КБ), а не весь бандл целиком (827 КБ).
+        manualChunks(id: string) {
+          if (id.includes("node_modules/react/") || id.includes("node_modules/react-dom/") ||
+              id.includes("node_modules/scheduler/")) return "vendor-react";
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     port: 3000,
     proxy: {

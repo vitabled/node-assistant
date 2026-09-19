@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "node scripts/vendor-mihomo.mjs && vite",
-    "build": "node scripts/vendor-mihomo.mjs && tsc && vite build",
+    "dev": "node scripts/vendor-mihomo.mjs && node scripts/vendor-flagicons.mjs && vite",
+    "build": "node scripts/vendor-mihomo.mjs && node scripts/vendor-flagicons.mjs && tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"

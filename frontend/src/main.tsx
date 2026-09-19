@@ -2,7 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { AuthGate } from "./auth/AuthGate";
 import { installApiClient } from "./auth/apiClient";
-import "flag-icons/css/flag-icons.min.css";
+// Шрифты self-hosted (см. src/fonts.css): внешний fonts.googleapis.com больше не нужен.
+import "./fonts.css";
 import "./index.css";
 
 // Attach the bearer-token interceptor before any component can fire a request.
