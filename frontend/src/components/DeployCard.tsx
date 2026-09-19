@@ -527,7 +527,7 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
               <ServerDataSkeleton />
             ) : (
               <>
-                {security && <SecurityBlock stats={security} onUpdateXray={runXrayUpdate} xrayUpdateBusy={opBusy} />}
+                <SecurityBlock stats={security} loading={!statsReady} onUpdateXray={runXrayUpdate} xrayUpdateBusy={opBusy} />
                 {job.savedForm.install_vnstat !== false && traffic && <TrafficBlock stats={traffic} />}
                 {job.savedForm.install_vnstat !== false && job.savedForm.mode !== "haproxy" && (
                   <VnstatBlock form={job.savedForm} />
@@ -535,7 +535,7 @@ function DeployCardImpl({ job, onRemove, onEdit, onRetry, onRestart, onStatusCha
                 {job.savedForm.mode !== "haproxy" && cert && <CertBlock cert={cert} />}
                 {!security && !traffic && (
                   <p className="mx-4 mb-3 text-[11px] text-[var(--t-faint)] flex items-center gap-1.5">
-                    <ShieldAlert size={11} /> Сервер недоступен — данные безопасности и метрики не собраны.
+                    <ShieldAlert size={11} /> Сервер недоступен по SSH — метрики не собраны (показаны «—»).
                   </p>
                 )}
               </>
@@ -1102,8 +1102,9 @@ function StatusBadge({ status, isRunning, unknown }: { status: TaskStatus; isRun
 }
 
 // ── Security block (Fail2Ban / TrafficGuard) — SUCCESS nodes ──
-function SecurityBlock({ stats, onUpdateXray, xrayUpdateBusy }: {
+function SecurityBlock({ stats, loading, onUpdateXray, xrayUpdateBusy }: {
   stats: SecurityStats | null;
+  loading?: boolean;
   onUpdateXray?: (version: string) => void;
   xrayUpdateBusy?: boolean;
 }) {
@@ -1124,7 +1125,7 @@ function SecurityBlock({ stats, onUpdateXray, xrayUpdateBusy }: {
           Безопасность сервера
         </span>
       </div>
-      {stats === null ? (
+      {loading ? (
         <p className="text-[11px] text-[var(--t-faint)] flex items-center gap-1.5">
           <Loader2 size={10} className="animate-spin" /> Сбор метрик по SSH…
         </p>
@@ -1132,27 +1133,31 @@ function SecurityBlock({ stats, onUpdateXray, xrayUpdateBusy }: {
         <div className="flex flex-col gap-1.5 text-[11px]">
           <div className="flex items-center justify-between">
             <span className="text-[var(--t-low)]">Fail2Ban (SSH)</span>
-            <span className="tabular-nums">
-              <span className={`px-1.5 py-0.5 rounded border ${f2bActiveCls}`}>
-                {stats.fail2banActive} активных
+            {stats ? (
+              <span className="tabular-nums">
+                <span className={`px-1.5 py-0.5 rounded border ${f2bActiveCls}`}>
+                  {stats.fail2banActive} активных
+                </span>
+                <span className="text-[var(--t-faint)]"> / {stats.fail2banTotal} всего</span>
               </span>
-              <span className="text-[var(--t-faint)]"> / {stats.fail2banTotal} всего</span>
-            </span>
+            ) : (
+              <span className={`px-1.5 py-0.5 rounded border tabular-nums ${f2bActiveCls}`}>—</span>
+            )}
           </div>
           <div className="flex items-center justify-between">
             <span className="text-[var(--t-low)]">TrafficGuard (CDN)</span>
             <span className={`px-1.5 py-0.5 rounded border tabular-nums ${tgActiveCls}`}>
-              {stats.trafficGuardActive} заблокировано
+              {stats ? `${stats.trafficGuardActive} заблокировано` : "—"}
             </span>
           </div>
           {/* YouTube Region показываем всегда: без данных — «—» (не скрываем). */}
           <div className="flex items-center justify-between">
             <span className="text-[var(--t-low)] flex items-center gap-1"><Youtube size={10} /> YouTube Region</span>
-            <span className={`px-1.5 py-0.5 rounded border tabular-nums ${YT_TONE_CLASS[ytRegionTone(stats.ytRegion)]}`}>
-              {ytRegionText(stats.ytRegion)}
+            <span className={`px-1.5 py-0.5 rounded border tabular-nums ${YT_TONE_CLASS[ytRegionTone(stats?.ytRegion)]}`}>
+              {ytRegionText(stats?.ytRegion)}
             </span>
           </div>
-          {stats.nginxUpdater && (
+          {stats && stats.nginxUpdater && (
             <div className="flex items-center justify-between">
               <span className="text-[var(--t-low)] flex items-center gap-1">Nginx Patch</span>
               <span className={`px-1.5 py-0.5 rounded border tabular-nums ${
@@ -1168,7 +1173,7 @@ function SecurityBlock({ stats, onUpdateXray, xrayUpdateBusy }: {
             <div className="flex items-center justify-between gap-2 pt-1 mt-0.5 border-t border-[var(--line-soft)]">
               <span className="text-[var(--t-low)] flex items-center gap-1 flex-none">
                 Xray-core
-                {stats.xrayVersion && (
+                {stats?.xrayVersion && (
                   <span className="px-1.5 py-0.5 rounded border tabular-nums text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]">
                     {stats.xrayVersion}
                   </span>
@@ -1566,20 +1571,20 @@ function DeployDetailModal({
 }
 
 // ── Свёрнутая карточка успешной ноды (заголовок + безопасность + сертификат) ──
-function CompactSecurity({ stats }: { stats: SecurityStats }) {
-  const active = stats.fail2banActive > 0 || stats.trafficGuardActive > 0;
+function CompactSecurity({ stats }: { stats: SecurityStats | null }) {
+  const active = !!stats && (stats.fail2banActive > 0 || stats.trafficGuardActive > 0);
   // YouTube Region: чип показываем всегда — если регион не определён, «—».
-  const tone = ytRegionTone(stats.ytRegion);
-  const ytText = ytRegionText(stats.ytRegion);
+  const tone = ytRegionTone(stats?.ytRegion);
+  const ytText = ytRegionText(stats?.ytRegion);
   return (
     <span
       className="inline-flex items-center gap-1.5 text-[11px] text-[var(--t-low)] shrink-0"
-      title={`Fail2Ban: ${stats.fail2banActive} активных · TrafficGuard: ${stats.trafficGuardActive} заблокировано · YouTube Region: ${ytText}`}
+      title={`Fail2Ban: ${stats ? `${stats.fail2banActive} активных` : "нет данных"} · TrafficGuard: ${stats ? `${stats.trafficGuardActive} заблокировано` : "нет данных"} · YouTube Region: ${ytText}`}
     >
       <ShieldCheck size={12} style={{ color: active ? "var(--warn)" : "var(--ok)" }} />
-      <span className="tabular-nums">Fail2Ban {stats.fail2banActive}</span>
+      <span className="tabular-nums">{stats ? `Fail2Ban ${stats.fail2banActive}` : "Fail2Ban —"}</span>
       <span className="text-[var(--t-faint)]">·</span>
-      <span className="tabular-nums">TrafficGuard {stats.trafficGuardActive}</span>
+      <span className="tabular-nums">{stats ? `TrafficGuard ${stats.trafficGuardActive}` : "TrafficGuard —"}</span>
       <span className="text-[var(--t-faint)]">·</span>
       <span className="inline-flex items-center gap-1">
         <Youtube size={12} style={{ color: YT_TONE_COLOR[tone] }} />
@@ -1655,12 +1660,9 @@ function CollapsedCard({ job, nodeName, security, cert, statsReady, markHex, onE
           </span>
         ) : (
           <>
-            {security && <CompactSecurity stats={security} />}
-            {!security && (
-              <span className="inline-flex items-center gap-1 text-[11px] text-[var(--t-faint)] shrink-0">
-                <ShieldAlert size={12} /> сервер офлайн
-              </span>
-            )}
+            {/* Бейджи безопасности (+ YouTube Region) показываем всегда:
+                без данных значения идут как «—», а не прячем блок. */}
+            <CompactSecurity stats={security} />
             {hasRemnanode && cert && <CompactCert cert={cert} />}
           </>
         )}
