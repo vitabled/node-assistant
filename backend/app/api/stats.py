@@ -247,14 +247,62 @@ async def _nginx_updater_status(ssh: SSHSession) -> Optional[str]:
     return out if out in ("missing", "ok", "vuln") else None
 
 
-async def _yt_geo_status(ssh: SSHSession) -> Optional[str]:
-    # Checks YT region or ad placement
-    script = """
-    if [ -f /tmp/yt_geo_status ]; then cat /tmp/yt_geo_status; exit 0; fi
-    out=$(curl -s -4 -H "Accept-Language: en-US" --max-time 3 "https://www.youtube.com/watch?v=dQw4w9WgXcQ" | grep -oE '"GL":"[^"]+"' | head -1 | cut -d'"' -f4)
-    if [ -n "$out" ]; then echo "$out"; else echo "unknown"; fi
+async def _yt_geo_status(ssh: SSHSession) -> str:
+    """YouTube-регион ноды (или признак показа рекламы).
+
+    Источники по очереди:
+      1. `/tmp/yt_geo_status` — кэш, который пишет yt-ads-monitoring (может быть
+         `ads` — значит регион не обходится, реклама показывается);
+      2. `curl` на хосте;
+      3. `wget` (GNU и busybox — у busybox нет `--header`, поэтому без него);
+      4. `python3` (urllib);
+      5. `curl` **внутри контейнера ноды** (`remnanode` / `remnawave-node` / …) —
+         в образе remnawave/node curl есть.
+
+    Так регион собирается и на нодах, где на хосте нет curl. Функция никогда не
+    возвращает None/пусто: если определить не удалось — `unknown`, чтобы карточка
+    всё равно отрисовала бейдж («—»).
     """
-    return (await ssh.get_output(script)).strip()[:10]
+    script = """
+    if [ -f /tmp/yt_geo_status ]; then
+      cached=$(head -c 32 /tmp/yt_geo_status 2>/dev/null | tr -d '\\r\\n ' | head -c 10)
+      if [ -n "$cached" ]; then printf '%s' "$cached"; exit 0; fi
+    fi
+
+    URL='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+
+    parse_gl() {
+      grep -oE '"GL":"[^"]+"' 2>/dev/null | head -1 | cut -d'"' -f4
+    }
+
+    if command -v curl >/dev/null 2>&1; then
+      gl=$(curl -s -4 -H 'Accept-Language: en-US' --max-time 4 "$URL" 2>/dev/null | parse_gl)
+      if [ -n "$gl" ]; then printf '%s' "$gl"; exit 0; fi
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+      gl=$(wget -q -T 4 -O - "$URL" 2>/dev/null | parse_gl)
+      if [ -n "$gl" ]; then printf '%s' "$gl"; exit 0; fi
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+      gl=$(python3 -c "import urllib.request,sys;r=urllib.request.Request('$URL',headers={'User-Agent':'Mozilla/5.0','Accept-Language':'en-US'});sys.stdout.write(urllib.request.urlopen(r,timeout=4).read().decode('utf-8','ignore'))" 2>/dev/null | parse_gl)
+      if [ -n "$gl" ]; then printf '%s' "$gl"; exit 0; fi
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+      for ctr in remnanode remnawave-node remnawave_node node-remnanode; do
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$ctr"; then
+          gl=$(docker exec "$ctr" sh -c "curl -s -4 -H 'Accept-Language: en-US' --max-time 4 '$URL' 2>/dev/null || wget -q -T 4 -O - '$URL' 2>/dev/null" | parse_gl)
+          if [ -n "$gl" ]; then printf '%s' "$gl"; exit 0; fi
+        fi
+      done
+    fi
+
+    printf 'unknown'
+    """
+    out = (await ssh.get_output(script)).strip()
+    return out[:10] if out else "unknown"
 
 
 async def _xray_version_status(ssh: SSHSession) -> Optional[str]:

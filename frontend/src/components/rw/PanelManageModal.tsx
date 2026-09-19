@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { TerminalOutput } from "../TerminalOutput";
 import { ReplaceDomainModal } from "./ReplaceDomainModal";
+import { ytRegionText, ytRegionTone, YT_TONE_CLASS } from "../../utils/ytRegion";
 import { useTaskStream, type StatusFrame, type TaskStatus } from "../../hooks/useTaskStream";
 import { toast } from "../infra/Toast";
 import type { PanelJobSummary } from "./PanelDashboard";
@@ -499,9 +500,10 @@ function PanelMetricsBlock({ job }: { job: PanelJobSummary }) {
 }
 
 function SecurityBlock({ stats, loading }: { stats: SecurityStats | null; loading: boolean }) {
-  // loaded but null = the probe returned online without fail2ban data (vnstat/
-  // fail2ban absent) → "нет данных", NOT a spinner (which would hang forever).
-  const noData = stats === null || (stats.fail2banTotal === 0 && stats.fail2banActive === 0 && stats.trafficGuardActive === 0);
+  // «Нет данных» — только когда проба вообще ничего не вернула (нода
+  // недоступна). Нулевые счётчики fail2ban/ctguard — валидные данные: строки
+  // (включая YouTube Region с «—») показываем всегда.
+  const noData = stats === null;
   const f2bCls = stats && stats.fail2banActive > 0
     ? "text-[var(--warn)] bg-[var(--warn-dim)] border-[var(--warn-line)]"
     : "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]";
@@ -534,20 +536,15 @@ function SecurityBlock({ stats, loading }: { stats: SecurityStats | null; loadin
               {stats.trafficGuardActive} заблокировано
             </span>
           </div>
-          {stats.ytRegion && (
-            <div className="flex items-center justify-between">
-              <span className="text-[var(--t-low)] flex items-center gap-1">
-                <Youtube size={10} /> YouTube Region
-              </span>
-              <span className={`px-1.5 py-0.5 rounded border tabular-nums ${
-                stats.ytRegion === "ads" ? "text-[var(--warn)] bg-[var(--warn-dim)] border-[var(--warn-line)]"
-                : stats.ytRegion === "unknown" ? "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]"
-                : "text-[var(--ok)] bg-[var(--ok-dim)] border-[var(--ok-line)]"
-              }`}>
-                {stats.ytRegion === "ads" ? "Реклама" : stats.ytRegion === "unknown" ? "Неизвестно" : stats.ytRegion}
-              </span>
-            </div>
-          )}
+          {/* YouTube Region показываем всегда, даже без данных → «—». */}
+          <div className="flex items-center justify-between">
+            <span className="text-[var(--t-low)] flex items-center gap-1">
+              <Youtube size={10} /> YouTube Region
+            </span>
+            <span className={`px-1.5 py-0.5 rounded border tabular-nums ${YT_TONE_CLASS[ytRegionTone(stats.ytRegion)]}`}>
+              {ytRegionText(stats.ytRegion)}
+            </span>
+          </div>
         </div>
       )}
     </div>

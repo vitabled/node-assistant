@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 import { NODE_COLOR_PRESETS, colorHex, cardTint, setJobColor } from "../utils/nodeColors";
+import { ytRegionText, ytRegionTone, YT_TONE_CLASS, YT_TONE_COLOR } from "../utils/ytRegion";
 import { StepProgress, DEPLOY_STEPS } from "./StepProgress";
 import { TerminalOutput } from "./TerminalOutput";
 import { ReplaceDomainModal } from "./rw/ReplaceDomainModal";
@@ -1144,18 +1145,13 @@ function SecurityBlock({ stats, onUpdateXray, xrayUpdateBusy }: {
               {stats.trafficGuardActive} заблокировано
             </span>
           </div>
-          {stats.ytRegion && (
-            <div className="flex items-center justify-between">
-              <span className="text-[var(--t-low)] flex items-center gap-1"><Youtube size={10} /> YouTube Region</span>
-              <span className={`px-1.5 py-0.5 rounded border tabular-nums ${
-                stats.ytRegion === "ads" ? "text-[var(--warn)] bg-[var(--warn-dim)] border-[var(--warn-line)]"
-                : stats.ytRegion === "unknown" ? "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]"
-                : "text-[var(--ok)] bg-[var(--ok-dim)] border-[var(--ok-line)]"
-              }`}>
-                {stats.ytRegion === "ads" ? "Реклама" : stats.ytRegion === "unknown" ? "Неизвестно" : stats.ytRegion}
-              </span>
-            </div>
-          )}
+          {/* YouTube Region показываем всегда: без данных — «—» (не скрываем). */}
+          <div className="flex items-center justify-between">
+            <span className="text-[var(--t-low)] flex items-center gap-1"><Youtube size={10} /> YouTube Region</span>
+            <span className={`px-1.5 py-0.5 rounded border tabular-nums ${YT_TONE_CLASS[ytRegionTone(stats.ytRegion)]}`}>
+              {ytRegionText(stats.ytRegion)}
+            </span>
+          </div>
           {stats.nginxUpdater && (
             <div className="flex items-center justify-between">
               <span className="text-[var(--t-low)] flex items-center gap-1">Nginx Patch</span>
@@ -1572,29 +1568,23 @@ function DeployDetailModal({
 // ── Свёрнутая карточка успешной ноды (заголовок + безопасность + сертификат) ──
 function CompactSecurity({ stats }: { stats: SecurityStats }) {
   const active = stats.fail2banActive > 0 || stats.trafficGuardActive > 0;
-  // YouTube Region: регион, в котором нода видит YouTube (или «ads» —
-  // реклама показывается, т.е. регион не подходит под обход).
-  const yt = stats.ytRegion;
-  const ytTone = yt === "ads" ? "var(--warn)" : yt === "unknown" ? "var(--t-mid)" : "var(--ok)";
-  const ytText = yt === "ads" ? "Реклама" : yt === "unknown" ? "Неизвестно" : yt;
+  // YouTube Region: чип показываем всегда — если регион не определён, «—».
+  const tone = ytRegionTone(stats.ytRegion);
+  const ytText = ytRegionText(stats.ytRegion);
   return (
     <span
       className="inline-flex items-center gap-1.5 text-[11px] text-[var(--t-low)] shrink-0"
-      title={`Fail2Ban: ${stats.fail2banActive} активных · TrafficGuard: ${stats.trafficGuardActive} заблокировано${yt ? ` · YouTube Region: ${ytText}` : ""}`}
+      title={`Fail2Ban: ${stats.fail2banActive} активных · TrafficGuard: ${stats.trafficGuardActive} заблокировано · YouTube Region: ${ytText}`}
     >
       <ShieldCheck size={12} style={{ color: active ? "var(--warn)" : "var(--ok)" }} />
       <span className="tabular-nums">Fail2Ban {stats.fail2banActive}</span>
       <span className="text-[var(--t-faint)]">·</span>
       <span className="tabular-nums">TrafficGuard {stats.trafficGuardActive}</span>
-      {yt && (
-        <>
-          <span className="text-[var(--t-faint)]">·</span>
-          <span className="inline-flex items-center gap-1">
-            <Youtube size={12} style={{ color: ytTone }} />
-            <span className="tabular-nums">{ytText}</span>
-          </span>
-        </>
-      )}
+      <span className="text-[var(--t-faint)]">·</span>
+      <span className="inline-flex items-center gap-1">
+        <Youtube size={12} style={{ color: YT_TONE_COLOR[tone] }} />
+        <span className="tabular-nums">{ytText}</span>
+      </span>
     </span>
   );
 }

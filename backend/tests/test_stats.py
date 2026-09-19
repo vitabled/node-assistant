@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from app.api.stats import _cert_expiry, CertInfo, NodeStatsRequest
+from app.api.stats import _cert_expiry, _yt_geo_status, CertInfo, NodeStatsRequest
 
 
 class _SSH:
@@ -69,3 +69,54 @@ def test_domain_rejects_shell_metacharacters(bad):
 def test_domain_empty_and_valid_accepted():
     NodeStatsRequest(ip="1.2.3.4", ssh_password="pw", domain="")           # haproxy: skip
     NodeStatsRequest(ip="1.2.3.4", ssh_password="pw", domain="node1.example.com")
+
+
+# ── YouTube Region probe (`_yt_geo_status`) ──────────────────────────────────
+# Проба должна возвращать СТРОКУ всегда (фронт по ней рисует бейдж: код
+# региона / «Реклама» / «—»), и обязана уметь обходиться без curl на хосте.
+
+class _CapturingSSH:
+    """Fake SSHSession, который ещё и запоминает отправленный скрипт."""
+    def __init__(self, out: str = ""):
+        self._out = out
+        self.script: str | None = None
+
+    async def get_output(self, script: str) -> str:
+        self.script = script
+        return self._out
+
+
+def _yt_probe(out: str) -> str:
+    return asyncio.run(_yt_geo_status(_SSH(out)))
+
+
+def test_yt_region_code_passthrough_and_trim():
+    assert _yt_probe("NL\n") == "NL"
+    assert _yt_probe("  DE  ") == "DE"
+
+
+def test_yt_region_ads_from_cache():
+    # `ads` пишет yt-ads-monitoring в /tmp/yt_geo_status — реклама показывается
+    assert _yt_probe("ads\n") == "ads"
+
+
+def test_yt_region_empty_output_is_unknown_not_none():
+    # Раньше пустой вывод давал "" → бейдж скрывался; теперь — строка.
+    assert _yt_probe("") == "unknown"
+
+
+def test_yt_region_never_none_and_capped():
+    assert isinstance(_yt_probe(""), str)
+    assert len(_yt_probe("x" * 50)) == 10
+
+
+def test_yt_probe_script_has_all_fallbacks():
+    ssh = _CapturingSSH("NL")
+    asyncio.run(_yt_geo_status(ssh))
+    s = ssh.script or ""
+    assert "/tmp/yt_geo_status" in s              # кэш yt-ads-monitoring
+    assert "command -v curl" in s                 # 1) curl на хосте
+    assert "command -v wget" in s                 # 2) wget (GNU/busybox)
+    assert "command -v python3" in s              # 3) python3 urllib
+    assert "docker exec" in s and "remnanode" in s  # 4) curl внутри контейнера ноды
+    assert "GL" in s                              # разбор geo-локации YouTube
