@@ -1572,15 +1572,29 @@ function DeployDetailModal({
 // ── Свёрнутая карточка успешной ноды (заголовок + безопасность + сертификат) ──
 function CompactSecurity({ stats }: { stats: SecurityStats }) {
   const active = stats.fail2banActive > 0 || stats.trafficGuardActive > 0;
+  // YouTube Region: регион, в котором нода видит YouTube (или «ads» —
+  // реклама показывается, т.е. регион не подходит под обход).
+  const yt = stats.ytRegion;
+  const ytTone = yt === "ads" ? "var(--warn)" : yt === "unknown" ? "var(--t-mid)" : "var(--ok)";
+  const ytText = yt === "ads" ? "Реклама" : yt === "unknown" ? "Неизвестно" : yt;
   return (
     <span
       className="inline-flex items-center gap-1.5 text-[11px] text-[var(--t-low)] shrink-0"
-      title={`Fail2Ban: ${stats.fail2banActive} активных · TrafficGuard: ${stats.trafficGuardActive} заблокировано`}
+      title={`Fail2Ban: ${stats.fail2banActive} активных · TrafficGuard: ${stats.trafficGuardActive} заблокировано${yt ? ` · YouTube Region: ${ytText}` : ""}`}
     >
       <ShieldCheck size={12} style={{ color: active ? "var(--warn)" : "var(--ok)" }} />
       <span className="tabular-nums">Fail2Ban {stats.fail2banActive}</span>
       <span className="text-[var(--t-faint)]">·</span>
       <span className="tabular-nums">TrafficGuard {stats.trafficGuardActive}</span>
+      {yt && (
+        <>
+          <span className="text-[var(--t-faint)]">·</span>
+          <span className="inline-flex items-center gap-1">
+            <Youtube size={12} style={{ color: ytTone }} />
+            <span className="tabular-nums">{ytText}</span>
+          </span>
+        </>
+      )}
     </span>
   );
 }

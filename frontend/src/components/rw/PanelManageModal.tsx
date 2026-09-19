@@ -3,7 +3,7 @@ import {
   X, RefreshCw, Trash2, ShieldAlert, Wrench, Server, Loader2,
   CheckCircle2, XCircle, Save, AlertTriangle, BarChart3, Boxes,
   ShieldCheck, Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
-  Users, Gauge, ArrowLeftRight,
+  Users, Gauge, ArrowLeftRight, Youtube,
 } from "lucide-react";
 import { TerminalOutput } from "../TerminalOutput";
 import { ReplaceDomainModal } from "./ReplaceDomainModal";
@@ -47,7 +47,7 @@ const DOMAIN =
 const validIp = (v: string) => IPv4.test(v) && v.split(".").every(o => parseInt(o, 10) <= 255);
 
 // ── Security / traffic stats types (mirror /api/stats/node) ──
-interface SecurityStats { fail2banActive: number; fail2banTotal: number; trafficGuardActive: number }
+interface SecurityStats { fail2banActive: number; fail2banTotal: number; trafficGuardActive: number; ytRegion?: string }
 interface TrafficBucket { rx: number; tx: number; total: number }
 interface TrafficStats { today: TrafficBucket; week: TrafficBucket; month: TrafficBucket }
 type TrafficPeriod = "today" | "week" | "month";
@@ -534,6 +534,20 @@ function SecurityBlock({ stats, loading }: { stats: SecurityStats | null; loadin
               {stats.trafficGuardActive} заблокировано
             </span>
           </div>
+          {stats.ytRegion && (
+            <div className="flex items-center justify-between">
+              <span className="text-[var(--t-low)] flex items-center gap-1">
+                <Youtube size={10} /> YouTube Region
+              </span>
+              <span className={`px-1.5 py-0.5 rounded border tabular-nums ${
+                stats.ytRegion === "ads" ? "text-[var(--warn)] bg-[var(--warn-dim)] border-[var(--warn-line)]"
+                : stats.ytRegion === "unknown" ? "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]"
+                : "text-[var(--ok)] bg-[var(--ok-dim)] border-[var(--ok-line)]"
+              }`}>
+                {stats.ytRegion === "ads" ? "Реклама" : stats.ytRegion === "unknown" ? "Неизвестно" : stats.ytRegion}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
