@@ -1,3 +1,8 @@
+# ⚠️ NGINX_VERSION объявлен ПЕРЕД первым FROM: только так его видно в
+# последующих строках FROM. При обновлении nginx менять одну эту строку —
+# модуль brotli собирается из исходников ровно этой версии.
+ARG NGINX_VERSION=1.31.6
+
 FROM node:20-alpine AS builder
 
 ARG VITE_API_BASE=/api
@@ -15,13 +20,8 @@ RUN npm run build
 # образе ────────────────────────────────────────────────────────────────────
 # nginx:alpine не содержит ngx_brotli, поэтому модуль собирается из исходников
 # nginx ровно той же версии с --with-compat (официальные сборки nginx собраны
-# с --with-compat, поэтому такой модуль к ним подходит).
-#
-# ⚠️ NGINX_VERSION закреплён: при обновлении `nginx:alpine` до новой версии
-# старый модуль станет «not binary compatible» и nginx НЕ СТАРТУЕТ. Менять обе
-# строки (базовый образ и ARG) вместе.
-ARG NGINX_VERSION=1.31.6
-
+# с --with-compat, поэтому такой модуль к ним подходит). Версия объявлена выше,
+# до первого FROM — иначе ${NGINX_VERSION} в FROM пуст и сборка падает.
 FROM nginx:${NGINX_VERSION}-alpine AS nginx-mod
 ARG NGINX_VERSION
 RUN apk add --no-cache --virtual .build-deps build-base cmake git linux-headers pcre2-dev zlib-dev openssl-dev \
@@ -54,8 +54,8 @@ COPY nginx-compress.conf /etc/nginx/conf.d/10-compress.conf
 # проводе и ноль CPU в рантайме. Хешированные имена делают .br/.gz вечно
 # валидными вместе с исходником.
 RUN apk add --no-cache --virtual .brotli-build brotli \
- && find /usr/share/nginx/html -type f \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' -o -name '*.txt' \) -exec brotli -q 11 -f {} \; \
- && find /usr/share/nginx/html -type f \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' -o -name '*.txt' \) -exec gzip -9 -k -n -f {} \; \
+ && find /usr/share/nginx/html -type f \( -name '*.js' -o -name '*.css' -o -name '*.html' \) -exec brotli -q 11 -f {} \; \
+ && find /usr/share/nginx/html -type f \( -name '*.js' -o -name '*.css' -o -name '*.html' \) -exec gzip -9 -k -n -f {} \; \
  && apk del .brotli-build \
  && du -sh /usr/share/nginx/html
 
