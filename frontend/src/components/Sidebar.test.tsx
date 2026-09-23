@@ -99,7 +99,7 @@ describe("Sidebar", () => {
   it("renders the Управление group with its exact tabs, in order", () => {
     renderSidebar();
     expect(groupItems("Управление")).toEqual([
-      "Дашборд", "Деплой ноды", "Управление SSL", "Fail2Ban", "Шаблоны", "Хосты", "Трафик", "Мосты", "Авто",
+      "Дашборд", "Деплой ноды", "Управление SSL", "Fail2Ban", "RKNscanner", "Шаблоны", "Хосты", "Трафик", "Мосты", "Авто",
     ]);
   });
 

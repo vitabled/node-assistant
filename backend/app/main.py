@@ -63,6 +63,7 @@ from app.api import (
     obhod,
     sitecopy,
     f2b_list,
+    rkn_scanners,
     subnets,
     instances,
     regru_vip,
@@ -216,6 +217,7 @@ app.include_router(xray_templates.router, dependencies=_auth)
 app.include_router(obhod.router, dependencies=_auth)
 app.include_router(sitecopy.router, dependencies=_auth)
 app.include_router(f2b_list.router, dependencies=_auth)
+app.include_router(rkn_scanners.router, dependencies=_auth)
 app.include_router(subnets.router, dependencies=_auth)
 app.include_router(latency.router, dependencies=_auth)
 app.include_router(instances.router, dependencies=_auth)

@@ -63,6 +63,8 @@ import { F2bList }                        from "./components/F2bList";
 //    chunk, который докачивается только при открытии вкладки; Suspense вокруг
 //    экрана показывает компактный скелетон на время загрузки чанка. ──
 const Settings           = lazy(() => import("./components/Settings").then(m => ({ default: m.Settings })));
+// Сканеры RKN (ТСПУ) — соседний с Fail2Ban раздел.
+const RknScanners        = lazy(() => import("./components/RknScanners").then(m => ({ default: m.RknScanners })));
 const Templates          = lazy(() => import("./components/Templates").then(m => ({ default: m.Templates })));
 const Hosts              = lazy(() => import("./components/Hosts").then(m => ({ default: m.Hosts })));
 const DomainsPanel       = lazy(() => import("./components/DomainsPanel").then(m => ({ default: m.DomainsPanel })));
@@ -181,6 +183,7 @@ export const CRUMB: Record<Tab, [string, string]> = {
   "deploy":          ["Node Assistant", "Деплой ноды"],
   "certs":           ["Node Assistant", "Управление SSL"],
   "f2b-list":        ["Node Assistant", "Fail2Ban"],
+  "rkn-scanners":    ["Node Assistant", "RKNscanner"],
   "templates":       ["Node Assistant", "Шаблоны"],
   "hosts":           ["Node Assistant", "Хосты"],
   "traffic":         ["Node Assistant", "Трафик"],
@@ -482,6 +485,12 @@ export default function App() {
           {tab === "f2b-list" && (
             <div style={{ flex: 1, padding: 20, overflowY: "auto", minHeight: 0 }}>
               <F2bList />
+            </div>
+          )}
+
+          {tab === "rkn-scanners" && (
+            <div style={{ flex: 1, padding: 20, overflowY: "auto", minHeight: 0 }}>
+              <RknScanners />
             </div>
           )}
 

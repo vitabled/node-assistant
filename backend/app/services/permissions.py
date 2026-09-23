@@ -343,6 +343,13 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     # ── автоматизация ────────────────────────────────────────
     # Fail2Ban list живёт в «Управлении SSL» и применяется деплоями фоново.
     ("/api/f2b-list", {"GET": "certs.view", "*": "certs.edit"}),
+    # Адреса сканеров: сбор идёт по SSH с нод, поэтому мутирующие ручки требуют
+    # execute + SSH-креды (как /api/node/step), а чтение и ручная правка списка —
+    # деплой-домен (раздел про ноды), без кред.
+    ("/api/rkn-scanners/collect", {"*": ("deploy.execute", _CREDS)}),
+    ("/api/rkn-scanners/sync", {"*": ("deploy.execute", _CREDS)}),
+    ("/api/rkn-scanners", {"GET": "deploy.view", "POST": "deploy.edit",
+                           "DELETE": "deploy.edit"}),
     # ⚠️ Правило выполняется фоновым `rules_loop` — вне запроса и вне привилегий.
     # Поэтому `automation.create/edit` — полномочие уровня оператора, а не
     # наблюдателя: тот же класс «отложенного выполнения», что в CLAUDE.md §20h.

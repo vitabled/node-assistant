@@ -79,7 +79,7 @@ EXTRA_SCRIPT = r'''#!/usr/bin/env bash
 # Команды: update | boot | status | uninstall   (по умолчанию update)
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 CONF_DIR="/etc/rkn-watcher-extra"
 CONF_FILE="$CONF_DIR/extra.conf"
 DATA_DIR="/var/lib/rkn-watcher-extra"
@@ -244,14 +244,29 @@ apply_rules() {
         iptables -A "$CHAIN" -p tcp --syn -m set --match-set "$SET_SCAN" src \
             -m limit --limit 5/min --limit-burst 10 -j LOG --log-prefix "RKN-EXTRA: " --log-level 4
     fi
+    # Логирование попыток для раздела «RKNscanner» панели: префикс RKNSCAN:<набор>
+    # (цепочка приложения видна прямо в строке лога), rate-limit общий. Ставится
+    # ПЕРЕД своим DROP — иначе пакет до лога не дойдёт. Безусловно (не по LOG_DROPS):
+    # на этом логе держится сбор адресов сканеров со всех нод.
+    iptables -A "$CHAIN" -p tcp --syn -m set --match-set "$SET_SCAN" src \
+        -m limit --limit 30/min --limit-burst 60 -j LOG --log-prefix "RKNSCAN:antiscan " --log-level 4
     # shellcheck disable=SC2059
     iptables -A "$CHAIN" $(printf -- "$rule" "$SET_SCAN")
     if [[ "$LOG_DROPS" == "y" ]]; then
         iptables -A "$CHAIN" -p tcp --syn -m set --match-set "$SET_GOV" src \
             -m limit --limit 5/min --limit-burst 10 -j LOG --log-prefix "RKN-GOVEXTRA: " --log-level 4
     fi
+    iptables -A "$CHAIN" -p tcp --syn -m set --match-set "$SET_GOV" src \
+        -m limit --limit 30/min --limit-burst 60 -j LOG --log-prefix "RKNSCAN:govnet " --log-level 4
     # shellcheck disable=SC2059
     iptables -A "$CHAIN" $(printf -- "$rule" "$SET_GOV")
+    # 4) наборы АПСТРИМА (TSPUIPS/GOVIPS): только ЛОГИРУЕМ попытки, DROP не добавляем —
+    # блокировку и её семантику (он роняет только RST) оставляем апстримовым цепочкам.
+    # Правило без терминальной цели: пакет идёт дальше по нашей цепочке, как и раньше.
+    iptables -A "$CHAIN" -p tcp --syn -m set --match-set "TSPUIPS" src \
+        -m limit --limit 30/min --limit-burst 60 -j LOG --log-prefix "RKNSCAN:tspu " --log-level 4
+    iptables -A "$CHAIN" -p tcp --syn -m set --match-set "GOVIPS" src \
+        -m limit --limit 30/min --limit-burst 60 -j LOG --log-prefix "RKNSCAN:govips " --log-level 4
     iptables -A "$CHAIN" -j RETURN
 
     # правило-переход в INPUT: сначала убрать прежние, потом вставить на первое место
@@ -295,6 +310,8 @@ cmd_status() {
     echo "  $SET_SCAN : $(set_count "$SET_SCAN")"
     echo "  $SET_GOV  : $(set_count "$SET_GOV")"
     echo "  цепочка $CHAIN: $(iptables -S "$CHAIN" 2>/dev/null | grep -c '^\-A') правил, переход в INPUT: $(iptables -S INPUT 2>/dev/null | grep -c "\-j $CHAIN")"
+    echo "  логирование сканеров (RKNSCAN:): $(iptables -S "$CHAIN" 2>/dev/null | grep -c 'RKNSCAN:') правил"
+    echo "  логирование сбросов (LOG_DROPS=$LOG_DROPS): $(iptables -S "$CHAIN" 2>/dev/null | grep -c 'RKN-EXTRA:\|RKN-GOVEXTRA:') правил"
     echo "  режим: $MODE | лог сбросов: $LOG_DROPS"
     echo "  белый список: $WHITELIST"
     echo "  таймер: $(systemctl is-active rkn-watcher-extra.timer 2>/dev/null)/$(systemctl is-enabled rkn-watcher-extra.timer 2>/dev/null)"

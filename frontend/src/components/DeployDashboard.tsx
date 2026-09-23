@@ -188,6 +188,11 @@ export function DeployDashboard() {
         new_ssh_port:     parseInt(data.new_ssh_port,     10),
         remnanode_port:   parseInt(data.remnanode_port,   10),
         remnanode_token:  data.remnanode_token || null,
+        // Пустой тег → null (:latest на бэкенде). "" не пройдёт валидатор
+        // DeployRequest (min_length=1) и обернулся бы 422 после отправки —
+        // форма это ловит, но дореформенные карточки/API-клиенты могли прийти
+        // с пустым полем.
+        remnanode_version: data.remnanode_version || null,
         template_id:      data.template_id     || null,
         internal_squad_ids: data.internal_squad_ids,
         external_squad_ids: data.external_squad_ids,

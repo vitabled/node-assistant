@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { DeployForm, validateForm, FORM_DEFAULT, type FormData } from "./DeployForm";
 
@@ -287,6 +287,10 @@ describe("remnanode version selector", () => {
 
   it("flags an empty remnanode_version", () => {
     expect(validateForm({ ...validRemna, remnanode_version: "" }).remnanode_version).toBeTruthy();
+    // Вне Remnanode-ветки тег не читается: haproxy-пайплайн его не использует,
+    // поэтому пустое поле там ошибкой быть не должно.
+    const haproxy = { ...validRemna, mode: "haproxy" as const, haproxy_dest_ip: "10.0.0.5", remnanode_version: "" };
+    expect(validateForm(haproxy).remnanode_version).toBeUndefined();
   });
 
   it("renders the version selector with the latest default", () => {
@@ -294,5 +298,42 @@ describe("remnanode version selector", () => {
     render(<DeployForm onSubmit={async () => {}} />);
     expect(screen.getByRole("combobox", { name: "Версия Remnanode" })).toBeInTheDocument();
     expect(screen.getByText("latest")).toBeInTheDocument();
+  });
+
+  // Ручка недоступна (offline выше) → селектор остаётся рабочим на статичном
+  // фолбэке, а не исчезает: «latest» — дефолт бэкенда и обязан быть выбираемым.
+  it("populates the selector from GET /api/node/remnanode/versions and sends the chosen tag", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (String(url).includes("/api/node/remnanode/versions")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ versions: ["latest", "3.4.1", "3.3.2"], current: "3.4.1", source: "registry" }),
+        });
+      }
+      return Promise.reject(new Error("offline"));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // jsdom не реализует Element.scrollIntoView, а Select им подматывает
+    // активный пункт при открытии списка (тот же класс граблей, что matchMedia
+    // в Settings.test.tsx) — без заглушки открытие дропдауна падает.
+    (Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {};
+    const onSubmit = vi.fn(async (_data: FormData) => {});
+
+    render(<DeployForm onSubmit={onSubmit} preset={{ ...validRemna }} />);
+
+    // Список тегов приезжает из ручки (SSH-креды уходят в её теле). Запрос
+    // отложен дебаунсом ввода (ручка ходит по SSH к ноде), поэтому ждём с запасом.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/node/remnanode/versions", expect.objectContaining({ method: "GET" }),
+    ), { timeout: 3000 });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Версия Remnanode" }));
+    const option = await screen.findByRole("option", { name: "3.4.1" });
+    fireEvent.click(option);
+
+    fireEvent.click(screen.getByRole("button", { name: "Развернуть ноду" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0].remnanode_version).toBe("3.4.1");
   });
 });

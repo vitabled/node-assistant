@@ -20,6 +20,9 @@ export interface FormData {
   cloudflare_api_key:  string;
   email:               string;
   remnanode_token:     string;
+  // Тег образа remnawave/node для полного деплоя ("latest" = :latest, дефолт
+  // бэкенда: services/pipeline.py — `req.remnanode_version or "latest"`).
+  remnanode_version:   string;
   open_ports:          string;
   whitelist_ips:       string;
   allow_ssh_all:       boolean;
@@ -93,6 +96,11 @@ const CERT_PROVIDERS: { value: string; label: string }[] = [
 // vps-psiphon supported proxy regions (value = ISO country code).
 const PSIPHON_REGIONS = ["AT", "AU", "BE", "BR", "CA", "CH", "CZ", "DE", "DK", "ES", "FR", "GB", "ID", "IE", "IN", "IT", "JP", "NL", "NO", "PL", "RS", "SE", "SG", "US"];
 
+// Фолбэк-список тегов образа remnawave/node, когда ручка не ответила
+// (нет SSH-кредов / сети / прав): «latest» — дефолт бэкенда, его надо уметь
+// выбрать всегда. Полный список приходит из GET /api/node/remnanode/versions.
+const REMNANODE_FALLBACK_VERSIONS = ["latest"];
+
 export const FORM_DEFAULT: FormData = {
   mode:                "remnanode",
   ip:                  "",
@@ -104,6 +112,7 @@ export const FORM_DEFAULT: FormData = {
   cloudflare_api_key:  "",
   email:               "",
   remnanode_token:     "",
+  remnanode_version:   "latest",
   open_ports:          "80,443,8443",
   whitelist_ips:       "",
   allow_ssh_all:       false,
@@ -230,6 +239,10 @@ export function validateForm(f: FormData): Partial<Record<keyof FormData, string
       const np = parseInt(f.remnanode_port, 10);
       if (isNaN(np) || np < 1 || np > 65535) e.remnanode_port = "1–65535";
       if (!f.country_code || f.country_code.length !== 2) e.country_code = "Выберите страну";
+      // Тег образа обязателен: пустая строка уехала бы в DeployRequest
+      // (min_length=1) и вернула 422 уже после отправки. `|| ""` — страховка на
+      // дореформенные savedForm без поля (там верно только «latest»).
+      if (!(f.remnanode_version || "").trim()) e.remnanode_version = "Выберите версию";
     }
   }
   return e;
@@ -323,6 +336,8 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
   const [hostTemplates,  setHostTemplates]  = useState<HostTemplate[]>([]);
   const [remnavaveReady, setRemnavaveReady] = useState(false);
   const [squadsLoading,  setSquadsLoading]  = useState(false);
+  // Теги образа remnawave/node: до ответа ручки — статичный фолбэк.
+  const [remnaVersions,  setRemnaVersions]  = useState<string[]>(REMNANODE_FALLBACK_VERSIONS);
   // Tracks the "intended" new_ssh_port so toggling change_ssh_port off and
   // back on restores the original value rather than staying at current_ssh_port.
   const intendedNewPort = useRef(initial?.new_ssh_port ?? FORM_DEFAULT.new_ssh_port);
@@ -412,6 +427,47 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
       })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Теги образа remnawave/node. Ручка несёт SSH-креды в ТЕЛЕ запроса (её модель
+  // — SshCreds, как у /api/stats/node и /api/node/detect: FastAPI читает модель
+  // как body и для GET), а по ним сервер дочитывает ещё и текущий тег ноды.
+  // Кредов ещё нет (или ручка/сеть недоступны) → остаётся статичный фолбэк:
+  // выбрать «latest» нужно уметь всегда, это дефолт бэкенда.
+  // ⚠️ Браузер запрещает тело у GET-запроса (fetch кидает TypeError), поэтому
+  // вызов обёрнут в async-IIFE — отказ ручки не должен ронять форму. Список
+  // включит бэкенд, когда ручка станет POST/query (сейчас это единственная
+  // причина, почему в браузере виден только фолбэк).
+  useEffect(() => {
+    if (form.mode !== "remnanode") return;
+    if (!form.ip.trim() || (!form.ssh_password && !form.ssh_key_ref.trim())) return;
+    let alive = true;
+    // Креды ещё печатают, а ручка ходит по SSH к ноде (дочитывает текущий тег) —
+    // поэтому ждём паузу в вводе, а не стреляем запросом и SSH-попыткой на
+    // каждую букву пароля (иначе fail2ban на ноде может забанить наш же IP).
+    const timer = setTimeout(() => (async () => {
+      try {
+        const sshPort = parseInt(
+          form.change_ssh_port ? form.new_ssh_port : form.current_ssh_port, 10,
+        ) || 22;
+        const res = await fetch("/api/node/remnanode/versions", {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ip: form.ip, ssh_port: sshPort, ssh_user: form.ssh_user,
+            ssh_password: form.ssh_password || "", ssh_key_ref: form.ssh_key_ref || "",
+          }),
+        });
+        if (!res.ok) return;
+        const d: { versions?: unknown } | null = await res.json();
+        const list = Array.isArray(d?.versions) ? (d.versions as string[]) : [];
+        if (!alive || list.length === 0) return;
+        // «latest» в списке всегда: это дефолт формы.
+        setRemnaVersions(list.includes("latest") ? list : ["latest", ...list]);
+      } catch { /* ручка недоступна — статичный фолбэк уже в стейте */ }
+    })(), 500);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [form.mode, form.ip, form.ssh_user, form.ssh_password, form.ssh_key_ref,
+      form.change_ssh_port, form.new_ssh_port, form.current_ssh_port]);
 
   const selTemplate = templates.find(t => t.id === form.template_id);
   const selHostIds  = selTemplate?.host_template_ids ?? [];
@@ -578,6 +634,27 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
           onChange={set} placeholder="2222" error={errors.remnanode_port} disabled={f} />
         <Field label="Путь XHTTP" name="xhttp_path" value={form.xhttp_path}
           onChange={set} placeholder="/xray/" disabled={f} hint="Опционально" />
+      </div>
+      {/* Версия образа remnawave/node — тот же тег, что ставит полный деплой
+          (backend: services/pipeline.py, `req.remnanode_version or "latest"`). */}
+      <div className="flex flex-col gap-1">
+        <label className="text-[11px] font-medium uppercase tracking-widest" style={{ color: "var(--t-low)" }}>
+          Версия Remnanode<span className="ml-0.5" style={{ color: "var(--err)" }}>*</span>
+        </label>
+        <Select
+          value={form.remnanode_version}
+          onChange={v => set("remnanode_version", v)}
+          disabled={f}
+          error={!!errors.remnanode_version}
+          aria-label="Версия Remnanode"
+          options={remnaVersions.map(v => ({ value: v, label: v }))}
+        />
+        {errors.remnanode_version
+          ? <p className="errmsg">{errors.remnanode_version}</p>
+          : <p className="text-[11px]" style={{ color: "var(--t-faint)" }}>
+              Тег образа remnawave/node из Docker Hub; latest — последняя версия.
+            </p>
+        }
       </div>
       <CountrySelect
         label="Страна ноды"

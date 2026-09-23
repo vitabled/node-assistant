@@ -14,7 +14,7 @@ import { usePermissions } from "../auth/usePermissions";
 import { getActiveId } from "../auth/store";
 
 export type Tab =
-  | "dashboard" | "deploy" | "certs" | "f2b-list" | "templates" | "hosts" | "traffic" | "settings" | "mihomo" | "configs" | "bridges" | "auto"
+  | "dashboard" | "deploy" | "certs" | "f2b-list" | "rkn-scanners" | "templates" | "hosts" | "traffic" | "settings" | "mihomo" | "configs" | "bridges" | "auto"
   | "stats-users" | "stats-speedtests"
   | "automation" | "assistant" | "notifications"
   | "rw-install" | "rw-subpages" | "rw-variables" | "rw-backup" | "rw-migration" | "rw-profiles"
@@ -52,6 +52,8 @@ const NAV_MAIN: NavItemDef[] = [
   { tab: "deploy",     label: "Деплой ноды",   Icon: Rocket,      domain: "deploy"     },
   { tab: "certs",      label: "Управление SSL", Icon: ShieldCheck, domain: "certs"     },
   { tab: "f2b-list",   label: "Fail2Ban",      Icon: ShieldHalf,  domain: "deploy"     },
+  // Сканеры RKN/ТСПУ, найденные на нодах — рядом с Fail2Ban, тот же домен прав.
+  { tab: "rkn-scanners", label: "RKNscanner",   Icon: ScanSearch,  domain: "deploy"     },
   { tab: "templates",  label: "Шаблоны",       Icon: FileCode2,   domain: "deploy"     },
   { tab: "hosts",      label: "Хосты",         Icon: Network,     domain: "hosts"      },
   // Лимиты трафика — те же `/api/traffic-rules`, что и правила автоматизации.

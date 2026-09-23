@@ -86,10 +86,19 @@ describe("PanelManageModal (render)", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<PanelManageModal job={job} onClose={() => {}} onEditJob={() => {}} />);
     fireEvent.click(screen.getByText("Статистика"));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const [url, opts] = fetchMock.mock.calls[0];
-    expect(url).toBe("/api/stats/node");
-    expect(JSON.parse(opts.body).ip).toBe("1.2.3.4");
+
+    // Вкладка открывает ДВА независимых блока: «Метрики панели» (child, свой
+    // эффект) и статистику ноды (эффект самой StatsTab). React выполняет
+    // эффекты детей РАНЬШЕ родителя, поэтому /api/panel/metrics в списке
+    // вызовов идёт первым — это следствие порядка эффектов, а не контракт.
+    // Поэтому ищем нужный запрос по URL, а не по индексу 0.
+    await waitFor(() => expect(fetchMock.mock.calls.some(c => c[0] === "/api/stats/node")).toBe(true));
+    const stats = fetchMock.mock.calls.find(c => c[0] === "/api/stats/node")!;
+    expect(JSON.parse(stats[1].body).ip).toBe("1.2.3.4");
+    expect(JSON.parse(stats[1].body).domain).toBe("panel.example.com");
+    // Второй блок вкладки тоже грузится (метрики панели по той же вкладке).
+    expect(fetchMock.mock.calls.some(c => c[0] === "/api/panel/metrics")).toBe(true);
+
     await screen.findByText("Сетевой трафик");
     await screen.findByText("Безопасность сервера");
   });
