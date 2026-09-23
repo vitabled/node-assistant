@@ -2136,3 +2136,71 @@ OAuth-аккаунт ВНУТРИ шлюза, а нас самих шлюз пу
 - ⚠️ **Не заменять текст в файле по вычисленному срезу** (`s.replace(s[a:b], ...)`): пустой или неуникальный
   образец подставляется в КАЖДУЮ позицию — так `aiRunner.ts` раздулся до 27 МБ и его пришлось переписывать
   (в git его ещё не было, восстанавливать было неоткуда).
+
+---
+
+## 23. RKN Watcher вместо TrafficGuard · раздел «RKNscanner»
+
+### 23a. Шаг 4 — RKN Watcher (движок заменён)
+- DTO-поле **`install_rkn_watcher`** (default true) + **легаси `install_trafficguard`** принимается: карточки в
+  `localStorage` со старым именем не ломаются, но новое поле приоритетнее (`install_trafficguard=False` →
+  `install_rkn_watcher=False`). Код: `services/rkn_watcher.py` (VERSION 1.1.0), `pipeline.step_rkn_watcher`,
+  компонент в `api/node_ops.py` (`c == "rkn_watcher"` — переустановить/удалить), `models/deploy.py` (поле +
+  легаси-валидатор). Метрики карточки: **`rknWatcherActive`/`rknWatcherEntries`/`rknWatcherLegacy`**
+  (прежние `trafficGuardActive` убраны).
+- Движок: **`Balbuto/RKN-Watcher`**, пин коммита `558fc11a0792892927785e162359585d51972a6a` (ref `v3.1.0`) +
+  сверка SHA256 трёх скриптов. Прежний апстрим **`DonMatteoVPN/TrafficGuard-auto` = 404**, поэтому шаг молча
+  уходил в fallback-правила — то есть не работал уже сам по себе.
+- ⚠️ **Mirror First:** основной источник — `vitabled/mirror-rkn-watcher` и `vitabled/mirror-traffic-guard-lists`
+  (прописаны в `sync_mirrors.sh`); прямой апстрим — только резерв.
+- Списки «с обоих ресурсов»: `TSPUIPS`/`TSPUBLOCK` (145) + `GOVIPS`/`GOVBLOCK` (1151) из движка **плюс** наш
+  доп-компонент `EXTRA_ANTISCAN` (155) / `EXTRA_GOVNET` (2784) → цепочка `RKN_EXTRA`; итого **3 перехода в
+  INPUT**. Таймеры `rkn-watcher-update` и `rkn-watcher-extra` включаются **БЕЗ `--now`**, первый update —
+  вручную: два параллельных применения плодят дубли правил, на ноде единая точка входа под `flock`.
+- Легаси снимается тем же прогоном: `rknpidor` (`/usr/local/bin/rknpidor` → `/opt/trafficguard-manager.sh`,
+  dotX12/traffic-guard), ipset `SCANNERS-BLOCK-V4/V6`, юниты `antiscan-*`.
+- ⚠️ **Сторож при работе с блок-листами:** `systemd-run --on-active=8min` со снимком iptables/ipset, снимается
+  только после проверки. Это единственная защита от потери SSH, то есть от потери ноды.
+- ⚠️ **`ipset restore` берёт ИМЯ НАБОРА ИЗ ФАЙЛА** (`add <set> <cidr>`): при swap имя переписывается в
+  temp-файл, а swap запрещён при нуле записей — иначе в живой набор уезжает пустышка.
+- ⚠️ **`apt-get update` падает** на нодах с репозиторием **ookla** → источник `/etc/apt/sources.list.d/*ookla*`
+  снимается + double-retry: без этого не ставится `ipset` и шаг валится целиком.
+- Раскатка по парку (`replace_rkn_tools.sh`) идемпотентна: повторный прогон служит проверкой.
+
+### 23b. Журналирование попыток на нодах (`RKNSCAN:`)
+- Нода логирует попадания в блок-листы с префиксом `RKNSCAN:` (ядро: `RKNSCAN:<chain> IN=… SRC=… SPT=…`),
+  rate-limit 30/мин. Для наборов апстрима — **только логирование**, семантика фильтра не меняется.
+- ⚠️ Префикс — контракт между нодой и панелью: меняешь формат строки — правь и `probe_script()`, и тест.
+
+### 23c. Раздел «RKNscanner» (по образцу fail2ban)
+- Бэкенд: `services/rkn_scanners.py` + `api/rkn_scanners.py`, роутер подключён в `main.py` рядом с `f2b_list`;
+  роуты `GET /api/rkn-scanners`, `POST /save`, `DELETE`, `POST /collect` (обход нод по SSH),
+  `POST /sync` (раздача блок-листа обратно на ноды).
+- Хранилище — per-account `accounts/<id>/rkn_scanners.json`:
+  `{updatedAt, entries[{ip,firstSeen,lastSeen,hits,nodes[],port,chain,source}]}`. `merge()` дедуплицирует по
+  нормализованному ip, объединяет ноды, **суммирует hits** (проба отдаёт hits за свой период), обновляет
+  `port`/`chain`; ручное сохранение (`source=manual`) сохраняет `firstSeen/hits/nodes` известных адресов.
+  Битые записи выбрасываются, `/32` приводится к адресу.
+- ⚠️ `MAX_ENTRIES = 100_000` — ровно `maxelem` набора `RKN_SCANNERS_V4`: CIDR считается одной записью и там, и
+  там. При переполнении `POST /save` отвечает **422** — лишние адреса снимаются руками (согласованность
+  потолков важнее удобства).
+- Применение на ноде: ipset **`RKN_SCANNERS_V4`** (`hash:net, maxelem 100000`) + цепочка **`RKN_SCANNERS`** в
+  INPUT; заливка **ОДНИМ `ipset restore`** (по одной записи — медленно). Скрипт печатает
+  `RKN_SCANNERS_RESULT=OK|CHECK` и `RKN_SCANNERS_COUNT=<n>`; `CHECK` = применилось не полностью.
+- Права (`permissions.py`): `/api/rkn-scanners` → GET `deploy.view`, POST `deploy.edit`; `/collect` и `/sync` →
+  `deploy.execute`. Свой домен прав не заводили — переиспользован домен deploy.
+- Фронт: `components/RknScanners.tsx` (+ тесты), пункт сайдбара «RKNscanner» сразу после Fail2Ban,
+  `App.tsx` — lazy + `CRUMB["rkn-scanners"]`.
+- ⚠️ Приёмка — только на живом трафике: синтетический SYN с другой ноды дал 135 строк `RKNSCAN:…`,
+  `POST /collect` вернул реальные адреса (напр. `217.172.19.41`, цепочка `govips`, 163 попадания). Мок это не
+  проверяет.
+
+### 23d. Эксплуатация парка и прода
+- Доп-компонент (`EXTRA_SCRIPT` в модуле шага 4) — **канон**: на ноды он раздаётся `sync_extra_from_module.py`.
+  Хранить копию скрипта отдельно нельзя — разойдётся с модулем.
+- ⚠️ Штатный апдейтер NA отказывается работать при **untracked-файлах** в `/opt/node-assistant` (дерево
+  «грязное»); прод-локальные правки часовой крон профиля `netops` («NA auto-update») и `na-cards.service`
+  стэшит как `hermes-auto`. Сведение прода с `origin/main` делается одной веткой: прод-локальное →
+  `prod-local-<ts>`, рабочее дерево → main (после чего апдейтер снова работает).
+- ⚠️ nginx во фронт-контейнере должен слушать и IPv6 (`listen [::]:80`): иначе healthcheck по
+  `http://localhost/` (резолвится в `::1`) даёт `unhealthy` при полностью живом сервисе.
