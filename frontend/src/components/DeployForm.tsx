@@ -43,7 +43,9 @@ export interface FormData {
   docker_mirror:       boolean;  // E1 — docker registry-mirror (all deploys)
   cookie_gate:         boolean;  // E4 — nginx cookie-gate (eGames node only)
   install_vnstat:      boolean;
-  install_trafficguard: boolean;
+  // TrafficGuard заменён на RKN Watcher (github.com/Balbuto/RKN-Watcher).
+  // Дореформенные сохранённые карточки несут install_trafficguard — см. LegacyFormData.
+  install_rkn_watcher: boolean;
   install_test_tools:  boolean;
   update_system:       boolean;
   create_in_remnawave: boolean;
@@ -123,7 +125,7 @@ export const FORM_DEFAULT: FormData = {
   docker_mirror:       false,
   cookie_gate:         false,
   install_vnstat:      true,
-  install_trafficguard: true,
+  install_rkn_watcher: true,
   install_test_tools:  true,
   update_system:       false,
   create_in_remnawave: false,
@@ -151,6 +153,11 @@ export const FORM_DEFAULT: FormData = {
   haproxy_timeout_server:  "50s",
   haproxy_timeout_tunnel:  "1h",
 };
+
+// Дореформенные сохранённые карточки (localStorage `deploy_jobs_*`) несут поле
+// install_trafficguard вместо install_rkn_watcher — читаем оба.
+export type LegacyFormData = Partial<FormData> & { install_trafficguard?: boolean };
+export const asLegacy = (f: Partial<FormData>): LegacyFormData => f as LegacyFormData;
 
 // ── Validators ────────────────────────────────────────────────
 const IPv4   = /^(\d{1,3}\.){3}\d{1,3}$/;
@@ -288,7 +295,18 @@ interface Props {
 }
 
 export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
-  const [form,       setForm]       = useState<FormData>({ ...FORM_DEFAULT, ...initial, ...preset });
+  const [form,       setForm]       = useState<FormData>(() => {
+    const merged = { ...FORM_DEFAULT, ...initial, ...preset };
+    // ...и predate переименование TrafficGuard → RKN Watcher: переносим старый
+    // install_trafficguard в install_rkn_watcher. Явное новое значение главнее;
+    // старый флаг побеждает только дефолт.
+    const legacyTg = asLegacy(initial ?? {}).install_trafficguard;
+    const rknExplicit = initial?.install_rkn_watcher ?? preset?.install_rkn_watcher;
+    if (rknExplicit === undefined && legacyTg !== undefined) {
+      merged.install_rkn_watcher = legacyTg;
+    }
+    return merged;
+  });
   const [errors,     setErrors]     = useState<Partial<Record<keyof FormData, string>>>({});
   const [touched,    setTouched]    = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -438,16 +456,21 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
 
   const f = submitting;
   const isRemna = form.mode === "remnanode";
-  const isSkipped = (component: string) => form.skip_components.includes(component);
+  // Компонент переименован (TrafficGuard → RKN Watcher), но сохранённые карточки
+  // и API-клиенты всё ещё шлют старый идентификатор 'trafficguard' — принимаем оба.
+  const COMPONENT_LEGACY: Record<string, string[]> = { rkn_watcher: ["trafficguard"] };
+  const hasComponent = (list: string[], component: string) =>
+    list.includes(component) || (COMPONENT_LEGACY[component] ?? []).some(c => list.includes(c));
+  const isSkipped = (component: string) => hasComponent(form.skip_components, component);
   const wantsComponent = (component: string) =>
-    form.install_components === null || form.install_components.includes(component);
+    form.install_components === null || hasComponent(form.install_components, component);
   const showRemnanode = isRemna && wantsComponent("remnanode");
   const showSsl = isRemna && (
     (form.node_variant !== "vanilla" && wantsComponent("ssl")) ||
     (form.install_hysteria2 && wantsComponent("hysteria2"))
   );
   const fullDeploy = form.install_components === null;
-  const showOptimization = fullDeploy || ["node_accelerator", "trafficguard", "test_tools"]
+  const showOptimization = fullDeploy || ["node_accelerator", "rkn_watcher", "test_tools"]
     .some(wantsComponent);
 
   return (
@@ -825,9 +848,9 @@ export function DeployForm({ onSubmit, onCancel, initial, preset }: Props) {
         {fullDeploy && <Toggle label="Установить vnstat (учёт трафика)"
           checked={form.install_vnstat}
           onChange={() => set("install_vnstat", !form.install_vnstat)} disabled={f} />}
-        {wantsComponent("trafficguard") && <Toggle label="Установить TrafficGuard"
-          checked={form.install_trafficguard}
-          onChange={() => set("install_trafficguard", !form.install_trafficguard)} disabled={f || isSkipped("trafficguard")} />}
+        {wantsComponent("rkn_watcher") && <Toggle label="Установить RKN Watcher"
+          checked={form.install_rkn_watcher}
+          onChange={() => set("install_rkn_watcher", !form.install_rkn_watcher)} disabled={f || isSkipped("rkn_watcher")} />}
         {wantsComponent("test_tools") && <Toggle label="Установить инструменты тестирования"
           checked={form.install_test_tools}
           onChange={() => set("install_test_tools", !form.install_test_tools)} disabled={f || isSkipped("test_tools")} />}

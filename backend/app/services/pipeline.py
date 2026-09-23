@@ -18,7 +18,7 @@ import secrets
 from typing import Optional
 
 from app.models.deploy import DeployRequest
-from app.services import ssh_auth
+from app.services import rkn_watcher, ssh_auth
 from app.services.ssh_manager import SSHSession
 from app.services.cloudflare import upsert_a_record
 from app.services.task_store import Task, TaskStatus, STEP_LABELS
@@ -117,51 +117,19 @@ def _effective_open_ports(req: "DeployRequest") -> str:
 
 
 # ──────────────────────────────────────────────────────────────
-# Step 2 – TrafficGuard
+# Step 4 – RKN Watcher (block-lists of TSPU/gov subnets) + доп. списки
+#
+# Заменяет прежний TrafficGuard-auto (`DonMatteoVPN/TrafficGuard-auto`):
+#   * апстрим `Balbuto/RKN-Watcher` — закреплённый КОММИТ + проверка SHA256 трёх
+#     исполняемых файлов перед тем, как root-run код попадёт на ноду;
+#   * наш доп. компонент — списки второго ресурса (shadow-netlab/traffic-guard-lists),
+#     потому что апстрим тянет только свои два (CyberOK_Skipa → TSPUIPS,
+#     C24Be/AS_Network_List → GOVIPS).
+# Payload целиком собирается в `rkn_watcher.build_rkn_watcher_script` (один bash-скрипт),
+# проба состояния для метрик — там же (`rkn_watcher.state_probe`/`parse_state`).
+#
+# Шаг НЕФАТАЛЬНЫЙ (как и был): ошибка → запись в лог задачи, деплой продолжается.
 # ──────────────────────────────────────────────────────────────
-
-def _trafficguard_fallback(backend_ip: str) -> str:
-    """Fallback iptables rules when TrafficGuard install.sh is absent/failing.
-    Whitelist backend_ip FIRST so the DROP rules never block us."""
-    whitelist_rule = (
-        f"iptables -I INPUT 1 -s {backend_ip} -j ACCEPT -m comment "
-        f"--comment 'deploy-panel-whitelist'"
-        if backend_ip else ""
-    )
-    save_rules = "netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4"
-    return f"""\
-# -- TrafficGuard fallback: manual scan-protection rules --
-{_APT_WAIT}
-{_apt_install("iptables", "iptables-persistent", "netfilter-persistent")}
-
-# Whitelist deploy panel BEFORE any DROP rules
-{whitelist_rule}
-
-# Rules are added idempotently (`iptables -C … || iptables -A …`) so a re-run
-# (e.g. re-deploying an existing server) never duplicates them.
-# Drop NULL packets
-iptables -C INPUT -p tcp --tcp-flags ALL NONE -j DROP 2>/dev/null \\
-    || iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
-# Drop SYN floods
-iptables -C INPUT -p tcp ! --syn -m state --state NEW -j DROP 2>/dev/null \\
-    || iptables -A INPUT -p tcp ! --syn -m state --state NEW -j DROP
-# Drop XMAS packets
-iptables -C INPUT -p tcp --tcp-flags ALL ALL -j DROP 2>/dev/null \\
-    || iptables -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
-# Rate-limit new SSH connections (10/min)
-iptables -C INPUT -p tcp --dport 22 -m state --state NEW \\
-    -m recent --set --name SSH_SCAN 2>/dev/null \\
-    || iptables -A INPUT -p tcp --dport 22 -m state --state NEW \\
-        -m recent --set --name SSH_SCAN
-iptables -C INPUT -p tcp --dport 22 -m state --state NEW \\
-    -m recent --update --seconds 60 --hitcount 10 --name SSH_SCAN -j DROP 2>/dev/null \\
-    || iptables -A INPUT -p tcp --dport 22 -m state --state NEW \\
-        -m recent --update --seconds 60 --hitcount 10 --name SSH_SCAN -j DROP
-
-# Persist rules
-{save_rules}
-echo "[TrafficGuard fallback] iptables rules applied."
-"""
 
 
 # ──────────────────────────────────────────────────────────────
@@ -258,48 +226,49 @@ echo "[ctguard] na-ctguard настроен."
     task.add_log("\x1b[32m[accelerator] Node Accelerator завершён.\x1b[0m")
 
 
-async def step_traffic_guard(ssh: SSHSession, task: Task, backend_ip: str) -> None:
+async def step_rkn_watcher(ssh: SSHSession, task: Task, req: DeployRequest) -> None:
+    """Step 4 — RKN Watcher + доп. списки подсетей (замена TrafficGuard).
+
+    Один bash-payload (собирается в `rkn_watcher.build_rkn_watcher_script`): зависимости,
+    снятие легаси, скачивание апстрима по коммиту с проверкой SHA256, предзаполнение
+    /etc/rkn-watcher (whitelist.json с `"enabled": false`), неинтерактивная установка,
+    наш доп. компонент (второй ресурс списков) и проверка по факту с `RKN_SWAP_RESULT`.
+
+    НЕФАТАЛЬНЫЙ: любая ошибка попадает в лог задачи, деплой идёт дальше (как было и с
+    прежним шагом). Вайтлист панели ставится ДО DROP-цепочек внутри payload'а
+    (`deploy-panel-whitelist`) — иначе следующий заход деплоя упёрся бы в блок-лист.
+    """
     _begin_step(task, 4)
-
-    await ssh.run(_apt_install("git", "curl"), task, check=False)
-
-    clone_cmd = (
-        "git clone --depth 1 https://github.com/DonMatteoVPN/TrafficGuard-auto "
-        "/opt/TrafficGuard-auto 2>/dev/null "
-        "|| git -C /opt/TrafficGuard-auto pull --ff-only 2>/dev/null || true"
-    )
-    await ssh.run(clone_cmd, task, check=False)
-
-    probe = await ssh.get_output(
-        "ls /opt/TrafficGuard-auto/*.sh 2>/dev/null | head -3 || echo 'NOT_FOUND'"
-    )
-    if "NOT_FOUND" in probe or not probe:
-        task.add_log("\x1b[33m[TrafficGuard] No install script found — using fallback rules.\x1b[0m")
-        await ssh.run_script(_trafficguard_fallback(backend_ip), task, check=False)
-        return
-
-    install_script = f"""\
-{_APT_WAIT}
-cd /opt/TrafficGuard-auto
-AUTO=1 NONINTERACTIVE=1 DEBIAN_FRONTEND=noninteractive \
-    bash install.sh </dev/null 2>&1 || true
-"""
-    rc = await ssh.run_script(install_script, task, check=False)
-    if rc != 0:
-        task.add_log("\x1b[33m[TrafficGuard] install.sh returned non-zero — applying fallback rules.\x1b[0m")
-        await ssh.run_script(_trafficguard_fallback(backend_ip), task, check=False)
-    elif backend_ip:
-        # install.sh succeeded — still need to whitelist backend IP in iptables
-        whitelist_script = f"""\
-iptables -I INPUT 1 -s {backend_ip} -j ACCEPT -m comment \\
-    --comment 'deploy-panel-whitelist' 2>/dev/null || true
-netfilter-persistent save 2>/dev/null \\
-    || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-echo "[TrafficGuard] backend IP {backend_ip} whitelisted."
-"""
-        await ssh.run_script(whitelist_script, task, check=False)
-
-    task.add_log("\x1b[32m[TrafficGuard] done.\x1b[0m")
+    try:
+        backend_ip = await get_backend_ip()
+        if not backend_ip:
+            task.add_log(
+                "\x1b[33m[rkn] IP бэкенда не определён — правило "
+                "deploy-panel-whitelist не будет поставлено.\x1b[0m"
+            )
+        await ssh.run_script(
+            rkn_watcher.build_rkn_watcher_script(backend_ip, req.whitelist_ips),
+            task,
+            check=False,
+            timeout=900,
+        )
+        active, entries, legacy = rkn_watcher.parse_state(
+            await ssh.get_output(rkn_watcher.state_probe())
+        )
+        if legacy:
+            task.add_log(
+                "\x1b[33m[rkn] ВНИМАНИЕ: на ноде остались артефакты прежних "
+                "инструментов (rknpidor/traffic-guard/SCANNERS-BLOCK).\x1b[0m"
+            )
+        if active:
+            task.add_log(f"\x1b[32m[rkn] RKN Watcher активен; записей в наборах: {entries}.\x1b[0m")
+        else:
+            task.add_log(
+                f"\x1b[33m[rkn] Таймер/цепочка не активны — смотрите RKN_SWAP_RESULT выше "
+                f"(записей в наборах: {entries}).\x1b[0m"
+            )
+    except Exception as exc:
+        task.add_log(f"\x1b[33m[rkn] ПРЕДУПРЕЖДЕНИЕ: {exc}\x1b[0m")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -2540,7 +2509,7 @@ echo "[vnstat] Демон vnstat установлен и запущен."
         # flow. `None` preserves full deploys and legacy saved jobs using the old
         # negative skip_components contract; [] skips every managed component.
         managed = {
-            "node_accelerator", "trafficguard", "test_tools", "ssl",
+            "node_accelerator", "rkn_watcher", "test_tools", "ssl",
             "remnanode", "masking", "warp", "psiphon", "hysteria2", "haproxy",
             "nginx_updater", "yt_monitoring", "reshala",
         }
@@ -2555,13 +2524,15 @@ echo "[vnstat] Демон vnstat установлен и запущен."
             _skip_component(task, 3, "node-accelerator", reason=skip_reason)
         else:
             await step_node_accelerator(ssh, task, req)
-        if "trafficguard" in skip:
-            _skip_component(task, 4, "TrafficGuard", reason=skip_reason)
-        elif req.install_trafficguard:
-            await step_traffic_guard(ssh, task, backend_ip)
+        if "rkn_watcher" in skip:
+            _skip_component(task, 4, "RKN Watcher", reason=skip_reason)
+        elif req.install_rkn_watcher:
+            await step_rkn_watcher(ssh, task, req)
         else:
             _begin_step(task, 4)
-            task.add_log("\x1b[90m[TrafficGuard] Пропущено по настройке (install_trafficguard=false).\x1b[0m")
+            task.add_log(
+                "\x1b[90m[rkn] Пропущено по настройке (install_rkn_watcher=false).\x1b[0m"
+            )
         # Step 5: test toolkit (iperf3/speedtest/xray) — optional, non-fatal,
         # runs in both modes.
         if "test_tools" in skip:

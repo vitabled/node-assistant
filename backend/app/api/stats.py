@@ -7,7 +7,9 @@ used only within the request scope and never persisted (project rule: no SSH
 passwords at rest — which is also why this is a per-request poll, not a
 server-side background worker with stored credentials).
 
-Parses Fail2Ban (SSH jail) + na-ctguard/TrafficGuard iptables rules.
+Parses Fail2Ban (SSH jail) + RKN Watcher metrics (block-list ipsets/chains; the
+probe lives in `services.rkn_watcher` next to the step-4 payload so the marker
+names exist once).
 """
 
 import asyncio
@@ -24,6 +26,7 @@ from pydantic import BaseModel, field_validator
 from app.models.ssh_creds import SshCreds
 from app.services import (
     accounts,
+    rkn_watcher,
     speedtest_store,
     ssh_auth,
     test_tools,
@@ -67,7 +70,11 @@ class NodeStatsRequest(SshCreds):
 class SecurityStats(BaseModel):
     fail2banActive: int = 0  # Currently banned (right now)
     fail2banTotal: int = 0  # Total banned (all-time)
-    trafficGuardActive: int = 0  # active na-ctguard iptables rules
+    # RKN Watcher (step 4) — replaces the old trafficGuardActive field; the card
+    # agreed on the new names (frontend is updated separately).
+    rknWatcherActive: int = 0   # 1 = rkn-watcher-update.timer active or TSPUBLOCK chain present
+    rknWatcherEntries: int = 0  # Σ entries of TSPUIPS + GOVIPS + EXTRA_ANTISCAN + EXTRA_GOVNET
+    rknWatcherLegacy: int = 0   # 1 = artifacts of the replaced tools (rknpidor/traffic-guard) remain
     nginxUpdater: Optional[str] = None  # e.g. "ok", "vuln"
     ytRegion: Optional[str] = None      # e.g. "NL", "ads"
     xrayVersion: Optional[str] = None   # e.g. "v25.9.11" (running inside remnanode)
@@ -112,9 +119,9 @@ async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
         ssh = SSHSession(req.ip, req.ssh_port, req.ssh_user, **await ssh_auth.resolve(req))
         await ssh.connect(timeout=10)
         # One SSH session, read-only probes in parallel.
-        f2b, tg, traffic, cert, nginx, yt, xray_ver = await asyncio.gather(
+        f2b, rkn, traffic, cert, nginx, yt, xray_ver = await asyncio.gather(
             _fail2ban_sshd(ssh),
-            _ctguard_rules(ssh),
+            _rkn_watcher_stats(ssh),
             _vnstat_traffic(ssh),
             _cert_expiry(ssh, req.domain),
             _nginx_updater_status(ssh),
@@ -122,14 +129,19 @@ async def node_stats(req: NodeStatsRequest) -> NodeStatsResponse:
             _xray_version_status(ssh),
             return_exceptions=True,
         )
-        active, total = f2b if isinstance(f2b, tuple) else (0, 0)
+        active, total = f2b if isinstance(f2b, tuple) and len(f2b) == 2 else (0, 0)
+        rkn_active, rkn_entries, rkn_legacy = (
+            rkn if isinstance(rkn, tuple) and len(rkn) == 3 else (0, 0, 0)
+        )
         return NodeStatsResponse(
             ip=req.ip,
             online=True,
             securityStats=SecurityStats(
                 fail2banActive=active,
                 fail2banTotal=total,
-                trafficGuardActive=tg if isinstance(tg, int) else 0,
+                rknWatcherActive=rkn_active,
+                rknWatcherEntries=rkn_entries,
+                rknWatcherLegacy=rkn_legacy,
                 nginxUpdater=nginx if isinstance(nginx, str) else None,
                 ytRegion=yt if isinstance(yt, str) else None,
                 xrayVersion=xray_ver if isinstance(xray_ver, str) else None,
@@ -154,13 +166,10 @@ async def _fail2ban_sshd(ssh: SSHSession) -> tuple[int, int]:
     return (int(cur.group(1)) if cur else 0, int(tot.group(1)) if tot else 0)
 
 
-async def _ctguard_rules(ssh: SSHSession) -> int:
-    """Count active na-ctguard / TrafficGuard iptables rules."""
-    raw = await ssh.get_output(
-        "iptables -L -n 2>/dev/null | grep -c 'na-ctguard' || echo 0"
-    )
-    raw = raw.strip()
-    return int(raw) if raw.isdigit() else 0
+async def _rkn_watcher_stats(ssh: SSHSession) -> tuple[int, int, int]:
+    """(active, entries, legacy) of RKN Watcher — probe + parser live in
+    `services.rkn_watcher` (the same markers step 4 verifies against)."""
+    return rkn_watcher.parse_state(await ssh.get_output(rkn_watcher.state_probe()))
 
 
 async def _vnstat_traffic(ssh: SSHSession) -> TrafficStats:

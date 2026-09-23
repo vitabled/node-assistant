@@ -3,15 +3,25 @@ import { describe, it, expect, vi } from "vitest";
 import { DeployCard, manageableComponents, opPayload, VnstatBlock } from "./DeployCard";
 import { FORM_DEFAULT, type FormData } from "./DeployForm";
 
-const remna: FormData = { ...FORM_DEFAULT, mode: "remnanode", optimize: true, install_warp: true, install_trafficguard: true };
-const haproxy: FormData = { ...FORM_DEFAULT, mode: "haproxy", optimize: true, install_trafficguard: true };
+const remna: FormData = { ...FORM_DEFAULT, mode: "remnanode", optimize: true, install_warp: true, install_rkn_watcher: true };
+const haproxy: FormData = { ...FORM_DEFAULT, mode: "haproxy", optimize: true, install_rkn_watcher: true };
+
+// Дореформенная карточка: поле install_rkn_watcher отсутствует, есть только
+// старое install_trafficguard (так выглядит savedForm в localStorage до реформы).
+const legacyCard = (trafficguard: boolean) =>
+  ({ ...remna, install_rkn_watcher: undefined, install_trafficguard: trafficguard } as unknown as FormData);
 
 describe("manageableComponents", () => {
   it("lists remnanode components incl warp/ssl/hysteria2 when enabled", () => {
     const ids = manageableComponents(remna).map(c => c.id);
     expect(ids).toEqual([
-      "node_accelerator", "trafficguard", "test_tools", "remnanode", "masking", "warp", "ssl", "hysteria2",
+      "node_accelerator", "rkn_watcher", "test_tools", "remnanode", "masking", "warp", "ssl", "hysteria2",
     ]);
+  });
+
+  it("labels the RKN Watcher component as «RKN Watcher»", () => {
+    const comp = manageableComponents(remna).find(c => c.id === "rkn_watcher");
+    expect(comp?.label).toBe("RKN Watcher");
   });
 
   it("omits warp when install_warp is off", () => {
@@ -26,10 +36,19 @@ describe("manageableComponents", () => {
       .not.toContain("test_tools");
   });
 
-  it("omits node_accelerator when optimize is off and trafficguard when disabled", () => {
-    const ids = manageableComponents({ ...remna, optimize: false, install_trafficguard: false }).map(c => c.id);
+  it("omits node_accelerator when optimize is off and RKN Watcher when disabled", () => {
+    const ids = manageableComponents({ ...remna, optimize: false, install_rkn_watcher: false }).map(c => c.id);
     expect(ids).not.toContain("node_accelerator");
-    expect(ids).not.toContain("trafficguard");
+    expect(ids).not.toContain("rkn_watcher");
+  });
+
+  it("still lists RKN Watcher for a legacy card with install_trafficguard: true", () => {
+    const ids = manageableComponents(legacyCard(true)).map(c => c.id);
+    expect(ids).toContain("rkn_watcher");
+  });
+
+  it("omits RKN Watcher for a legacy card with install_trafficguard: false", () => {
+    expect(manageableComponents(legacyCard(false)).map(c => c.id)).not.toContain("rkn_watcher");
   });
 
   it("haproxy mode lists haproxy, not remnanode/masking/ssl", () => {
@@ -373,6 +392,55 @@ describe("VnstatBlock", () => {
     render(<VnstatBlock form={form} />);
 
     expect(await screen.findByText(/vnstat не установлен/)).toBeInTheDocument();
+  });
+});
+
+// ── Security block: RKN Watcher метрики вместо TrafficGuard ──
+describe("security block — RKN Watcher", () => {
+  const okJob = (taskId: string) => ({
+    taskId, domain: "ok.example", ip: "1.2.3.4",
+    newSshPort: 2222, startedAt: Date.now(), savedForm: remna,
+    finalStatus: "success" as const,
+  });
+
+  const stubStats = (securityStats: Record<string, number>) =>
+    vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("/api/node/remnanode/versions")) {
+        return { ok: true, json: async () => ({ versions: [], current: null }) };
+      }
+      return { ok: true, json: async () => ({ online: true, securityStats, trafficStats: null, certInfo: null }) };
+    }));
+
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const expand = () =>
+    fireEvent.click(screen.getByRole("button", { name: "Развернуть карточку ok.example" }));
+
+  const renderCard = () =>
+    render(<DeployCard
+      job={okJob("sec-1")}
+      onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+
+  it("shows the subnet count from rknWatcherEntries", async () => {
+    stubStats({ fail2banActive: 0, fail2banTotal: 3, rknWatcherActive: 1, rknWatcherEntries: 1872 });
+    renderCard();
+    expand();
+
+    // «RKN Watcher» есть и в блоке безопасности, и в списке управляемых компонентов.
+    expect((await screen.findAllByText("RKN Watcher")).length).toBeGreaterThan(0);
+    expect(screen.getByText("1872 подсетей")).toBeInTheDocument();
+  });
+
+  it("flags leftover legacy TrafficGuard artifacts for rknWatcherLegacy=1", async () => {
+    stubStats({ fail2banActive: 0, fail2banTotal: 3, rknWatcherActive: 0, rknWatcherEntries: 0, rknWatcherLegacy: 1 });
+    renderCard();
+    expand();
+
+    expect(await screen.findByText("остался старый TrafficGuard")).toBeInTheDocument();
+    expect(screen.getByText("0 подсетей")).toBeInTheDocument();
   });
 });
 

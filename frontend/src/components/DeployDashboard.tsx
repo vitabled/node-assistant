@@ -524,7 +524,10 @@ function DeployFormModal({
 
 const DETECT_LABELS: Record<string, string> = {
   node_accelerator: "Node Accelerator",
-  trafficguard:     "TrafficGuard",
+  rkn_watcher:      "RKN Watcher",
+  // Дореформенный идентификатор (TrafficGuard) — та же подпись, чтобы старые
+  // сохранённые карточки не сломались.
+  trafficguard:     "RKN Watcher",
   test_tools:       "Тест-инструменты",
   remnanode:        "Remnanode",
   masking:          "Маскировочный сайт",
@@ -615,7 +618,8 @@ function ExistingServerModal({ onClose, onProceed }: {
       // install_components as authoritative; keeping these flags aligned also
       // makes saved-form retries and cards accurately describe the request.
       optimize: install_components.includes("node_accelerator"),
-      install_trafficguard: install_components.includes("trafficguard"),
+      install_rkn_watcher: install_components.includes("rkn_watcher") ||
+        install_components.includes("trafficguard"),   // legacy-идентификатор
       install_test_tools: install_components.includes("test_tools"),
       install_warp: install_components.includes("warp"),
       install_psiphon: install_components.includes("psiphon"),

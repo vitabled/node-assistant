@@ -79,7 +79,7 @@ describe("PanelManageModal (render)", () => {
     const fetchMock = vi.fn().mockResolvedValue({
       json: async () => ({
         online: true,
-        securityStats: { fail2banActive: 2, fail2banTotal: 9, trafficGuardActive: 0 },
+        securityStats: { fail2banActive: 2, fail2banTotal: 9, rknWatcherActive: 1, rknWatcherEntries: 1872 },
         trafficStats: { today: { rx: 1073741824, tx: 0, total: 1073741824 }, week: { rx: 0, tx: 0, total: 0 }, month: { rx: 0, tx: 0, total: 0 } },
       }),
     });

@@ -6,7 +6,7 @@ export const DEPLOY_STEPS = [
   "Подключение",
   "Обновление системы",
   "Node Accelerator",
-  "TrafficGuard",
+  "RKN Watcher",
   "Тест-инструменты",
   "Добавление порта SSH",
   "Перезагрузка",

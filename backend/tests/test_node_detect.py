@@ -49,7 +49,7 @@ def test_detect_scripts_contain_expected_probes():
     d = "node1.example.com"
     s = {c: b(d) for c, b in node_ops._DETECT_SCRIPTS.items()}
     assert "test -d /opt/node-accelerator" in s["node_accelerator"]
-    assert "test -d /opt/TrafficGuard-auto" in s["trafficguard"]
+    assert "test -d /opt/rkn-watcher" in s["rkn_watcher"]
     # test_tools: iperf3 + either speedtest CLI (Ookla `speedtest` or python
     # `speedtest-cli` — Ф1 installs whichever works, the probe accepts both)
     assert "command -v iperf3" in s["test_tools"]
@@ -87,7 +87,7 @@ def _mk_req(**over) -> DeployRequest:
         domain="node1.example.com", email="a@b.co",
         cert_provider="letsencrypt", remnanode_token="tok",
         open_ports="80,443", create_in_remnawave=False,
-        country_code="US", install_warp=False, install_trafficguard=True,
+        country_code="US", install_warp=False, install_rkn_watcher=True,
         change_ssh_port=False,
     )
     base.update(over)
@@ -113,14 +113,14 @@ def test_install_components_runs_exact_positive_selection(monkeypatch, selected,
     req = _mk_req(
         install_components=selected,
         install_hysteria2=False,
-        install_trafficguard=False,
+        install_rkn_watcher=False,
         install_test_tools=False,
         optimize=False,
     )
     called, task = _run_pipeline_with_spies(monkeypatch, req)
     assert task.status == TaskStatus.SUCCESS
     managed_calls = {
-        "step_node_accelerator", "step_traffic_guard", "step_test_tools",
+        "step_node_accelerator", "step_rkn_watcher", "step_test_tools",
         "step_ssl", "step_remnanode", "step_remnanode_vanilla",
         "step_sni_masking", "step_warp", "step_psiphon", "step_certbot_ssl",
         "step_haproxy_deploy",
@@ -195,7 +195,7 @@ def _run_pipeline_with_spies(monkeypatch, req):
     monkeypatch.setattr(pipeline, "SSHSession", _SSH)
     monkeypatch.setattr(pipeline, "get_backend_ip", backend_ip)
     for name in (
-        "step_node_accelerator", "step_traffic_guard", "step_test_tools",
+        "step_node_accelerator", "step_rkn_watcher", "step_test_tools",
         "step_system_optimize",
         "step_ssl", "step_remnanode", "step_remnanode_vanilla", "step_sni_masking",
         "step_warp", "step_psiphon", "step_certbot_ssl", "step_haproxy_deploy",
@@ -219,7 +219,7 @@ def test_run_pipeline_skips_listed_components(monkeypatch):
     assert "step_ssl" not in called
     assert "step_sni_masking" not in called
     # … but the non-skipped ones did.
-    assert "step_traffic_guard" in called
+    assert "step_rkn_watcher" in called
     assert "step_remnanode" in called
     assert "step_certbot_ssl" in called
     # … and the skipped step indices were still begun (progress bar advances).
@@ -257,7 +257,7 @@ def test_run_pipeline_empty_skip_runs_everything(monkeypatch):
     req = _mk_req(skip_components=[])
     called, task = _run_pipeline_with_spies(monkeypatch, req)
     assert task.status == TaskStatus.SUCCESS
-    for name in ("step_node_accelerator", "step_traffic_guard", "step_ssl",
+    for name in ("step_node_accelerator", "step_rkn_watcher", "step_ssl",
                  "step_remnanode", "step_sni_masking", "step_certbot_ssl"):
         assert name in called
 

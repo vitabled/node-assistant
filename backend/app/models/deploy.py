@@ -20,9 +20,8 @@ class DeployRequest(SshCreds):
     cloudflare_api_key: str = Field(default="")
     email: str = Field(default="", description="Email for Let's Encrypt registration")
     remnanode_token: Optional[str] = Field(default=None)
-    # Docker image tag for remnawave/node (egames/vanilla full deploy). Omitted
-    # keeps :latest. Mirrors NodeOpRequest.version (reinstall); validated as a
-    # Docker tag so it can't smuggle shell metacharacters into the compose file.
+    # Тег образа remnawave/node (полный деплой): None → :latest.
+    # Валидируется как docker-тег, чтобы метасимволы не уехали в compose.
     remnanode_version: Optional[str] = Field(default=None, min_length=1, max_length=128)
     open_ports: str = Field(..., description="Comma-separated ports to open in UFW")
     # Firewall/fail2ban whitelist: IPs/CIDRs (any separator); normalized in the
@@ -57,7 +56,10 @@ class DeployRequest(SshCreds):
     cookie_gate: bool = Field(default=False)
     update_system: bool = Field(default=False)
     install_vnstat: bool = Field(default=True)
-    install_trafficguard: bool = Field(default=True)
+    # Step 4 — RKN Watcher (TSPU/gov block-lists + our extra list component).
+    # Renamed from install_trafficguard: saved deploy cards in the browser's
+    # localStorage still send the old name — `_legacy_aliases` maps it here.
+    install_rkn_watcher: bool = Field(default=True)
     # Test toolkit (iperf3 + speedtest CLI + xray-core) for the speed-test probes
     # (Ф2 wave1). Gates pipeline step 5 «Тест-инструменты»; non-fatal install.
     install_test_tools: bool = Field(default=True)
@@ -100,6 +102,31 @@ class DeployRequest(SshCreds):
     haproxy_timeout_client: str = Field(default="50s")
     haproxy_timeout_server: str = Field(default="50s")
     haproxy_timeout_tunnel: str = Field(default="1h")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_aliases(cls, data):
+        """Map the PREVIOUS tool's names onto the RKN Watcher ones.
+
+        Saved deploy cards live in the browser's localStorage and older API clients
+        keep sending the old shape: `install_trafficguard` (field) and the component
+        id `trafficguard` inside `skip_components`/`install_components`. Without this
+        a retried old job would silently install (or skip) the wrong component. The
+        NEW field wins when both are present.
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if "install_rkn_watcher" not in data and "install_trafficguard" in data:
+            data["install_rkn_watcher"] = data["install_trafficguard"]
+        for key in ("skip_components", "install_components"):
+            value = data.get(key)
+            if isinstance(value, (list, tuple)):
+                data[key] = [
+                    "rkn_watcher" if str(item) == "trafficguard" else item
+                    for item in value
+                ]
+        return data
 
     @model_validator(mode="after")
     def validate_by_mode(self) -> "DeployRequest":
@@ -192,20 +219,6 @@ class DeployRequest(SshCreds):
         if not re.fullmatch(r"[A-Za-z]{2}", v):
             raise ValueError("psiphon_region must be a 2-letter code")
         return v.upper()
-
-    @field_validator("remnanode_version")
-    @classmethod
-    def _validate_remnanode_version(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        v = v.strip()
-        if not v:
-            return None
-        # Docker image tag: alnum, dots, dashes, underscores (plus the repo
-        # prefix is NOT expected here — callers prepend remnawave/node:).
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", v):
-            raise ValueError("remnanode_version must be a valid Docker image tag")
-        return v
 
 
 class DeployCertRequest(SshCreds):

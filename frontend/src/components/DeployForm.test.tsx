@@ -88,10 +88,10 @@ describe("DeployForm skip-components preset", () => {
       <DeployForm
         onSubmit={async () => {}}
         preset={{
-          skip_components: ["warp", "hysteria2", "trafficguard", "node_accelerator"],
+          skip_components: ["warp", "hysteria2", "rkn_watcher", "node_accelerator"],
           install_warp: true,
           install_hysteria2: true,
-          install_trafficguard: true,
+          install_rkn_watcher: true,
           optimize: true,
         }}
       />,
@@ -100,9 +100,24 @@ describe("DeployForm skip-components preset", () => {
     // Sections are always-visible cards after S3 — switches are directly reachable.
     expect(screen.getByRole("switch", { name: "Установить WARP Native" })).toBeDisabled();
     expect(screen.getByRole("switch", { name: "Установить Hysteria2" })).toBeDisabled();
-    expect(screen.getByRole("switch", { name: "Установить TrafficGuard" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Установить RKN Watcher" })).toBeDisabled();
     expect(screen.getByRole("switch", { name: "Применить оптимизацию ОС" })).toBeDisabled();
     expect(screen.getByRole("switch", { name: "Установить Psiphon Proxy" })).toBeEnabled();
+  });
+
+
+  it("still disables RKN Watcher for the legacy 'trafficguard' skip id", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    render(
+      <DeployForm
+        onSubmit={async () => {}}
+        preset={{ skip_components: ["warp", "trafficguard", "node_accelerator"] }}
+      />,
+    );
+
+    expect(screen.getByRole("switch", { name: "Установить RKN Watcher" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Установить WARP Native" })).toBeDisabled();
   });
 
   it("keeps installation stages enabled for a full new-server deploy", () => {
@@ -113,6 +128,28 @@ describe("DeployForm skip-components preset", () => {
     expect(screen.getByRole("switch", { name: "Установить WARP Native" })).toBeEnabled();
     expect(screen.getByRole("switch", { name: "Установить Hysteria2" })).toBeEnabled();
     expect(screen.getByRole("switch", { name: "Установить Psiphon Proxy" })).toBeEnabled();
+  });
+});
+
+
+describe("legacy TrafficGuard saved cards", () => {
+  // Legacy localStorage card: only the pre-rename flag, no install_rkn_watcher.
+  const legacy = (v: boolean) => ({ install_trafficguard: v }) as unknown as Partial<FormData>;
+
+  it("maps a legacy install_trafficguard:false card onto the RKN Watcher toggle", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<DeployForm onSubmit={async () => {}} initial={legacy(false)} />);
+
+    expect(screen.getByRole("switch", { name: "Установить RKN Watcher" }))
+      .toHaveAttribute("aria-checked", "false");
+  });
+
+  it("keeps the toggle on for a legacy install_trafficguard:true card", () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<DeployForm onSubmit={async () => {}} initial={legacy(true)} />);
+
+    expect(screen.getByRole("switch", { name: "Установить RKN Watcher" }))
+      .toHaveAttribute("aria-checked", "true");
   });
 });
 

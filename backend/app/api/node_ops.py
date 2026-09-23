@@ -1,7 +1,7 @@
 """Per-component management of an ALREADY-DEPLOYED node.
 
 Lets a SUCCESS node's card reinstall / reconfigure / uninstall individual
-components (Node Accelerator, TrafficGuard, Remnanode, Masking, WARP, Hysteria2,
+components (Node Accelerator, RKN Watcher, Remnanode, Masking, WARP, Hysteria2,
 SSL, HAProxy) against the live server, using SSH creds passed per-request from
 the browser's localStorage (never persisted — same rule as /api/stats/node).
 
@@ -23,7 +23,7 @@ from typing import Any, Callable, Literal, Optional
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.deploy import DeployRequest
 from app.models.ssh_creds import SshCreds
@@ -43,7 +43,7 @@ _DOCKER_HUB_TOTAL_TIMEOUT = 15.0
 _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
 Component = Literal[
-    "node_accelerator", "trafficguard", "test_tools", "remnanode",
+    "node_accelerator", "rkn_watcher", "test_tools", "remnanode",
     "masking", "warp", "hysteria2", "ssl", "haproxy", "psiphon",
     "yt_monitoring", "nginx_updater", "reshala",
 ]
@@ -52,7 +52,7 @@ Action = Literal["reinstall", "reconfigure", "uninstall"]
 # Human labels for the op header (logged into the stream).
 _COMPONENT_LABEL = {
     "node_accelerator": "Node Accelerator",
-    "trafficguard": "TrafficGuard",
+    "rkn_watcher": "RKN Watcher",
     "test_tools": "Тест-инструменты",
     "remnanode": "Remnanode",
     "masking": "Маскировочный сайт",
@@ -76,6 +76,15 @@ class NodeOpRequest(DeployRequest):
     # Docker image tag selected from the official remnawave/node registry. This
     # is only acted on for a remnanode reinstall; omitted keeps :latest.
     version: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_component(cls, data):
+        """Saved deploy cards still send the previous tool's component id
+        (`trafficguard`) — map it onto the RKN Watcher component."""
+        if isinstance(data, dict) and data.get("component") == "trafficguard":
+            data = {**data, "component": "rkn_watcher"}
+        return data
+
 
     @field_validator("version")
     @classmethod
@@ -388,7 +397,11 @@ def _detect_cmd(test: str) -> str:
 # it). Each echoes exactly _DETECT_PRESENT / _DETECT_ABSENT on the last line.
 _DETECT_SCRIPTS: dict[Component, Callable[[str], str]] = {
     "node_accelerator": lambda d: _detect_cmd("test -d /opt/node-accelerator"),
-    "trafficguard": lambda d: _detect_cmd("test -d /opt/TrafficGuard-auto"),
+    # RKN Watcher (step 4) — the installed upstream tree is the marker; legacy
+    # TrafficGuard auto (/opt/TrafficGuard-auto) is reported as ABSENT on purpose.
+    "rkn_watcher": lambda d: _detect_cmd(
+        "test -d /opt/rkn-watcher && ipset list -n 2>/dev/null | grep -q '^TSPUIPS$'"
+    ),
     # iperf3 + either speedtest CLI (Ookla `speedtest` or the python fallback
     # `speedtest-cli` — Ф1 installs whichever works, so accept both).
     "test_tools": lambda d: _detect_cmd(
@@ -581,8 +594,10 @@ async def _reinstall(ssh: SSHSession, task, req: NodeOpRequest) -> None:
     c = req.component
     if c == "node_accelerator":
         await pipeline.step_node_accelerator(ssh, task, req)
-    elif c == "trafficguard":
-        await pipeline.step_traffic_guard(ssh, task, get_backend_ip() or "")
+    elif c == "rkn_watcher":
+        # Step 4 owns the whole install (upstream + extra lists) and resolves the
+        # backend IP itself for the deploy-panel-whitelist rule.
+        await pipeline.step_rkn_watcher(ssh, task, req)
     elif c == "test_tools":
         await pipeline.step_test_tools(ssh, task, req)
     elif c == "remnanode":
@@ -705,19 +720,37 @@ echo "[warp] Удалён."
 """
 
 
-def _u_trafficguard(_req: NodeOpRequest) -> str:
-    # TrafficGuard installs from the /opt/TrafficGuard-auto clone (step_traffic_
-    # guard). Its own iptables rules aren't reliably comment-marked, so we remove
-    # the clone + run its uninstall.sh if present; leftover rules clear on reboot.
-    # NOTE: na-ctguard is NOT ours — it belongs to Node Accelerator's CDN guard
-    # (behind_cdn); its teardown lives in _u_node_accelerator, not here.
+def _u_rkn_watcher(_req: NodeOpRequest) -> str:
+    # Апстрим снимает себя сам (`rkn-watcher.sh uninstall`, RKN_ASSUME_YES=1 — без
+    # вопросов), доп. компонент — своей командой uninstall. Остатки цепочек и наборов
+    # добиваем вручную: апстрим снимает только то, что помнит про себя, а цепочки
+    # TSPUBLOCK/GOVBLOCK и наборы TSPUIPS/GOVIPS остаются жить до перезагрузки.
+    # NOTE: na-ctguard сюда НЕ входит — он принадлежит Node Accelerator (см.
+    # _u_node_accelerator), шаг установки RKN Watcher снимает его как легаси прежнего NA.
     return """\
-echo "[trafficguard] Удаляю TrafficGuard..."
-if [ -f /opt/TrafficGuard-auto/uninstall.sh ]; then
-    cd /opt/TrafficGuard-auto && bash uninstall.sh </dev/null 2>/dev/null || true
+echo "[rkn-watcher] Удаляю RKN Watcher..."
+if [ -x /opt/rkn-watcher/rkn-watcher.sh ]; then
+    RKN_ASSUME_YES=1 bash /opt/rkn-watcher/rkn-watcher.sh uninstall </dev/null 2>/dev/null || true
 fi
-rm -rf /opt/TrafficGuard-auto 2>/dev/null || true
-echo "[trafficguard] Удалён (оставшиеся iptables-правила очистятся при перезагрузке)."
+if [ -x /opt/rkn-watcher-extra/rkn-watcher-extra.sh ]; then
+    /opt/rkn-watcher-extra/rkn-watcher-extra.sh uninstall 2>/dev/null || true
+fi
+systemctl disable --now rkn-watcher-update.timer rkn-watcher-extra.timer \
+    rkn-watcher-extra-boot.service 2>/dev/null || true
+for ch in TSPUBLOCK GOVBLOCK RKN_EXTRA; do
+    while iptables -C INPUT -j "$ch" >/dev/null 2>&1; do
+        iptables -D INPUT -j "$ch" >/dev/null 2>&1 || break
+    done
+    iptables -F "$ch" >/dev/null 2>&1 || true
+    iptables -X "$ch" >/dev/null 2>&1 || true
+done
+for s in TSPUIPS GOVIPS EXTRA_ANTISCAN EXTRA_GOVNET; do
+    ipset destroy "$s" >/dev/null 2>&1 || true
+done
+rm -rf /opt/rkn-watcher /opt/rkn-watcher-extra /etc/rkn-watcher /etc/rkn-watcher-extra \
+       /var/lib/rkn-watcher-extra 2>/dev/null || true
+netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+echo "[rkn-watcher] Удалён."
 """
 
 
@@ -854,7 +887,7 @@ echo "[reshala] Удалён."
 
 _UNINSTALL_SCRIPTS = {
     "warp": _u_warp,
-    "trafficguard": _u_trafficguard,
+    "rkn_watcher": _u_rkn_watcher,
     "test_tools": _u_test_tools,
     "remnanode": _u_remnanode,
     "masking": _u_masking,

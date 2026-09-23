@@ -18,6 +18,7 @@ import { useTaskStream, isTaskNotFound, type StatusFrame, type TaskStatus } from
 import { toast } from "./infra/Toast";
 import type { DeployJobSummary } from "./DeployDashboard";
 import type { FormData } from "./DeployForm";
+import { asLegacy } from "./DeployForm";
 
 interface CertInfo { daysLeft: number; notAfter: string }
 
@@ -50,18 +51,29 @@ export function opPayload(data: FormData) {
 // Manageable components for a SUCCESS node, derived from its saved form. Steps
 // «Подключение»/«Обновление системы» and the SSH-port network steps are NOT
 // manageable (excluded by design — see node_ops.py).
+//
+// RKN Watcher заменил TrafficGuard; дореформенные карточки несут старое поле
+// install_trafficguard — компонент показывается, если включён любой из флагов
+// (по умолчанию — включён).
+function rknWatcherEnabled(f: Partial<FormData>): boolean {
+  const legacy = asLegacy(f);
+  if (legacy.install_rkn_watcher !== undefined) return legacy.install_rkn_watcher !== false;
+  if (legacy.install_trafficguard !== undefined) return legacy.install_trafficguard !== false;
+  return true;
+}
+
 export function manageableComponents(f: FormData): { id: string; label: string }[] {
   if (f.mode === "haproxy") {
     return [
       ...(f.optimize ? [{ id: "node_accelerator", label: "Node Accelerator" }] : []),
-      ...(f.install_trafficguard !== false ? [{ id: "trafficguard", label: "TrafficGuard" }] : []),
+      ...(rknWatcherEnabled(f) ? [{ id: "rkn_watcher", label: "RKN Watcher" }] : []),
       ...(f.install_test_tools !== false ? [{ id: "test_tools", label: "Тест-инструменты" }] : []),
       { id: "haproxy", label: "HAProxy" },
     ];
   }
   return [
     ...(f.optimize ? [{ id: "node_accelerator", label: "Node Accelerator" }] : []),
-    ...(f.install_trafficguard !== false ? [{ id: "trafficguard", label: "TrafficGuard" }] : []),
+    ...(rknWatcherEnabled(f) ? [{ id: "rkn_watcher", label: "RKN Watcher" }] : []),
     ...(f.install_test_tools !== false ? [{ id: "test_tools", label: "Тест-инструменты" }] : []),
     { id: "remnanode", label: "Remnanode" },
     { id: "masking",   label: "Маскировочный сайт" },
@@ -126,7 +138,12 @@ const INITIAL_STATUS: StatusFrame = {
 interface SecurityStats {
   fail2banActive: number;
   fail2banTotal: number;
-  trafficGuardActive: number;
+  // RKN Watcher (заменил TrafficGuard): 1/0 — установлен и активен,
+  // rknWatcherEntries — число заблокированных подсетей, rknWatcherLegacy — 1,
+  // если на ноде остались артефакты старого TrafficGuard.
+  rknWatcherActive: number;
+  rknWatcherEntries?: number;
+  rknWatcherLegacy?: number;
   nginxUpdater?: string;
   ytRegion?: string;
   xrayVersion?: string;
@@ -1113,8 +1130,9 @@ function SecurityBlock({ stats, loading, onUpdateXray, xrayUpdateBusy }: {
   const f2bActiveCls = stats && stats.fail2banActive > 0
     ? "text-[var(--warn)] bg-[var(--warn-dim)] border-[var(--warn-line)]"
     : "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]";
-  const tgActiveCls = stats && stats.trafficGuardActive > 0
-    ? "text-[var(--warn)] bg-[var(--warn-dim)] border-[var(--warn-line)]"
+  // RKN Watcher: зелёный, когда служба активна; серый, когда её нет на ноде.
+  const rknActiveCls = stats && stats.rknWatcherActive > 0
+    ? "text-[var(--ok)] bg-[var(--ok-dim)] border-[var(--ok-line)]"
     : "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]";
 
   return (
@@ -1145,11 +1163,16 @@ function SecurityBlock({ stats, loading, onUpdateXray, xrayUpdateBusy }: {
             )}
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-[var(--t-low)]">TrafficGuard (CDN)</span>
-            <span className={`px-1.5 py-0.5 rounded border tabular-nums ${tgActiveCls}`}>
-              {stats ? `${stats.trafficGuardActive} заблокировано` : "—"}
+            <span className="text-[var(--t-low)]">RKN Watcher</span>
+            <span className={`px-1.5 py-0.5 rounded border tabular-nums ${rknActiveCls}`}>
+              {stats ? `${stats.rknWatcherEntries ?? 0} подсетей` : "—"}
             </span>
           </div>
+          {stats && stats.rknWatcherLegacy === 1 && (
+            <div className="flex items-center gap-1 text-[10px] text-[var(--warn)]">
+              остался старый TrafficGuard
+            </div>
+          )}
           {/* YouTube Region показываем всегда: без данных — «—» (не скрываем). */}
           <div className="flex items-center justify-between">
             <span className="text-[var(--t-low)] flex items-center gap-1"><Youtube size={10} /> YouTube Region</span>
@@ -1572,19 +1595,21 @@ function DeployDetailModal({
 
 // ── Свёрнутая карточка успешной ноды (заголовок + безопасность + сертификат) ──
 function CompactSecurity({ stats }: { stats: SecurityStats | null }) {
-  const active = !!stats && (stats.fail2banActive > 0 || stats.trafficGuardActive > 0);
+  // RKN Watcher всегда включён на ноде — сигналом тревоги остаются только
+  // активные баны fail2ban.
+  const active = !!stats && stats.fail2banActive > 0;
   // YouTube Region: чип показываем всегда — если регион не определён, «—».
   const tone = ytRegionTone(stats?.ytRegion);
   const ytText = ytRegionText(stats?.ytRegion);
   return (
     <span
       className="inline-flex items-center gap-1.5 text-[11px] text-[var(--t-low)] shrink-0"
-      title={`Fail2Ban: ${stats ? `${stats.fail2banActive} активных` : "нет данных"} · TrafficGuard: ${stats ? `${stats.trafficGuardActive} заблокировано` : "нет данных"} · YouTube Region: ${ytText}`}
+      title={`Fail2Ban: ${stats ? `${stats.fail2banActive} активных` : "нет данных"} · RKN Watcher: ${stats ? `${stats.rknWatcherEntries ?? 0} подсетей` : "нет данных"} · YouTube Region: ${ytText}`}
     >
       <ShieldCheck size={12} style={{ color: active ? "var(--warn)" : "var(--ok)" }} />
       <span className="tabular-nums">{stats ? `Fail2Ban ${stats.fail2banActive}` : "Fail2Ban —"}</span>
       <span className="text-[var(--t-faint)]">·</span>
-      <span className="tabular-nums">{stats ? `TrafficGuard ${stats.trafficGuardActive}` : "TrafficGuard —"}</span>
+      <span className="tabular-nums">{stats ? `RKN Watcher ${stats.rknWatcherEntries ?? 0}` : "RKN Watcher —"}</span>
       <span className="text-[var(--t-faint)]">·</span>
       <span className="inline-flex items-center gap-1">
         <Youtube size={12} style={{ color: YT_TONE_COLOR[tone] }} />

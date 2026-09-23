@@ -3,11 +3,10 @@ import {
   X, RefreshCw, Trash2, ShieldAlert, Wrench, Server, Loader2,
   CheckCircle2, XCircle, Save, AlertTriangle, BarChart3, Boxes,
   ShieldCheck, Network, ArrowDownToLine, ArrowUpFromLine, Sigma,
-  Users, Gauge, ArrowLeftRight, Youtube,
+  Users, Gauge, ArrowLeftRight,
 } from "lucide-react";
 import { TerminalOutput } from "../TerminalOutput";
 import { ReplaceDomainModal } from "./ReplaceDomainModal";
-import { ytRegionText, ytRegionTone, YT_TONE_CLASS } from "../../utils/ytRegion";
 import { useTaskStream, type StatusFrame, type TaskStatus } from "../../hooks/useTaskStream";
 import { toast } from "../infra/Toast";
 import type { PanelJobSummary } from "./PanelDashboard";
@@ -48,7 +47,7 @@ const DOMAIN =
 const validIp = (v: string) => IPv4.test(v) && v.split(".").every(o => parseInt(o, 10) <= 255);
 
 // ── Security / traffic stats types (mirror /api/stats/node) ──
-interface SecurityStats { fail2banActive: number; fail2banTotal: number; trafficGuardActive: number; ytRegion?: string }
+interface SecurityStats { fail2banActive: number; fail2banTotal: number; rknWatcherActive: number; rknWatcherEntries?: number; rknWatcherLegacy?: number }
 interface TrafficBucket { rx: number; tx: number; total: number }
 interface TrafficStats { today: TrafficBucket; week: TrafficBucket; month: TrafficBucket }
 type TrafficPeriod = "today" | "week" | "month";
@@ -500,9 +499,15 @@ function PanelMetricsBlock({ job }: { job: PanelJobSummary }) {
 }
 
 function SecurityBlock({ stats, loading }: { stats: SecurityStats | null; loading: boolean }) {
-  // Блок показываем всегда: без данных строки идут с «—» (нода недоступна по SSH).
+  // loaded but null = the probe returned online without fail2ban data (vnstat/
+  // fail2ban absent) → "нет данных", NOT a spinner (which would hang forever).
+  const noData = stats === null || (stats.fail2banTotal === 0 && stats.fail2banActive === 0 && stats.rknWatcherEntries === 0);
   const f2bCls = stats && stats.fail2banActive > 0
     ? "text-[var(--warn)] bg-[var(--warn-dim)] border-[var(--warn-line)]"
+    : "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]";
+  // RKN Watcher: зелёный, когда служба активна; серый, когда её нет на ноде.
+  const rknCls = stats && stats.rknWatcherActive > 0
+    ? "text-[var(--ok)] bg-[var(--ok-dim)] border-[var(--ok-line)]"
     : "text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]";
   return (
     <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--bg1)] px-3 py-2.5">
@@ -516,36 +521,27 @@ function SecurityBlock({ stats, loading }: { stats: SecurityStats | null; loadin
         <p className="text-[11px] text-[var(--t-faint)] flex items-center gap-1.5">
           <Loader2 size={10} className="animate-spin" /> Сбор метрик по SSH…
         </p>
+      ) : noData || stats === null ? (
+        <p className="text-[11px] text-[var(--t-faint)]">Нет данных (fail2ban не установлен на сервере).</p>
       ) : (
         <div className="flex flex-col gap-1.5 text-[11px]">
           <div className="flex items-center justify-between">
             <span className="text-[var(--t-low)]">Fail2Ban (SSH)</span>
-            {stats ? (
-              <span className="tabular-nums">
-                <span className={`px-1.5 py-0.5 rounded border ${f2bCls}`}>{stats.fail2banActive} активных</span>
-                <span className="text-[var(--t-faint)]"> / {stats.fail2banTotal} всего</span>
-              </span>
-            ) : (
-              <span className={`px-1.5 py-0.5 rounded border tabular-nums ${f2bCls}`}>—</span>
-            )}
+            <span className="tabular-nums">
+              <span className={`px-1.5 py-0.5 rounded border ${f2bCls}`}>{stats.fail2banActive} активных</span>
+              <span className="text-[var(--t-faint)]"> / {stats.fail2banTotal} всего</span>
+            </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-[var(--t-low)]">TrafficGuard (CDN)</span>
-            <span className="px-1.5 py-0.5 rounded border tabular-nums text-[var(--t-mid)] bg-[var(--bg3)] border-[var(--line)]">
-              {stats ? `${stats.trafficGuardActive} заблокировано` : "—"}
+            <span className="text-[var(--t-low)]">RKN Watcher</span>
+            <span className={`px-1.5 py-0.5 rounded border tabular-nums ${rknCls}`}>
+              {stats ? `${stats.rknWatcherEntries ?? 0} подсетей` : "—"}
             </span>
           </div>
-          {/* YouTube Region показываем всегда, даже без данных → «—». */}
-          <div className="flex items-center justify-between">
-            <span className="text-[var(--t-low)] flex items-center gap-1">
-              <Youtube size={10} /> YouTube Region
-            </span>
-            <span className={`px-1.5 py-0.5 rounded border tabular-nums ${YT_TONE_CLASS[ytRegionTone(stats?.ytRegion)]}`}>
-              {ytRegionText(stats?.ytRegion)}
-            </span>
-          </div>
-          {!stats && (
-            <p className="text-[10px] text-[var(--t-faint)]">Нет данных — сервер недоступен по SSH.</p>
+          {stats && stats.rknWatcherLegacy === 1 && (
+            <div className="flex items-center gap-1 text-[10px] text-[var(--warn)]">
+              остался старый TrafficGuard
+            </div>
           )}
         </div>
       )}
