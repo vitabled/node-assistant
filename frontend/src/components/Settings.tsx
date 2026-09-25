@@ -630,6 +630,7 @@ export function ThemeTab() {
   const toggleGlow = (v: boolean) => { setGlowOn(v); applyNeonGlow(v); saveNeonGlow(v); mirror({ neon_glow: v }); };
 
   const SKIN_SUB: Record<AppSkin, string> = {
+    axottle: "Розовый акцент, Manrope/Unbounded, как в панели Axottle",
     apple: "Системный вид macOS/iOS",
     console: "Моноширинный, консольный",
     neon: "Неон, свечения и градиенты",
@@ -659,7 +660,7 @@ export function ThemeTab() {
             );
           })}
         </div>
-        <p className="hint">Apple — по умолчанию. «Консоль» — моноширинный JetBrains Mono. «Неон» — тёмная палитра со свечениями.</p>
+        <p className="hint">Axottle — по умолчанию (дизайн панели Axottle, см. design-system.md). «Apple» — системный вид. «Консоль» — моноширинный JetBrains Mono. «Неон» — тёмная палитра со свечениями.</p>
       </div>
 
       <div>

@@ -1,7 +1,7 @@
 // Appearance tweaks — accent colour + density. Writes CSS variables on :root,
 // fully self-contained (no other component needs to know). Persisted locally.
 
-export type AccentKey = "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime" | "nodeflow" | "remnawave";
+export type AccentKey = "axottle" | "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime" | "nodeflow" | "remnawave";
 export type Density = "comfortable" | "compact";
 export type ThemeMode = "light" | "dark" | "system";
 
@@ -12,13 +12,18 @@ export const THEME_MODES: { key: ThemeMode; label: string }[] = [
 ];
 
 // Design skin — a second, independent theme axis on :root (data-skin), on top of
-// the light/dark data-theme axis. "apple" = System-Settings aesthetic (SF font,
-// iOS controls, glass); "console" = the JetBrains-Mono default; "neon" = glow;
+// the light/dark data-theme axis. "axottle" = дизайн-система Axottle (панельная
+// тёмная шкала #08090a…#171d25 + розовый акцент #f3a7c5, Manrope/Unbounded,
+// радиусы 11/18px; светлая тема — «бумажный» клиентский слой #fffafb) — дефолт,
+// см. src/theme/axottle.css и /root/work/axottle_transfer/design/design-system.md;
+// "apple" = System-Settings aesthetic (SF font, iOS controls, glass);
+// "console" = the JetBrains-Mono default; "neon" = glow;
 // "nodeflow" = лесная зелёная палитра панели NodeFlow + Inter;
 // "remnawave" = GitHub-dark палитра панели Remnawave, cyan-акцент, Montserrat.
-// Apple is default.
-export type AppSkin = "apple" | "console" | "neon" | "nodeflow" | "remnawave";
+// Axottle is default; the five legacy skins stay available per account.
+export type AppSkin = "axottle" | "apple" | "console" | "neon" | "nodeflow" | "remnawave";
 export const SKINS: { key: AppSkin; label: string }[] = [
+  { key: "axottle",   label: "Axottle" },
   { key: "apple",     label: "Apple" },
   { key: "console",   label: "Консоль" },
   { key: "neon",      label: "Неон" },
@@ -36,6 +41,12 @@ interface AccentDef {
 }
 
 export const ACCENTS: Record<AccentKey, AccentDef> = {
+  // Axottle pink: --accent:#f3a7c5 (панельная тёмная тема). Чернила на акценте — их же
+  // портальный #241018 (9.59:1). Светлый вариант — клиентский --customer-olive #8f4968
+  // (6.12:1 текстом на бумаге #fffafb, белые чернила на заливке 6.32:1).
+  // Дефолт скина axottle; см. /root/work/axottle_transfer/design/design-system.md.
+  axottle: { base: "#f3a7c5", hi: "#f7d5e2", ink: "#241018",
+             light: { base: "#8f4968", hi: "#8f4968", ink: "#FFFFFF" } },
   blue:    { base: "#8b5cf6", hi: "#a78bfa", ink: "#0a0a0a" },
   green:   { base: "#3ECF8E", hi: "#63E0A7", ink: "#04140D" },
   violet:  { base: "#9D7BFF", hi: "#B9A0FF", ink: "#0E0A1A" },
@@ -143,13 +154,13 @@ export function loadAccent(): AccentKey {
   return v && v in ACCENTS ? (v as AccentKey) : "blue";
 }
 
-// Акцент по умолчанию зависит от скина: nodeflow несёт свой фирменный зелёный,
-// но ТОЛЬКО если пользователь никогда не выбирал акцент явно — сохранённый
-// выбор всегда побеждает (пикер продолжает работать на любом скине).
+// Акцент по умолчанию зависит от скина: у axottle свой розовый (--accent:#f3a7c5),
+// у nodeflow — фирменный зелёный, у remnawave — cyan, но ТОЛЬКО если пользователь
+// никогда не выбирал акцент явно — сохранённый выбор всегда побеждает.
 export function resolveAccentForSkin(skin: AppSkin): AccentKey {
   const v = localStorage.getItem(ACCENT_KEY);
   if (v && v in ACCENTS) return v as AccentKey;
-  return skin === "nodeflow" ? "nodeflow" : skin === "remnawave" ? "remnawave" : "blue";
+  return skin === "axottle" ? "axottle" : skin === "nodeflow" ? "nodeflow" : skin === "remnawave" ? "remnawave" : "blue";
 }
 export function loadDensity(): Density {
   return localStorage.getItem(DENSITY_KEY) === "compact" ? "compact" : "comfortable";
@@ -165,7 +176,10 @@ export function saveThemeMode(accountId: string | null | undefined, m: ThemeMode
 }
 export function loadSkin(accountId?: string | null): AppSkin {
   const v = localStorage.getItem(skinKey(accountId));
-  return v === "console" || v === "neon" || v === "nodeflow" || v === "remnawave" ? v : "apple";
+  // Дефолт — axottle (дизайн Axottle). Мусор в localStorage тоже даёт дефолт:
+  // иначе опечатка в значении оставила бы пользователя без палитры.
+  return v === "apple" || v === "console" || v === "neon" || v === "nodeflow" || v === "remnawave"
+    ? v : "axottle";
 }
 export function saveSkin(accountId: string | null | undefined, s: AppSkin): void {
   localStorage.setItem(skinKey(accountId), s);

@@ -116,6 +116,8 @@ const InfraPayments      = lazy(() => import("./components/infra/InfraPayments")
 const InfraSettings      = lazy(() => import("./components/infra/InfraSettings").then(m => ({ default: m.InfraSettings })));
 const InfraApiTokens     = lazy(() => import("./components/infra/InfraApiTokens").then(m => ({ default: m.InfraApiTokens })));
 import { Toaster }                        from "./components/infra/Toast";
+// Кит и каркас дизайн-системы Axottle (см. src/theme/kit.tsx + theme/axottle.css).
+import { AxoThemeToggle, AxoToastHost }   from "./theme/kit";
 import { StepProgress, RENEW_STEPS }       from "./components/StepProgress";
 import { TerminalOutput }                  from "./components/TerminalOutput";
 import { useTaskStream, type StatusFrame } from "./hooks/useTaskStream";
@@ -377,6 +379,9 @@ export default function App() {
   return (
     <div style={{ display: "flex", height: "100%", position: "relative" }}>
       <Toaster />
+      {/* Стопка тостов кита Axottle: пустая — ничего не рендерит, поэтому второй тостер
+          панели (components/infra/Toast) не конфликтует с ней визуально. */}
+      <AxoToastHost />
       <InstanceSidebar />
       <Sidebar activeTab={tab} onTabChange={goTab} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
 
@@ -404,6 +409,10 @@ export default function App() {
             <span className={`chip ${rw.chip}`} style={{ padding: "1px 7px", fontSize: 10 }}>{rw.text}</span>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+            {/* Переключатель темы — пункт каркаса из доков Axottle (panel__overview.md: «верхняя
+                панель — глобальный поиск, переключатель светлой/тёмной темы и меню выхода»).
+                Пишет ni_thememode_<account> и сразу применяет data-theme — как Settings → Тема. */}
+            <AxoThemeToggle />
             <AccountMenu />
           </div>
         </header>

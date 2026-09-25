@@ -115,6 +115,27 @@ describe("accent", () => {
     expect(resolveAccentForSkin("nodeflow")).toBe("nodeflow"); // мусор = «не выбирал»
   });
 
+  it("resolveAccentForSkin: axottle skin defaults to the Axottle pink", () => {
+    localStorage.clear();
+    expect(resolveAccentForSkin("axottle")).toBe("axottle");
+    applyAccent("axottle");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#f3a7c5");
+    expect(document.documentElement.style.getPropertyValue("--accent-ink")).toBe("#241018");
+    saveAccent("lime");
+    expect(resolveAccentForSkin("axottle")).toBe("lime");
+  });
+
+  it("axottle accent uses the client olive variant on light theme and reverts on dark", () => {
+    mockMatchMedia(false);
+    applyThemeMode("light");
+    applyAccent("axottle");
+    const s = document.documentElement.style;
+    expect(s.getPropertyValue("--accent")).toBe("#8f4968");
+    expect(s.getPropertyValue("--accent-ink")).toBe("#FFFFFF");
+    applyThemeMode("dark");
+    expect(s.getPropertyValue("--accent")).toBe("#f3a7c5");
+  });
+
   it("resolveAccentForSkin: remnawave defaults to its cyan accent", () => {
     localStorage.clear();
     expect(resolveAccentForSkin("remnawave")).toBe("remnawave");
@@ -152,31 +173,42 @@ describe("density", () => {
 describe("skin", () => {
   beforeEach(() => { document.documentElement.removeAttribute("data-skin"); });
 
-  it("defaults to apple when nothing stored", () => {
-    expect(loadSkin("acc1")).toBe("apple");
-    expect(loadSkin(null)).toBe("apple");
+  it("defaults to axottle (дизайн Axottle) when nothing stored", () => {
+    expect(loadSkin("acc1")).toBe("axottle");
+    expect(loadSkin(null)).toBe("axottle");
   });
 
   it("persists per-account and reads back (isolated)", () => {
     saveSkin("acc1", "console");
     expect(loadSkin("acc1")).toBe("console");
-    expect(loadSkin("acc2")).toBe("apple");
+    expect(loadSkin("acc2")).toBe("axottle");
   });
 
   it("applySkin sets data-skin on :root", () => {
+    applySkin("axottle");
+    expect(document.documentElement.dataset.skin).toBe("axottle");
     applySkin("apple");
     expect(document.documentElement.dataset.skin).toBe("apple");
     applySkin("console");
     expect(document.documentElement.dataset.skin).toBe("console");
   });
 
-  it("ignores garbage stored value → apple", () => {
+  it("ignores garbage stored value → axottle", () => {
     localStorage.setItem("ni_skin_acc1", "frutiger");
-    expect(loadSkin("acc1")).toBe("apple");
+    expect(loadSkin("acc1")).toBe("axottle");
   });
 
-  it("exposes exactly the five skin options", () => {
-    expect(SKINS.map(s => s.key)).toEqual(["apple", "console", "neon", "nodeflow", "remnawave"]);
+  it("exposes exactly the six skin options, Axottle first", () => {
+    expect(SKINS.map(s => s.key)).toEqual(["axottle", "apple", "console", "neon", "nodeflow", "remnawave"]);
+  });
+
+  it("keeps the five legacy skins selectable", () => {
+    for (const s of ["apple", "console", "neon", "nodeflow", "remnawave"] as const) {
+      saveSkin("acc1", s);
+      expect(loadSkin("acc1")).toBe(s);
+      applySkin(s);
+      expect(document.documentElement.dataset.skin).toBe(s);
+    }
   });
 
   it("persists and reads back the remnawave skin", () => {
