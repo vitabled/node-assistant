@@ -358,7 +358,12 @@
 .axo-btn:hover:not(:disabled){ transform:translateY(-1px); box-shadow:0 10px 30px var(--axo-accent-soft-strong) }
 .axo-btn:active:not(:disabled){ transform:scale(.98) }
 .axo-btn:focus-visible{ outline:none; box-shadow:var(--axo-ring) }
-.axo-btn:disabled{ opacity:.55; cursor:not-allowed }
+.axo-btn:disabled{
+  /* Нейтральная заливка вместо opacity .55 на акцентной: розовый по розовому в светлой
+     теме нечитаем (у Axottle тут просто opacity — их палитра AA не проверяет). */
+  opacity:1; cursor:not-allowed; background:var(--bg3); border-color:var(--line-soft);
+  color:var(--t-faint); box-shadow:none; transform:none;
+}
 .axo-btn.is-quiet{ background:var(--bg2); border-color:var(--line); color:var(--t-low) }
 .axo-btn.is-quiet:hover:not(:disabled){ background:var(--bg3); color:var(--t-hi); box-shadow:none }
 .axo-btn.is-ghost{ background:transparent; color:var(--t-low) }
@@ -387,7 +392,7 @@
 .axo-input:focus, .axo-textarea:focus, .axo-select-native:focus{
   border-color:var(--accent-line); box-shadow:var(--axo-ring);
 }
-.axo-input.is-err{ border-color:var(--err-line) }
+.axo-input.is-err{ border-color:var(--err) }   /* ошибку видно, а не «на 30% прозрачности» */
 .axo-select-native{ appearance:none; cursor:pointer; padding-right:30px }
 .axo-hint{ color:var(--t-faint); font-size:11.5px; line-height:1.45 }
 .axo-errmsg{ color:var(--err); font-size:11.5px; line-height:1.45 }
@@ -467,7 +472,7 @@
   font-weight:600; white-space:nowrap; cursor:pointer; transition:background var(--axo-t-base), color var(--axo-t-base);
 }
 .axo-tabs button:hover{ color:var(--t-hi) }
-.axo-tabs button.is-active{ background:var(--bg3); color:var(--t-hi); border-color:var(--line) }
+.axo-tabs button.is-active{ background:var(--bg3); color:var(--t-hi); border-color:var(--line-strong) }
 .axo-tabs.is-accent button.is-active{ background:var(--accent-dim); border-color:var(--accent-line); color:var(--accent) }
 
 /* Модалка/диалог — .platform-dialog-layer{background:rgba(0,0,0,.7);backdrop-filter:blur(6px)} +
