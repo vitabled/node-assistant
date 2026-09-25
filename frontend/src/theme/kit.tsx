@@ -12,8 +12,8 @@
  * Axottle через токены скина `axottle` (`data-skin`), без правок JSX.
  *
  * ⚠️ Цвета — только токенами (`var(--…)` через классы `.axo-*` или arbitrary-значения Tailwind).
- * В `src/theme/contrast.test.ts` есть гейт, который запрещает `text-gray-500`-подобные классы:
- * такие игнорируют тему и акцент.
+ * В `src/theme/contrast.test.ts` есть гейт, который запрещает имена оттенков палитры Tailwind
+ * (вида `text-<палитра>-500`) в разметке компонентов: такие игнорируют и тему, и акцент.
  */
 import {
   createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore,
