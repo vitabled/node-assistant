@@ -251,7 +251,7 @@ export function SubPages() {
               </div>
             ) : (
               <iframe title="Предпросмотр страницы подписок" sandbox="" srcDoc={previewHtml}
-                style={{ width: "100%", height: "70vh", minHeight: 320, border: "none", background: "#fff" }} />
+                style={{ width: "100%", height: "70vh", minHeight: 320, border: "none", background: "var(--paper)" }} />
             )}
           </div>
         </div>

@@ -9,7 +9,7 @@ const STATUS_LABEL: Record<string, string> = {
   open: "Открыт", pending: "Ожидает", answered: "Отвечено", closed: "Закрыт",
 };
 const STATUS_COLOR: Record<string, string> = {
-  open: "text-[var(--accent-hi)]", pending: "text-[#f59e0b]",
+  open: "text-[var(--accent-hi)]", pending: "text-[var(--warn)]",
   answered: "text-[var(--t-mid)]", closed: "text-[var(--t-faint)]",
 };
 

@@ -219,7 +219,7 @@ export function DeployedEditor() {
               </div>
             ) : preview ? (
               <iframe title="Предпросмотр развёрнутой страницы" sandbox="" srcDoc={content}
-                style={{ width: "100%", height: 480, border: "none", background: "#fff" }} />
+                style={{ width: "100%", height: 480, border: "none", background: "var(--paper)" }} />
             ) : (
               <textarea className="font-mono text-xs" value={content} spellCheck={false}
                 onChange={e => { setContent(e.target.value); setDirty(true); }}

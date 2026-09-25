@@ -91,7 +91,7 @@ export function FileViewer({ item, onClose, onDownload }: {
             sandbox=""
             srcDoc={text}
             style={{ width: "100%", height: "100%", minHeight: 420, border: "1px solid var(--line-soft)",
-                     borderRadius: 8, background: "#fff" }}
+                     borderRadius: 8, background: "var(--paper)" }}
           />
         ) : (
           <pre style={{ fontSize: 12, color: "var(--t-mid)", whiteSpace: "pre-wrap",
