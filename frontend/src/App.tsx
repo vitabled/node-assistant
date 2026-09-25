@@ -126,8 +126,8 @@ import { AccountMenu }                     from "./auth/AccountMenu";
 import { usePermissions }                  from "./auth/usePermissions";
 import { tabKey, getActiveId, certJobsKey } from "./auth/store";
 import {
-  applyAccent, applyDensity, applyThemeMode, applySkin,
-  loadDensity, loadThemeMode, loadSkin,
+  applyAccent, applyDensity, applyThemeMode, applySkin, applyPalette, applyStyle,
+  loadDensity, loadThemeMode, loadSkin, loadPalette, loadStylePreset,
   loadNeonGlow, applyNeonGlow, resolveAccentForSkin,
 } from "./theme/tweaks";
 import { motion } from "motion/react";
@@ -295,11 +295,17 @@ export default function App() {
   // re-read and its matchMedia listener re-armed. The controls live in
   // Settings → Тема and call apply*/save* imperatively; nothing to lift here.
   useEffect(() => {
-    const skin = loadSkin(getActiveId());
+    const id = getActiveId();
+    const skin = loadSkin(id);
+    const palette = loadPalette(id);
     applySkin(skin);
-    applyThemeMode(loadThemeMode(getActiveId()));
-    // Акцент ПОСЛЕ темы: applyAccent тема-зависим (light-вариант у nodeflow).
-    applyAccent(resolveAccentForSkin(skin));
+    // Оси дизайн-системы Axottle: палитра (blush/mint) и стиль (cloud/sharp) — атрибуты
+    // на <html>, как в панели. Ставятся ДО акцента: акцент палитры resolve берёт отсюда.
+    applyPalette(palette);
+    applyStyle(loadStylePreset(id));
+    applyThemeMode(loadThemeMode(id));
+    // Акцент ПОСЛЕ темы: applyAccent тема-зависим (light-вариант у nodeflow/axottle).
+    applyAccent(resolveAccentForSkin(skin, palette));
     applyDensity(loadDensity());
     applyNeonGlow(loadNeonGlow());
   }, []);

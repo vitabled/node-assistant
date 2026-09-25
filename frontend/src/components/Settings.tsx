@@ -3,10 +3,11 @@ import { Save, CheckCircle2, XCircle, Loader2, Wifi, Check, Sun, Moon, Monitor, 
 import { MultiSelect, type SelectOption } from "./MultiSelect";
 import { PanelRegistry } from "./common/PanelRegistry";
 import {
-  ACCENTS, THEME_MODES, SKINS, type AccentKey, type Density, type ThemeMode, type AppSkin,
-  applyAccent, applyDensity, applyThemeMode, applySkin,
-  loadAccent, loadDensity, loadThemeMode, loadSkin,
-  saveAccent, saveDensity, saveThemeMode, saveSkin,
+  ACCENTS, THEME_MODES, SKINS, PALETTES, STYLE_PRESETS,
+  type AccentKey, type Density, type ThemeMode, type AppSkin, type Palette, type StylePreset,
+  applyAccent, applyDensity, applyThemeMode, applySkin, applyPalette, applyStyle,
+  loadAccent, loadDensity, loadThemeMode, loadSkin, loadPalette, loadStylePreset,
+  saveAccent, saveDensity, saveThemeMode, saveSkin, savePalette, saveStylePreset,
   loadMotion, saveMotion, loadNeonGlow, saveNeonGlow, applyNeonGlow,
   resolveAccentForSkin,
 } from "../theme/tweaks";
@@ -601,6 +602,9 @@ export function ThemeTab() {
   const [mode, setMode]       = useState<ThemeMode>(() => loadThemeMode(accountId));
   const [accent, setAccent]   = useState<AccentKey>(loadAccent);
   const [density, setDensity] = useState<Density>(loadDensity);
+  // Оси дизайн-системы Axottle: палитра и стиль (как в панели — data-axo-palette / data-style).
+  const [palette, setPalette] = useState<Palette>(() => loadPalette(accountId));
+  const [stylePreset, setStylePreset] = useState<StylePreset>(() => loadStylePreset(accountId));
 
   const [motionOn, setMotionOn] = useState(loadMotion);
   const [glowOn, setGlowOn]     = useState(loadNeonGlow);
@@ -616,21 +620,30 @@ export function ThemeTab() {
 
   const pickSkin = (s: AppSkin) => {
     setSkin(s); applySkin(s); saveSkin(accountId, s);
-    // Дефолтный акцент скина (nodeflow → фирменный зелёный) применяется сразу,
+    // Дефолтный акцент скина (axottle → палитра, nodeflow → зелёный) применяется сразу,
     // но только если акцент не выбирался явно — saveAccent НЕ зовём, явный
     // выбор пользователя (ni_accent) остаётся главнее любого дефолта скина.
-    const a = resolveAccentForSkin(s);
+    const a = resolveAccentForSkin(s, palette);
     setAccent(a); applyAccent(a);
     mirror({ skin: s, accent: a });
   };
   const pickMode = (m: ThemeMode) => { setMode(m); applyThemeMode(m); saveThemeMode(accountId, m); mirror({ mode: m }); };
   const pickAccent = (a: AccentKey) => { setAccent(a); applyAccent(a); saveAccent(a); mirror({ accent: a }); };
   const pickDensity = (d: Density) => { setDensity(d); applyDensity(d); saveDensity(d); mirror({ density: d }); };
+  // Палитра панели несёт СВОЙ акцент (blush → #FC9CA1, mint → #34D8A8), поэтому смена
+  // палитры переприменяет акцент — но, как и у скина, только если он не выбран явно.
+  const pickPalette = (p: Palette) => {
+    setPalette(p); applyPalette(p); savePalette(accountId, p);
+    const a = resolveAccentForSkin(skin, p);
+    setAccent(a); applyAccent(a);
+    mirror({ accent: a });
+  };
+  const pickStylePreset = (s: StylePreset) => { setStylePreset(s); applyStyle(s); saveStylePreset(accountId, s); };
   const toggleMotion = (v: boolean) => { setMotionOn(v); saveMotion(v); mirror({ animations: v }); };
   const toggleGlow = (v: boolean) => { setGlowOn(v); applyNeonGlow(v); saveNeonGlow(v); mirror({ neon_glow: v }); };
 
   const SKIN_SUB: Record<AppSkin, string> = {
-    axottle: "Розовый акцент, Manrope/Unbounded, как в панели Axottle",
+    axottle: "Палитры blush/mint, акцент #FC9CA1, как в панели Axottle",
     apple: "Системный вид macOS/iOS",
     console: "Моноширинный, консольный",
     neon: "Неон, свечения и градиенты",
@@ -686,6 +699,62 @@ export function ThemeTab() {
           })}
         </div>
         <p className="hint">«Системная» следует настройке светлой/тёмной темы вашей ОС и переключается на лету.</p>
+      </div>
+
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Палитра (Axottle)</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
+          {PALETTES.map(p => {
+            const on = palette === p.key;
+            const a = ACCENTS[p.accent];
+            return (
+              <button key={p.key} onClick={() => pickPalette(p.key)}
+                className="card"
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "12px 12px", cursor: "pointer", textAlign: "left",
+                  borderColor: on ? "var(--accent-line)" : "var(--line-soft)",
+                  background: on ? "var(--accent-dim)" : "var(--bg2)",
+                  color: on ? "var(--accent-hi)" : "var(--t-mid)",
+                }}>
+                <span style={{ width: 18, height: 18, borderRadius: 6, background: a.base, flex: "none",
+                               boxShadow: "0 0 0 1px var(--line)" }} />
+                <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{p.label}</span>
+                  <span style={{ fontSize: 11, color: "var(--t-low)" }}>{a.base}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="hint">Две палитры панели Axottle. Палитра несёт свой акцент: blush — {ACCENTS.axottle.base}, mint — {ACCENTS.axomint.base} (в светлой теме — тёмные варианты).</p>
+      </div>
+
+      <div>
+        <p className="micro" style={{ marginBottom: 10 }}>Стиль (Axottle)</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
+          {STYLE_PRESETS.map(s => {
+            const on = stylePreset === s.key;
+            return (
+              <button key={s.key} onClick={() => pickStylePreset(s.key)}
+                className="card"
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
+                  padding: "14px 8px", cursor: "pointer", textAlign: "center",
+                  borderColor: on ? "var(--accent-line)" : "var(--line-soft)",
+                  background: on ? "var(--accent-dim)" : "var(--bg2)",
+                  color: on ? "var(--accent-hi)" : "var(--t-mid)",
+                }}>
+                <span style={{
+                  width: 34, height: 22, background: "var(--bg3)", border: "1px solid var(--line)",
+                  borderRadius: s.key === "cloud" ? 8 : 0,
+                }} />
+                <span style={{ fontSize: 12.5, fontWeight: 600 }}>{s.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="hint">«Cloud» — скругления и тени (по умолчанию в панели). «Sharp» — прямые углы без теней.</p>
       </div>
 
       <div>

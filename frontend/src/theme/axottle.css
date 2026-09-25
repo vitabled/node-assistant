@@ -1,14 +1,19 @@
 /* ════════════════════════════════════════════════════════════════════════════════
    Axottle design layer — скин `axottle` (data-skin="axottle" на :root).
 
-   Источник значений: публичный CSS сайта Axottle (/root/work/axottle_transfer/design/all.css,
-   298 753 байта, 5 таблиц) + design-system.md / tokens.json рядом с ним. Живой панели Axottle
-   у нас нет (релиз обфусцирован, установщик требует активации), поэтому это ЧТЕНИЕ CSS-правил,
-   а не измерение скриншота: у каждого блока ниже в комментарии указан селектор-источник.
+   Источник значений — ЖИВАЯ панель Axottle v1.8.3: развёрнута локально
+   (http://127.0.0.1:8123), значения сняты с её собственных CSS-чанков
+   (/_next/static/css/*.css, 255 КБ) скриптом extract_design.py. Разбор, таблицы
+   и скриншоты — /root/work/axottle_live/design/ + копия в frontend/docs/axottle/
+   (design-system.md, deploy-panel.md, tokens.json). Как панель поднята —
+   docs/axottle/deploy-panel.md. Ни одно число здесь не выдумано: у каждого блока
+   в комментарии указан селектор-источник.
 
    Из чего состоит файл:
-     A. --axo-*  — родные токены Axottle (для tailwind.config.ts и новых компонентов);
-     B. маппинг на существующие токены NA (--bg0…--r-lg) — так ВСЕ 204 компонента панели
+     A. --axo-*  — родные токены панели (для tailwind.config.ts и новых компонентов);
+     A2. тот же набор для светлой темы;  A3. вторая палитра панели (mint);
+     A4. ось стиля panel cloud/sharp (радиусы, тени, зазор);
+     B. маппинг на существующие токены NA (--bg0…--r-lg) — так ВСЕ компоненты панели
         получают дизайн Axottle без единой правки в TSX;
      C. структурные (тема-независимые) правила скина: шрифты, радиусы, геометрия контролов;
      D. перерисовка существующих классов NA (.btn/.input/.card/.tbl/.navitem/.ni-*) в язык Axottle;
@@ -16,128 +21,246 @@
         состояние, хлебные крошки, каркас сайдбар/топбар, прогресс);
      F. адаптация под мобилу и reduced-motion.
 
-   ⚠️ Расхождения с сырыми hex Axottle — ТОЛЬКО там, где свой гейт контраста NA
-   (src/theme/contrast.test.ts) требует ≥4.5:1 для четырёх «чернильных» токенов на bg1/bg2/bg3.
-   Измерено: Axottle --faint #6a7770 = 3.62 на #171d25 (не проходит), поэтому в --t-faint взят
-   #7a8a80 того же оттенка = 4.66. Светлая тема: customer faint #ac9ca4 = 2.1 на paper — взят
-   #746270 = 4.85 вместо него. Полный список в tokens.json → na_mapping.
+   ⚠️ Расхождения с сырыми hex панели — ТОЛЬКО там, где свой гейт контраста NA
+   (src/theme/contrast.test.ts) требует ≥4.5:1 для четырёх чернильных токенов на bg1/bg2/bg3,
+   а панель гейта не держит. Поднят ровно --faint (и добавлен четвёртый тон --axo-text-low,
+   которого в панели нет — у неё три чернильных токена против четырёх у NA):
+     blush dark  #776C6C → #8E8080 (3.67 → 4.69)   · blush light #9A8B8B → #7C6C6C (3.26 → 4.63)
+     mint  dark  #6A7770 → #8A9893 (3.66 → 5.70)   · mint  light #8A9893 → #65736D (2.85 → 4.52)
    ════════════════════════════════════════════════════════════════════════════════ */
 
-/* ════════ A. Родные токены Axottle — тёмная панель ════════
-   Источники: .platform-shell{background:#08090a;color:#eaf1ed}, .platform-sidebar{background:#0d1014},
-   .platform-card{background:#11161d;border:1px solid #1e2632}, .data-table-head{background:#141a21},
-   .platform-status{background:#171d25;border-color:#2a343f}, .axo-canvas{background-color:#0b0f14},
-   .platform-button{background:#f3a7c5;color:#241018}, .axo-block-node{color:#34d8a8}.
+/* ════════ A. Родные токены Axottle — СНЯТО С ЖИВОЙ ПАНЕЛИ v1.8.3 ════════
+   Источник: локально развёрнутая панель Axottle v1.8.3 (http://127.0.0.1:8123),
+   её собственные CSS-чанки /_next/static/css/*.css (255 КБ, 2 файла).
+   Значения — 1:1. Как панель поднята и как пересобрать этот разбор:
+   /root/work/axottle_live/design/deploy_panel.md, extract_design.py, tokens.json.
 
-   Лежат на голом `:root`, а не на `[data-skin="axottle"]`, намеренно: кит .axo-* должен работать
-   и после переключения на один из прежних скинов, а палитру ему всё равно подменяет блок ниже.
-   ⚠️ Этот файл greps-тест контраста (src/theme/contrast.test.ts) НЕ читает — он смотрит только
-   src/index.css, поэтому добавление `:root{` здесь гейт не задевает. */
+   Панель держит оформление ЧЕТЫРЬМЯ наборами: палитра (blush|mint) × режим (light|dark),
+   плюс ось стиля (cloud|sharp) — радиусы и тени. Здесь A = blush · dark (дефолт панели).
+
+   Блок лежит на голом `:root`, а НЕ на [data-skin="axottle"], намеренно: кит .axo-* должен
+   работать и после переключения на прежние скины, а палитру ему всё равно подменяют
+   блоки A2/B/B2 и ось палитры ниже.
+
+   ⚠️ Расхождения с сырым hex панели — ТОЛЬКО там, где наш гейт контраста
+   (src/theme/contrast.test.ts) требует ≥4.5:1 для ЧЕТЫРЁХ чернильных токенов на bg1/bg2/bg3,
+   а панель гейта не имеет: её --axo-text-faint #776C6C даёт 3.67:1. Такие места помечены
+   «NA AA» с измеренным числом. Всё остальное — как в панели.
+   ═══════════════════════════════════════════════════════════════════════════ */
 :root{
-  --axo-bg:#08090a;
-  --axo-sidebar:#0d1014;
-  --axo-surface:#11161d;
-  --axo-surface-raised:#171d25;
-  --axo-surface-table-head:#141a21;
-  --axo-surface-empty:#0e1217;
-  --axo-canvas:#0b0f14;
-  --axo-canvas-dot:#252e3a;
-  --axo-line:#1e2632;
-  --axo-line-hairline:#202933;
-  --axo-line-strong:#2a3541;
-  --axo-text:#eaf1ed;
-  --axo-muted:#9aa8a2;
-  --axo-faint:#7a8a80;
-  --axo-accent:#f3a7c5;
-  --axo-accent-soft:rgba(243,167,197,.075);
-  --axo-accent-soft-strong:rgba(243,167,197,.18);
-  --axo-accent-ink:#241018;
-  --axo-ok:#34d8a8;
-  --axo-warn:#f0b35a;
-  --axo-bad:#ff6b6b;
-  --axo-info:#77bdea;
-  --axo-mono:'Google Sans Code',ui-monospace,SFMono-Regular,Menlo,monospace;
-  --axo-sans:'Manrope',system-ui,-apple-system,'Segoe UI',sans-serif;
-  --axo-display:'Unbounded','Manrope',system-ui,sans-serif;
-  /* Радиусы: кнопка 11-13 · инпут 10-14 · карточка 18 · диалог 20 · плитка иконки 17 · пилюля 999 */
-  --axo-r-xs:5px; --axo-r-sm:8px; --axo-r-md:11px; --axo-r-lg:18px; --axo-r-pill:999px;
-  /* Тени: focus ring / карточка / панель / узел / поповер / тост / диалог */
-  --axo-ring:0 0 0 3px rgba(243,167,197,.09);
-  --axo-shadow-card:0 12px 32px rgba(0,0,0,.13);
-  --axo-shadow-pop:0 4px 16px #00000059;
-  --axo-shadow-toast:0 12px 34px rgba(0,0,0,.5);
-  --axo-shadow-dialog:0 30px 100px rgba(0,0,0,.55);
-  --axo-shadow-panel:0 12px 40px rgba(0,0,0,.34);
-  /* Кривые и тайминги: cubic-bezier(.22,1,.36,1) — фирменная кривая входа карточек/прогресса */
+  /* surfaces · [data-axo-new][data-axo-mode=dark] · сама панель: --axo-bg/-bg-elev/-surface/-2/-3 */
+  --axo-bg:#0A0708;
+  --axo-bg-elev:#100C0D;
+  --axo-sidebar:#100C0D;              /* панель сайдбар = bg-elev (отдельного токена нет) */
+  --axo-surface:#181113;
+  --axo-surface-2:#1E1618;
+  --axo-surface-3:#251B1E;
+  --axo-surface-raised:#1E1618;       /* NA: hover/raised → панельный surface-2 */
+  --axo-surface-table-head:#1E1618;   /* отдельного токена в панели нет → surface-2 */
+  --axo-surface-empty:#181113;
+  --axo-canvas:#181113;               /* холст Flow Studio: панель = surface */
+  --axo-canvas-dot:#35272A;           /* сетка холста: панель = border-strong */
+  /* lines · [data-axo-new]{--axo-border/-border-strong}; hairline — рецепт самой панели
+     `1px solid color-mix(in srgb, var(--axo-text) 8%, transparent)` */
+  --axo-line:#281D20;
+  --axo-line-hairline:rgba(242,235,235,.08);
+  --axo-line-strong:#35272A;
+  --axo-logo-bg:#241A1C;              /* dark · --axo-logo-bg */
+  --axo-logo-border:#3A2B2E;
+  /* ink · панель: --axo-text / -text-muted / -text-faint. --axo-text-low — НАШЕ дополнение:
+     у NA четыре чернильных токена (--t-hi/-mid/-low/-faint) против трёх в панели. */
+  --axo-text:#F2EBEB;
+  --axo-muted:#A99C9C;
+  --axo-text-low:#968888;
+  --axo-faint:#8E8080;                /* NA AA: панель #776C6C = 3.67:1 → 4.69:1 на bg3 */
+  --axo-text-inverse:#F2EBEB;
+  /* accent · [data-axo-new][data-axo-mode=dark]: accent/accent-hover/accent-soft/accent-text */
+  --axo-accent:#FC9CA1;
+  --axo-accent-hover:#FFB4B8;
+  --axo-accent-soft:rgba(252,156,161,.14);
+  --axo-accent-soft-strong:rgba(252,156,161,.22);
+  --axo-accent-ink:#2A0E10;
+  /* status · панель: --axo-status-ok/warn/crit/info/mute + парные -soft */
+  --axo-ok:#3FCB8E;   --axo-ok-soft:rgba(63,203,142,.14);
+  --axo-warn:#F1B748; --axo-warn-soft:rgba(241,183,72,.14);
+  --axo-bad:#F97A45;  --axo-bad-soft:rgba(249,122,69,.16);
+  --axo-info:#6BB7F1; --axo-info-soft:rgba(107,183,241,.14);
+  --axo-mute:#776C6C; --axo-mute-soft:rgba(169,156,156,.10);
+  --axo-bad-ink:#2A0E0A;              /* --axo-status-crit-text */
+  /* границы статусных чипов: панель рисует `border-<status>/30…40` от того же цвета */
+  --axo-ok-line:rgba(63,203,142,.3);
+  --axo-warn-line:rgba(241,183,72,.3);
+  --axo-bad-line:rgba(249,122,69,.34);
+  /* charts · [data-axo-support] + dark-переопределение */
+  --axo-chart-1:#199E70; --axo-chart-2:#3987E5; --axo-chart-3:#C98500;
+  --axo-chart-4:#9085E9; --axo-chart-5:#E66767; --axo-chart-6:#D95926;
+  --axo-chart-track:var(--axo-surface-3);
+  --axo-chart-grid:var(--axo-line);
+  /* type · [data-axo-new]{--axo-font-sans/--axo-font-mono}; вордмарк — "Cause" 27px/600/-.045em */
+  --axo-sans:'Google Sans','Inter','Manrope','Geist',ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --axo-mono:'Google Sans Code','JetBrains Mono','Geist Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --axo-display:var(--axo-sans);      /* в панели заголовки — sans semibold tracking-tight */
+  --axo-brand:'Cause','Avenir Next',var(--axo-sans),sans-serif;
+  /* radii · панель: --axo-radius-xs/sm/md/lg/xl/2xl/pill (8/12/16/20/24/28/999).
+     Здесь — по РЕАЛЬНЫМ рецептам панели: чип 8, кнопка/поле 12–14, карточка (.axo-card = radius-xl) 24. */
+  --axo-r-xs:8px;
+  --axo-r-sm:12px;
+  --axo-r-md:14px;
+  --axo-r-lg:24px;
+  --axo-r-2xl:28px;
+  --axo-r-pill:999px;
+  /* родные имена панели + токены оси стиля (cloud/sharp) */
+  --axo-radius-xs:8px;  --axo-radius-sm:12px; --axo-radius-md:16px;
+  --axo-radius-lg:20px; --axo-radius-xl:24px; --axo-radius-2xl:28px; --axo-radius-pill:999px;
+  --axo-radius-card:20px; --axo-radius-btn:12px; --axo-radius-input:12px; --axo-radius-panel:24px;
+  --axo-style-gap:12px;
+  /* shadows · панель (dark): sm/md/lg/xl/glow/accent-hover */
+  --axo-shadow-sm:0 1px 2px rgba(0,0,0,.3);
+  --axo-shadow-md:0 4px 16px rgba(0,0,0,.35),0 1px 2px rgba(0,0,0,.25);
+  --axo-shadow-lg:0 12px 40px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.3);
+  --axo-shadow-xl:0 24px 64px rgba(0,0,0,.55);
+  --axo-shadow-glow:0 0 0 4px rgba(252,156,161,.18);
+  --axo-shadow-accent-hover:0 6px 18px rgba(252,156,161,.20);
+  --axo-ring:var(--axo-shadow-glow);
+  --axo-shadow-card:var(--axo-shadow-sm);
+  --axo-shadow-pop:var(--axo-shadow-md);
+  --axo-shadow-toast:var(--axo-shadow-lg);
+  --axo-shadow-dialog:var(--axo-shadow-xl);
+  --axo-shadow-panel:var(--axo-shadow-lg);
+  /* motion · --axo-ease / --axo-ease-out панели; длительности из её переходов (.15/.18/.2/.3/.5) */
   --axo-ease:cubic-bezier(.22,1,.36,1);
+  --axo-ease-out:cubic-bezier(.16,1,.3,1);
   --axo-t-fast:.15s; --axo-t-base:.2s; --axo-t-card:.45s;
   --axo-content:1400px;
 }
 
+/* ════════ A2. Тот же набор — СВЕТЛАЯ тема (blush · light) ════════
+   Источник: [data-axo-new]{--axo-bg:#FBF4F4; --axo-surface:#FFFFFF; --axo-accent:#C82C3C; …}.
+   Блок висит на :root[data-theme="light"] (а не на скине), чтобы кит .axo-* оставался
+   консистентным и на прежних светлых скинах. */
+:root[data-theme="light"]{
+  --axo-bg:#FBF4F4;
+  --axo-bg-elev:#FDFBFB;
+  --axo-sidebar:#FDFBFB;
+  --axo-surface:#FFFFFF;
+  --axo-surface-2:#FCF5F5;
+  --axo-surface-3:#F7EBEB;
+  --axo-surface-raised:#FCF5F5;
+  --axo-surface-table-head:#FCF5F5;
+  --axo-surface-empty:#FFFFFF;
+  --axo-canvas:#FFFFFF;
+  --axo-canvas-dot:#E3CCCC;
+  --axo-line:#F2E3E3;
+  --axo-line-hairline:rgba(26,19,19,.08);
+  --axo-line-strong:#E3CCCC;
+  --axo-logo-bg:#FBF3F3;
+  --axo-logo-border:#E8D6D6;
+  --axo-text:#1A1313;
+  --axo-muted:#6B5B5B;
+  --axo-text-low:#746464;
+  --axo-faint:#7C6C6C;                /* NA AA: панель #9A8B8B = 3.26:1 → 4.63:1 на bg3 */
+  --axo-text-inverse:#FDF5F5;
+  --axo-accent:#C82C3C;
+  --axo-accent-hover:#AC2433;
+  --axo-accent-soft:#FDECEE;
+  --axo-accent-soft-strong:rgba(200,44,60,.18);
+  --axo-accent-ink:#FFFFFF;
+  --axo-ok:#0E7A52;   --axo-ok-soft:#DDF2E8;   --axo-ok-line:rgba(14,122,82,.3);
+  --axo-warn:#8A5F05; --axo-warn-soft:#FAEDCD; --axo-warn-line:rgba(138,95,5,.3);
+  --axo-bad:#AF4519;  --axo-bad-soft:#FBE7DC;  --axo-bad-line:rgba(175,69,25,.3);
+  --axo-info:#2264A8; --axo-info-soft:#DAEAF7;
+  --axo-mute:#9A8B8B; --axo-mute-soft:#F0EAEA;
+  --axo-bad-ink:#FFFFFF;
+  --axo-chart-1:#0E8E72; --axo-chart-2:#2A78D6; --axo-chart-3:#EDA100;
+  --axo-chart-4:#6B4FD8; --axo-chart-5:#E34948; --axo-chart-6:#EB6834;
+  --axo-shadow-sm:0 1px 2px rgba(26,19,19,.04),0 1px 1px rgba(26,19,19,.03);
+  --axo-shadow-md:0 4px 16px rgba(26,19,19,.05),0 1px 2px rgba(26,19,19,.03);
+  --axo-shadow-lg:0 12px 40px rgba(26,19,19,.08),0 2px 6px rgba(26,19,19,.04);
+  --axo-shadow-xl:0 24px 64px rgba(26,19,19,.12);
+  --axo-shadow-glow:0 0 0 4px rgba(200,44,60,.12);
+  --axo-shadow-accent-hover:0 6px 18px rgba(200,44,60,.24);
+}
+
+/* ════════ A3. Ось ПАЛИТРЫ: mint (вторая палитра панели) ════════
+   Панель: [data-axo-palette=mint]. Перекрываем только РОДНЫЕ токены — блоки B/B2 читают их
+   через var(), поэтому маппинг на имена NA подхватывает палитру автоматически. */
+:root[data-skin="axottle"][data-palette="mint"]:not([data-theme="light"]){
+  --axo-bg:#07090C; --axo-bg-elev:#0B0F14; --axo-sidebar:#0B0F14;
+  --axo-surface:#11161D; --axo-surface-2:#161C25; --axo-surface-3:#1C2330;
+  --axo-surface-raised:#161C25; --axo-surface-table-head:#161C25; --axo-surface-empty:#11161D;
+  --axo-canvas:#11161D; --axo-canvas-dot:#2A3340;
+  --axo-line:#1E2632; --axo-line-hairline:rgba(234,241,237,.08); --axo-line-strong:#2A3340;
+  --axo-logo-bg:#1A2029; --axo-logo-border:#313B48;
+  --axo-text:#EAF1ED; --axo-muted:#9AA8A2; --axo-text-low:#93A19B; --axo-faint:#8A9893;
+  --axo-accent:#34D8A8; --axo-accent-hover:#5BE5B7;
+  --axo-accent-soft:rgba(52,216,168,.12); --axo-accent-soft-strong:rgba(52,216,168,.2);
+  --axo-accent-ink:#06120E;
+  --axo-ok:#34D8A8; --axo-ok-soft:rgba(52,216,168,.14);
+  --axo-shadow-glow:0 0 0 4px rgba(52,216,168,.18);
+  --axo-shadow-accent-hover:0 6px 18px rgba(52,216,168,.22);
+}
+:root[data-skin="axottle"][data-palette="mint"][data-theme="light"]{
+  --axo-bg:#F1F6F4; --axo-bg-elev:#FBFCFC; --axo-sidebar:#FBFCFC;
+  --axo-surface:#FFFFFF; --axo-surface-2:#F6FAF8; --axo-surface-3:#EEF4F1;
+  --axo-surface-raised:#F6FAF8; --axo-surface-table-head:#F6FAF8; --axo-surface-empty:#FFFFFF;
+  --axo-canvas:#FFFFFF; --axo-canvas-dot:#CFDBD4;
+  --axo-line:#E3ECE7; --axo-line-hairline:rgba(15,26,22,.08); --axo-line-strong:#CFDBD4;
+  --axo-logo-bg:#F3F6F5; --axo-logo-border:#D8E1DC;
+  --axo-text:#0F1A16; --axo-muted:#5B6B65; --axo-text-low:#616F69; --axo-faint:#65736D;
+  --axo-accent:#0E8E72; --axo-accent-hover:#0B7861;
+  --axo-accent-soft:#DCEFE7; --axo-accent-soft-strong:rgba(14,142,114,.18);
+  --axo-accent-ink:#FFFFFF;
+  --axo-ok:#16A07A; --axo-ok-soft:#DCEFE7;
+  --axo-shadow-glow:0 0 0 4px rgba(14,142,114,.12);
+  --axo-shadow-accent-hover:0 6px 18px rgba(14,142,114,.25);
+}
+
+/* ════════ A4. Ось СТИЛЯ: cloud (дефолт) / sharp ════════
+   Панель: [data-style=cloud]{--radius-card:1.25rem;--radius-btn:.75rem;--radius-input:.75rem;
+   --radius-panel:1.5rem;--panel-gap:.75rem} и [data-style=sharp]{--radius-panel:0;
+   --shadow-panel:none;--panel-gap:0}. */
+:root[data-style="cloud"]{
+  --axo-radius-card:20px; --axo-radius-btn:12px; --axo-radius-input:12px;
+  --axo-radius-panel:24px; --axo-style-gap:12px;
+  --axo-shadow-panel:var(--axo-shadow-lg);
+}
+:root[data-style="sharp"]{
+  --axo-r-xs:0px; --axo-r-sm:0px; --axo-r-md:0px; --axo-r-lg:0px; --axo-r-2xl:0px;
+  --axo-radius-card:0px; --axo-radius-btn:0px; --axo-radius-input:0px; --axo-radius-panel:0px;
+  --axo-style-gap:0px; --axo-shadow-panel:none; --axo-shadow-card:none;
+}
+
 /* ════════ B. Маппинг на токены NA — ТЁМНАЯ тема ════════
-   Селектор намеренно `:not([data-theme="light"])` (специфичность 0,3,0) — так он перебивает
-   палитры соседних скинов и не зависит от порядка блоков в index.css. */
+   Все значения — ссылки на родные токены, поэтому палитра (blush/mint) и стиль (cloud/sharp)
+   подменяют всю панель одной переменной. Селектор намеренно `:not([data-theme="light"])`
+   (специфичность 0,3,0) — так он перебивает палитры соседних скинов независимо от порядка. */
 :root[data-skin="axottle"]:not([data-theme="light"]){
-  --bg0:var(--axo-bg);          /* #08090a  app canvas      */
-  --bg1:var(--axo-sidebar);     /* #0d1014  sidebar/topbar  */
-  --bg2:var(--axo-surface);     /* #11161d  cards, inputs   */
-  --bg3:var(--axo-surface-raised); /* #171d25  hover/raised  */
+  --bg0:var(--axo-bg);              /* #0A0708  app canvas  */
+  --bg1:var(--axo-sidebar);         /* #100C0D  sidebar/topbar */
+  --bg2:var(--axo-surface);         /* #181113  cards, inputs  */
+  --bg3:var(--axo-surface-raised);  /* #1E1618  hover/raised   */
   --line:var(--axo-line);
   --line-soft:var(--axo-line-hairline);
   --line-strong:var(--axo-line-strong);
   --t-hi:var(--axo-text);
   --t-mid:var(--axo-muted);
-  --t-low:#8e9a94;              /* .platform-nav a{color:#8e9a94} — 6.23 на bg2 */
+  --t-low:var(--axo-text-low);
   --t-faint:var(--axo-faint);
-  --ok:#34d8a8;   --ok-dim:rgba(52,216,168,.1);    --ok-line:rgba(52,216,168,.2);
-  --warn:#f0b35a; --warn-dim:rgba(240,179,90,.1);  --warn-line:rgba(240,179,90,.2);
-  --err:#ff6b6b;  --err-dim:rgba(255,107,107,.1);  --err-line:rgba(255,107,107,.34);
-  --raised:rgba(255,255,255,.02);
+  --ok:var(--axo-ok);     --ok-dim:var(--axo-ok-soft);   --ok-line:var(--axo-ok-line);
+  --warn:var(--axo-warn); --warn-dim:var(--axo-warn-soft); --warn-line:var(--axo-warn-line);
+  --err:var(--axo-bad);   --err-dim:var(--axo-bad-soft); --err-line:var(--axo-bad-line);
+  --raised:var(--axo-surface-raised);
   --row-hover:var(--axo-surface-raised);
-  --overlay:rgba(0,0,0,.7);     /* .platform-dialog-layer{background:rgba(0,0,0,.7)} */
-  --topbar-bg:rgba(8,9,10,.88); /* .platform-topbar{background:rgba(8,9,10,.88)} */
+  --overlay:rgba(10,7,8,.72);          /* диалог панели: подложка ~72 % */
+  --topbar-bg:var(--axo-bg-elev);
   --sidebar-bg:var(--axo-sidebar);
-  --scroll-thumb:#2a3541;
-  --glass-blur:20px;            /* .platform-topbar{backdrop-filter:blur(20px)} */
+  --scroll-thumb:var(--axo-line-strong);
+  --glass-blur:20px;                   /* панель: backdrop blur(20px) на верхней панели */
   --shadow-pop:var(--axo-shadow-pop);
   --shadow-modal:var(--axo-shadow-dialog);
   --nav-active-bg:var(--axo-accent-soft);
   --nav-active-fg:var(--accent);
   --row-py:10px; --card-p:18px; --ctl-py:10px; --nav-py:11px;
-}
-
-/* ════════ A2. Родные токены Axottle — светлая «бумажная» тема (клиентский слой) ════════
-   Источник: .platform-customer{--customer-ink:#241a20;--customer-canvas:#f6f1f3;--customer-paper:#fffafb;
-   --customer-line:#eadfe4;--customer-line-strong:#d9c8d0;--customer-olive:#8f4968}. */
-:root[data-theme="light"]{
-  --axo-bg:#f6f1f3;
-  --axo-sidebar:#fffafb;
-  --axo-surface:#fffafb;
-  --axo-surface-raised:#efe7ea;
-  --axo-surface-table-head:#f6f1f3;
-  --axo-surface-empty:#fffafb;
-  --axo-canvas:#f6f1f3;
-  --axo-canvas-dot:#e0d3d9;
-  --axo-line:#eadfe4;
-  --axo-line-hairline:#efe6ea;
-  --axo-line-strong:#d9c8d0;
-  --axo-text:#241a20;
-  --axo-muted:#5b4751;
-  --axo-faint:#746270;
-  --axo-accent:#8f4968;
-  --axo-accent-soft:rgba(143,73,104,.08);
-  --axo-accent-soft-strong:rgba(143,73,104,.18);
-  --axo-accent-ink:#ffffff;
-  --axo-ok:#457d10;
-  --axo-warn:#8a6f1c;
-  --axo-bad:#a8463f;
-  --axo-info:#8f4968;
-  --axo-ring:0 0 0 3px rgba(143,73,104,.1);
-  --axo-shadow-card:0 1px 2px rgba(0,0,0,.05);
-  --axo-shadow-pop:0 12px 34px rgba(0,0,0,.14);
-  --axo-shadow-toast:0 12px 34px rgba(0,0,0,.14);
-  --axo-shadow-dialog:0 24px 70px rgba(28,31,24,.22);
-  --axo-shadow-panel:0 12px 40px rgba(28,31,24,.16);
 }
 
 /* ════════ B2. Маппинг на токены NA — СВЕТЛАЯ тема ════════ */
@@ -151,18 +274,18 @@
   --line-strong:var(--axo-line-strong);
   --t-hi:var(--axo-text);
   --t-mid:var(--axo-muted);
-  --t-low:#6f5c66;
+  --t-low:var(--axo-text-low);
   --t-faint:var(--axo-faint);
-  --ok:#457d10;   --ok-dim:rgba(69,125,16,.12);   --ok-line:rgba(69,125,16,.3);
-  --warn:#8a6f1c; --warn-dim:rgba(138,111,28,.12); --warn-line:rgba(138,111,28,.3);
-  --err:#a8463f;  --err-dim:rgba(168,70,63,.1);   --err-line:rgba(168,70,63,.3);
-  --raised:#fffafb;
+  --ok:var(--axo-ok);     --ok-dim:var(--axo-ok-soft);   --ok-line:var(--axo-ok-line);
+  --warn:var(--axo-warn); --warn-dim:var(--axo-warn-soft); --warn-line:var(--axo-warn-line);
+  --err:var(--axo-bad);   --err-dim:var(--axo-bad-soft); --err-line:var(--axo-bad-line);
+  --raised:var(--axo-surface-raised);
   --row-hover:var(--axo-surface-raised);
-  --overlay:rgba(36,26,32,.34);
-  --topbar-bg:rgba(255,250,251,.9);
+  --overlay:rgba(26,19,19,.34);
+  --topbar-bg:rgba(253,251,251,.9);
   --sidebar-bg:var(--axo-sidebar);
-  --term-bg:#1C1C1E;
-  --scroll-thumb:rgba(36,26,32,.24);
+  --term-bg:#1C1C1E;                   /* терминал остаётся тёмным в обеих темах */
+  --scroll-thumb:var(--axo-line-strong);
   --glass-blur:18px;
   --shadow-pop:var(--axo-shadow-pop);
   --shadow-modal:var(--axo-shadow-dialog);
@@ -190,9 +313,11 @@
 }
 /* Моно-мета: .data-table-head / .platform-status / .axo-canvas-count — капс + tracking .12em */
 :root[data-skin="axottle"] .micro{ letter-spacing:.13em }
-/* Фокус-кольцо Axottle: 0 0 0 3px rgba(243,167,197,.09) — единое для всего скина */
+/* Фокус-кольцо панели: не обводка, а свечение `0 0 0 4px accent/18%`
+   ([data-axo-new] .axo-focus-ring:focus-visible{outline:none;box-shadow:var(--axo-shadow-glow)}).
+   Кольцо остаётся видимым для клавиатуры — это тот же приём, что в панели, просто тенью. */
 :root[data-skin="axottle"] :focus-visible{
-  outline:2px solid var(--accent-line); outline-offset:1px;
+  outline:none; box-shadow:var(--axo-ring);
 }
 :root[data-skin="axottle"] ::selection{
   background:var(--axo-accent-soft-strong); color:var(--t-hi);

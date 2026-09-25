@@ -50,6 +50,11 @@ function block(selector: string): Record<string, string> {
 // поэтому одного регулярного выражения на hex мало: var(--x) разворачивается по
 // картам :root / :root[data-theme="light"] того же файла. Иначе гейт молча мерил бы
 // ЧУЖУЮ палитру (значения из console-dark по каскаду) и был бы зелёным неправдой.
+//
+// ⚠️ Комментарии снимаются ДО разбора: в axottle.css есть пояснения вида
+// `/* .platform-nav a{color:#8e9a94} */`, и поиск конца блока по первому `}` обрывал
+// разбор на этом комментарии — половина токенов палитры не попадала в замер
+// (поймано собственным тестом «NA-маппинг совпадает с --axo-*»).
 const AXO_CSS = readFileSync(resolve(process.cwd(), "src/theme/axottle.css"), "utf8")
   .replace(/\/\*[\s\S]*?\*\//g, "");
 
@@ -117,6 +122,14 @@ const remnawaveLight = { ...consoleLight, ...block(':root[data-skin="remnawave"]
 // Axottle — шестой скин и дефолт приложения; палитра в src/theme/axottle.css (§7 плана).
 const axottleDark = { ...consoleDark, ...axoMapped(':root[data-skin="axottle"]:not([data-theme="light"])', AXO_DARK) };
 const axottleLight = { ...consoleLight, ...axoMapped(':root[data-skin="axottle"][data-theme="light"]', AXO_LIGHT) };
+// Вторая палитра панели (data-palette="mint"). Блоки оси палитры перекрывают ТОЛЬКО родные
+// токены --axo-*, а маппинг на имена NA читает их через var() — поэтому палитра собирается
+// в два шага: (1) родные токены mint поверх blush, (2) тот же маппинг поверх НИХ. Иначе гейт
+// мерил бы blush под именем mint и «проходил» бы по чужим числам.
+const MINT_DARK = axoVars(':root[data-skin="axottle"][data-palette="mint"]:not([data-theme="light"])', AXO_DARK);
+const MINT_LIGHT = axoVars(':root[data-skin="axottle"][data-palette="mint"][data-theme="light"]', AXO_LIGHT);
+const axottleMintDark = { ...consoleDark, ...axoVars(':root[data-skin="axottle"]:not([data-theme="light"])', MINT_DARK) };
+const axottleMintLight = { ...consoleLight, ...axoVars(':root[data-skin="axottle"][data-theme="light"]', MINT_LIGHT) };
 
 const PALETTES: Record<string, Record<string, string>> = {
   "console-dark": consoleDark,
@@ -130,6 +143,8 @@ const PALETTES: Record<string, Record<string, string>> = {
   "remnawave-light": remnawaveLight,
   "axottle-dark": axottleDark,
   "axottle-light": axottleLight,
+  "axottle-mint-dark": axottleMintDark,
+  "axottle-mint-light": axottleMintLight,
 };
 
 const INKS = ["--t-faint", "--t-low", "--t-mid", "--t-hi"];
