@@ -50,7 +50,8 @@ function block(selector: string): Record<string, string> {
 // поэтому одного регулярного выражения на hex мало: var(--x) разворачивается по
 // картам :root / :root[data-theme="light"] того же файла. Иначе гейт молча мерил бы
 // ЧУЖУЮ палитру (значения из console-dark по каскаду) и был бы зелёным неправдой.
-const AXO_CSS = readFileSync(resolve(process.cwd(), "src/theme/axottle.css"), "utf8");
+const AXO_CSS = readFileSync(resolve(process.cwd(), "src/theme/axottle.css"), "utf8")
+  .replace(/\/\*[\s\S]*?\*\//g, "");
 
 function resolveHex(value: string, vars: Record<string, string>): string | undefined {
   const v = value.trim();
@@ -61,21 +62,42 @@ function resolveHex(value: string, vars: Record<string, string>): string | undef
   return next ? resolveHex(next, vars) : undefined;
 }
 
-/** Карта токенов по ВСЕМ блокам с этим селектором: палитра может быть разложена на
- *  несколько `:root{}` (в файле так и есть), и читать только первый блок — ошибка. */
-function axoVars(selector: string, base: Record<string, string> = {}): Record<string, string> {
-  const out: Record<string, string> = { ...base };
+/** Сырые объявления токенов (имя + значение) по ВСЕМ блокам с этим селектором.
+ *  Палитра разложена на несколько `:root{}` — читать только первый блок ошибка. */
+function axoDeclarations(selector: string): [string, string][] {
+  const out: [string, string][] = [];
   let from = 0;
   for (;;) {
     const i = AXO_CSS.indexOf(selector + "{", from);
     if (i < 0) return out;
     const end = AXO_CSS.indexOf("}", i);
     for (const m of AXO_CSS.slice(i + selector.length + 1, end).matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
-      const hex = resolveHex(m[2], out);
-      if (hex) out[m[1]] = hex;
+      out.push([m[1], m[2]]);
     }
     from = end + 1;
   }
+}
+
+/** Токены блоков: var(--x) разворачивается по `base` и по уже собранному в этом вызове. */
+function axoVars(selector: string, base: Record<string, string> = {}): Record<string, string> {
+  const out: Record<string, string> = { ...base };
+  for (const [k, raw] of axoDeclarations(selector)) {
+    const hex = resolveHex(raw, out);
+    if (hex) out[k] = hex;
+  }
+  return out;
+}
+
+/** Только то, что ОБЪЯВЛЕНО в блоках селектора, с разворотом var() по `vars`.
+ *  Строгая версия axoVars: ключ, которого в блоке нет, остаётся отсутствующим —
+ *  иначе сравнение с палитрой прошло бы по подставленному base. */
+function axoMapped(selector: string, vars: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, raw] of axoDeclarations(selector)) {
+    const hex = resolveHex(raw, vars);
+    if (hex) out[k] = hex;
+  }
+  return out;
 }
 
 const AXO_DARK = axoVars(":root", {});
@@ -93,8 +115,8 @@ const nodeflowLight = { ...consoleLight, ...block(':root[data-skin="nodeflow"][d
 const remnawaveDark = { ...consoleDark, ...block(':root[data-skin="remnawave"]:not([data-theme="light"])') };
 const remnawaveLight = { ...consoleLight, ...block(':root[data-skin="remnawave"][data-theme="light"]') };
 // Axottle — шестой скин и дефолт приложения; палитра в src/theme/axottle.css (§7 плана).
-const axottleDark = { ...consoleDark, ...axoVars(':root[data-skin="axottle"]:not([data-theme="light"])') };
-const axottleLight = { ...consoleLight, ...axoVars(':root[data-skin="axottle"][data-theme="light"]') };
+const axottleDark = { ...consoleDark, ...axoMapped(':root[data-skin="axottle"]:not([data-theme="light"])', AXO_DARK) };
+const axottleLight = { ...consoleLight, ...axoMapped(':root[data-skin="axottle"][data-theme="light"]', AXO_LIGHT) };
 
 const PALETTES: Record<string, Record<string, string>> = {
   "console-dark": consoleDark,
@@ -280,7 +302,7 @@ describe("axottle: NA-маппинг совпадает с токенами --ax
   ];
 
   it("тёмная тема", () => {
-    const mapped = axoVars(':root[data-skin="axottle"]:not([data-theme="light"])');
+    const mapped = axoMapped(':root[data-skin="axottle"]:not([data-theme="light"])', AXO_DARK);
     const mismatched = PAIRS
       .filter(([na, axo]) => mapped[na] !== AXO_DARK[axo])
       .map(([na, axo]) => `${na}=${mapped[na]} ≠ ${axo}=${AXO_DARK[axo]}`);
@@ -288,7 +310,7 @@ describe("axottle: NA-маппинг совпадает с токенами --ax
   });
 
   it("светлая тема", () => {
-    const mapped = axoVars(':root[data-skin="axottle"][data-theme="light"]');
+    const mapped = axoMapped(':root[data-skin="axottle"][data-theme="light"]', AXO_LIGHT);
     const mismatched = PAIRS
       .filter(([na, axo]) => mapped[na] !== AXO_LIGHT[axo])
       .map(([na, axo]) => `${na}=${mapped[na]} ≠ ${axo}=${AXO_LIGHT[axo]}`);
