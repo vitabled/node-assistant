@@ -9,6 +9,7 @@ from app.api import (
     auth,
     deploy,
     deploy_jobs,
+    deploy_jobs_sync,
     certs,
     ws,
     stats,
@@ -161,6 +162,7 @@ app.include_router(auth.router)
 _auth = [Depends(require_account)]
 app.include_router(deploy.router, dependencies=_auth)
 app.include_router(deploy_jobs.router, dependencies=_auth)
+app.include_router(deploy_jobs_sync.router, dependencies=_auth)
 app.include_router(certs.router, dependencies=_auth)
 app.include_router(stats.router, dependencies=_auth)
 app.include_router(node_ops.router, dependencies=_auth)
