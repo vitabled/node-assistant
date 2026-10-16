@@ -157,6 +157,22 @@ def test_waiting_deploy_restart_requires_operator_execution_permission():
     assert permissions.required("/api/deploy/restart", "POST") == ("deploy.execute",)
 
 
+def test_sync_remnawave_requires_removal_rights():
+    """Синхронизация состава карточек УДАЛЯЕТ лишние, значит права как у удаления.
+
+    Общее правило `/api/deploy-jobs` отдаёт POST как `deploy.create` — для
+    «создать карточку» этого достаточно, для удаления мало: ручное удаление
+    карточки требует `deploy.edit`. Специфичный префикс объявлен раньше общего
+    (первое совпадение по `startswith`), иначе фича тихо вернётся к слабому праву.
+    """
+    path = "/api/deploy-jobs/sync-remnawave"
+    assert path in {getattr(r, "path", "") for r in app.routes}
+    needed = permissions.required(path, "POST") or ()
+    assert "deploy.edit" in needed
+    assert "deploy.credentials" in needed
+    assert "deploy.create" not in needed
+
+
 def test_exempt_routes_need_no_privilege():
     for path in ("/api/health", "/api/auth/login", "/api/auth/me"):
         assert permissions.required(path, "GET") == ()

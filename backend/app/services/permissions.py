@@ -247,6 +247,7 @@ RULES: tuple[tuple[str, dict[str, object]], ...] = (
     ("/api/cliproxy/oauth", {"GET": "assistant.view", "*": "assistant.edit"}),
 
     # ── деплой нод ───────────────────────────────────────────
+    ("/api/deploy-jobs/sync-remnawave", {"POST": ("deploy.edit", _CREDS)}),
     ("/api/deploy-jobs", {
         "GET": ("deploy.view", _CREDS),
         "POST": ("deploy.create", _CREDS),
