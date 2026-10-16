@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Plus, Rocket, X, ServerCog, Search, Loader2,
+  Plus, Rocket, X, ServerCog, Search, Loader2, RefreshCw,
   CheckCircle2, XCircle, HelpCircle,
 } from "lucide-react";
 import { DeployCard } from "./DeployCard";
 import { DeployForm, type FormData } from "./DeployForm";
 import { deployJobsKey } from "../auth/store";
-import { Page, Seg, EmptyState } from "../theme/ui";
+import { Page, Seg, EmptyState, FormDialog } from "../theme/ui";
 import { Stagger, StaggerItem } from "../theme/motion";
 import {
   upsertDeployJob, deleteDeployJob, syncDeployJobs,
+  syncRemnawaveCards, type RemnawaveSyncReport,
 } from "./deployJobsSync";
 import { toast } from "./infra/Toast";
 
@@ -65,6 +66,9 @@ export function DeployDashboard() {
   // `existingPreset` = detected creds + positive install_components selection.
   const [showExisting,   setShowExisting]   = useState(false);
   const [existingPreset, setExistingPreset] = useState<Partial<FormData> | null>(null);
+  // «Синхронизировать с Remnawave» — модалка с сухим прогоном и применением.
+  // Открывается только по нажатию: при загрузке страницы ничего не меняется.
+  const [showSync, setShowSync] = useState(false);
 
   // Unsynced-state flag: true once a server push has failed, so we only toast
   // once per outage (and the next successful push clears it).
@@ -136,6 +140,17 @@ export function DeployDashboard() {
       return next;
     });
   }, [syncDiff]);
+
+  // Перечитать карточки с сервера после серверной синхронизации с Remnawave:
+  // additive-merge подтянет новые карточки и (через tombstones) уберёт из кэша
+  // удалённые. Ничего не удаляет на сервере — только читает.
+  const refreshFromServer = useCallback(async () => {
+    const { jobs: synced } = await syncDeployJobs({
+      loadLocal: loadJobs,
+      saveLocal: saveJobs,
+    });
+    setJobs(synced);
+  }, []);
 
   // On mount, run the one-shot additive sync (syncDeployJobs):
   //  - pull the authoritative server list and merge it into the local cache
@@ -303,6 +318,12 @@ export function DeployDashboard() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={() => setShowSync(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
+                         border transition-colors hover:bg-[var(--bg3)]"
+              style={{ borderColor: "var(--line)", color: "var(--t-mid)", background: "var(--bg2)" }}>
+              <RefreshCw size={13} /> Синхронизировать с Remnawave
+            </button>
             <button onClick={() => setShowExisting(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
                          border transition-colors hover:bg-[var(--bg3)]"
@@ -474,6 +495,15 @@ export function DeployDashboard() {
           onSubmit={addJob}
         />
       )}
+
+      {/* Синхронизация карточек с нодами Remnawave: сухой прогон → подтверждение.
+          Ничего не меняет автоматически при открытии страницы. */}
+      {showSync && (
+        <RemnawaveSyncModal
+          onClose={() => setShowSync(false)}
+          onApplied={refreshFromServer}
+        />
+      )}
     </Page>
   );
 }
@@ -517,6 +547,117 @@ function DeployFormModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Remnawave sync modal (dry run → confirm → apply) ─────────────────────────
+
+function _syncIpList(entries: { ip: string }[]): string {
+  return entries.map(e => e.ip).join(", ");
+}
+
+// Сначала сухой прогон (ничего не пишется) с показом «добавить N» / «убрать M»,
+// затем применение по подтверждению. Ни одного автоматического изменения.
+function RemnawaveSyncModal({ onClose, onApplied }: {
+  onClose:   () => void;
+  onApplied: () => Promise<void>;
+}) {
+  const [report,   setReport]   = useState<RemnawaveSyncReport | null>(null);
+  const [loading,  setLoading]  = useState(true);
+  const [applying, setApplying] = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r = await syncRemnawaveCards(true);
+        if (live) setReport(r);
+      } catch (e) {
+        if (live) setError(e instanceof Error ? e.message : "Не удалось получить разницу с Remnawave");
+      } finally {
+        if (live) setLoading(false);
+      }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  const apply = async () => {
+    setApplying(true);
+    setError(null);
+    try {
+      await syncRemnawaveCards(false);
+      await onApplied();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось применить синхронизацию");
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const addCount    = report?.added.length ?? 0;
+  const removeCount = report?.removed.length ?? 0;
+
+  return (
+    <FormDialog
+      open
+      onClose={applying ? () => {} : onClose}
+      title="Синхронизация с Remnawave"
+      subtitle="Карточки «Деплой нод» по нодам панели"
+      icon={<RefreshCw size={14} />}
+      closeOnOverlay={false}
+      footer={
+        <>
+          <button type="button" className="btn btn-soft" onClick={onClose} disabled={applying}>
+            Отмена
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={apply}
+            disabled={applying || loading || !report || addCount + removeCount === 0}
+          >
+            {applying ? "Применяем…" : "Применить"}
+          </button>
+        </>
+      }
+    >
+      {loading ? (
+        <p className="text-sm text-[var(--t-mid)] flex items-center gap-2">
+          <Loader2 size={13} className="animate-spin" /> Считаем разницу…
+        </p>
+      ) : error ? (
+        <p className="text-sm text-[var(--err)]">{error}</p>
+      ) : report ? (
+        <div className="space-y-3 text-sm">
+          <div>
+            <p className="text-[var(--t-hi)] font-medium">
+              добавить {addCount}{addCount ? `: ${_syncIpList(report.added)}` : ""}
+            </p>
+            {addCount === 0 && <p className="text-[var(--t-faint)] text-xs">Новых нод нет.</p>}
+          </div>
+          <div>
+            <p className="text-[var(--t-hi)] font-medium">
+              убрать {removeCount}{removeCount ? `: ${_syncIpList(report.removed)}` : ""}
+            </p>
+            {removeCount === 0 && <p className="text-[var(--t-faint)] text-xs">Мёртвых карточек нет.</p>}
+          </div>
+          {report.skipped.length > 0 && (
+            <div>
+              <p className="text-[var(--t-mid)] font-medium">пропущено {report.skipped.length}</p>
+              <p className="text-[var(--t-faint)] text-xs">
+                {report.skipped.map(s => `${s.ip} (${s.reason})`).join(", ")}
+              </p>
+            </div>
+          )}
+          <p className="text-[var(--t-faint)] text-xs">
+            Нод в Remnawave: {report.nodes_total}; карточек: {report.cards_before} → {report.cards_after}.
+            HAProxy-карточки не трогаются.
+          </p>
+        </div>
+      ) : null}
+    </FormDialog>
   );
 }
 
