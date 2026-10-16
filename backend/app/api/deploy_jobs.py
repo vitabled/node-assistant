@@ -20,7 +20,15 @@ from app.services import accounts, vault_store
 
 router = APIRouter(prefix="/api/deploy-jobs")
 
-_LOCK = threading.Lock()
+# RLock: the tombstone helpers are called from inside `upsert_server_job`/
+# `delete_server_job` (which already hold the lock) — reentrancy keeps the
+# read-modify-write whole instead of two unsynchronised passes.
+_LOCK = threading.RLock()
+
+# Deleted taskIds, remembered so a browser cache cannot resurrect a card:
+# the GET list hides them, POST upsert refuses to recreate them, and the client
+# purges them from localStorage. Stored next to the cards.
+_TOMBSTONES_FILE_NAME = "deploy_jobs_tombstones.json"
 
 
 class DeployJob(BaseModel):
@@ -74,6 +82,65 @@ def _write(jobs: list[dict[str, Any]]) -> None:
     os.replace(tmp, path)
 
 
+# ── Tombstones ────────────────────────────────────────────────────────────────
+# A card deleted on the server but still present in a browser cache would be
+# re-uploaded by the additive sync (deployJobsSync) and "resurrect". The tombstone
+# list — the set of taskIds deleted on purpose — closes that loop. These helpers
+# do NOT take the lock themselves; callers hold `_LOCK` (RLock).
+
+def _tombstones_path() -> Path:
+    account_id = accounts.current_account.get()
+    if not account_id:
+        raise RuntimeError("No active account in context")
+    return accounts.account_dir(account_id) / _TOMBSTONES_FILE_NAME
+
+
+def _read_tombstones() -> list[str]:
+    try:
+        path = _tombstones_path()
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("taskIds"), list):
+                return [t for t in data["taskIds"] if isinstance(t, str)]
+    except Exception:
+        pass
+    return []
+
+
+def _write_tombstones(task_ids: list[str]) -> None:
+    path = _tombstones_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps({"taskIds": task_ids}, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.replace(tmp, path)
+
+
+def _add_tombstone(task_id: str) -> None:
+    with _LOCK:
+        task_ids = _read_tombstones()
+        if task_id not in task_ids:
+            task_ids.append(task_id)
+            _write_tombstones(task_ids)
+
+
+def clear_tombstone(task_id: str) -> None:
+    """Forget a deletion so the card may be created again (explicit re-add)."""
+    with _LOCK:
+        _write_tombstones([t for t in _read_tombstones() if t != task_id])
+
+
+def list_tombstones() -> list[str]:
+    with _LOCK:
+        return _read_tombstones()
+
+
+def is_tombstoned(task_id: str) -> bool:
+    with _LOCK:
+        return task_id in set(_read_tombstones())
+
+
 def _encrypt_job(job: DeployJob) -> dict[str, Any]:
     record = job.model_dump(exclude_none=True)
     record["savedForm_enc"] = vault_store._encrypt(
@@ -100,8 +167,11 @@ def _decrypt_job(record: dict[str, Any]) -> DeployJob | None:
 
 def _jobs_for_response() -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
+    tombstones = set(_read_tombstones())
     for record in _read():
         if isinstance(record, dict):
+            if record.get("taskId") in tombstones:
+                continue  # deleted on purpose — never handed back to a cache
             job = _decrypt_job(record)
             if job is not None:
                 jobs.append(job.model_dump(exclude_none=True))
@@ -124,13 +194,35 @@ def create_server_job(req: Any, task_id: str, started_at: float | None = None) -
     return job
 
 
-def upsert_server_job(job: DeployJob) -> None:
-    """Synchronous storage primitive shared by HTTP, deploy and backfill paths."""
+def upsert_server_job(job: DeployJob, *, respect_tombstone: bool = True) -> bool:
+    """Synchronous storage primitive shared by HTTP, deploy and backfill paths.
+
+    Returns False when the write was refused because the taskId is tombstoned
+    (a card deleted on purpose must not be resurrected by a stale client). The
+    synchronisation path clears the tombstone first and writes with
+    `respect_tombstone=False` — an explicit re-add is allowed.
+    """
     with _LOCK:
+        if respect_tombstone and job.taskId in set(_read_tombstones()):
+            return False
         records = _read()
         records = [record for record in records if record.get("taskId") != job.taskId]
         records.append(_encrypt_job(job))
         _write(records)
+        return True
+
+
+def delete_server_job(task_id: str) -> bool:
+    """Delete a card AND remember the taskId as a tombstone. Shared by the
+    explicit UI delete and the Remnawave sync removal."""
+    with _LOCK:
+        records = _read()
+        kept = [record for record in records if record.get("taskId") != task_id]
+        if len(kept) == len(records):
+            return False
+        _write(kept)
+        _add_tombstone(task_id)
+        return True
 
 
 def ensure_server_job(req: Any, task_id: str, started_at: float | None = None) -> DeployJob | None:
@@ -174,6 +266,13 @@ async def list_jobs() -> dict[str, list[dict[str, Any]]]:
         return {"jobs": _jobs_for_response()}
 
 
+@router.get("/tombstones")
+async def get_tombstones() -> dict[str, list[str]]:
+    """taskIds deleted on purpose. The client drops these from its local cache so
+    a deleted card cannot be uploaded back (the additive-sync resurrection)."""
+    return {"taskIds": list_tombstones()}
+
+
 @router.put("")
 async def replace_jobs(body: DeployJobsBody) -> dict[str, list[dict[str, Any]]]:
     """Replace all cards, including migration/synchronisation from local storage."""
@@ -183,18 +282,18 @@ async def replace_jobs(body: DeployJobsBody) -> dict[str, list[dict[str, Any]]]:
 
 
 @router.post("")
-async def upsert_job(job: DeployJob) -> dict[str, dict[str, Any]]:
-    """Create or replace the card identified by its deployment task id."""
-    upsert_server_job(job)
+async def upsert_job(job: DeployJob) -> dict[str, Any]:
+    """Create or replace the card identified by its deployment task id.
+
+    A tombstoned taskId is NOT recreated: the response carries `ignored: true`
+    so the client knows the write was a no-op (it is the stale-cache case)."""
+    if not upsert_server_job(job):
+        return {"job": job.model_dump(exclude_none=True), "ignored": True}
     return {"job": job.model_dump(exclude_none=True)}
 
 
 @router.delete("/{task_id}")
 async def delete_job(task_id: str) -> dict[str, bool]:
-    with _LOCK:
-        records = _read()
-        kept = [record for record in records if record.get("taskId") != task_id]
-        if len(kept) == len(records):
-            raise HTTPException(404, "Карточка деплоя не найдена")
-        _write(kept)
+    if not delete_server_job(task_id):
+        raise HTTPException(404, "Карточка деплоя не найдена")
     return {"ok": True}
