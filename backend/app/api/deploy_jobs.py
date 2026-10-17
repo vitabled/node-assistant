@@ -13,12 +13,24 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
 from app.services import accounts, vault_store
 
 router = APIRouter(prefix="/api/deploy-jobs")
+
+
+def _no_store(response: Response) -> None:
+    """Never let a browser/proxy cache hand out a stale card list.
+
+    The server is the only source of truth for the cards, so every reply here is
+    marked uncacheable — otherwise an old cached response could still decide what
+    the UI shows.
+    """
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
 
 # RLock: the tombstone helpers are called from inside `upsert_server_job`/
 # `delete_server_job` (which already hold the lock) — reentrancy keeps the
@@ -260,40 +272,50 @@ def list_server_jobs(account_id: str) -> list[dict[str, Any]]:
 
 
 @router.get("")
-async def list_jobs() -> dict[str, list[dict[str, Any]]]:
-    """Return this account's cards; malformed/encryption-broken rows are skipped."""
+async def list_jobs(response: Response) -> dict[str, list[dict[str, Any]]]:
+    """Return this account's cards; malformed/encryption-broken rows are skipped.
+
+    Ответ помечен no-store: список карточек — единственный источник правды на
+    сервере, поэтому ни HTTP-кеш браузера, ни промежуточный прокси не должны
+    отдавать его старую копию.
+    """
+    _no_store(response)
     with _LOCK:
         return {"jobs": _jobs_for_response()}
 
 
 @router.get("/tombstones")
-async def get_tombstones() -> dict[str, list[str]]:
+async def get_tombstones(response: Response) -> dict[str, list[str]]:
     """taskIds deleted on purpose. The client drops these from its local cache so
     a deleted card cannot be uploaded back (the additive-sync resurrection)."""
+    _no_store(response)
     return {"taskIds": list_tombstones()}
 
 
 @router.put("")
-async def replace_jobs(body: DeployJobsBody) -> dict[str, list[dict[str, Any]]]:
+async def replace_jobs(body: DeployJobsBody, response: Response) -> dict[str, list[dict[str, Any]]]:
     """Replace all cards, including migration/synchronisation from local storage."""
+    _no_store(response)
     with _LOCK:
         _write([_encrypt_job(job) for job in body.jobs])
     return {"jobs": [job.model_dump(exclude_none=True) for job in body.jobs]}
 
 
 @router.post("")
-async def upsert_job(job: DeployJob) -> dict[str, Any]:
+async def upsert_job(job: DeployJob, response: Response) -> dict[str, Any]:
     """Create or replace the card identified by its deployment task id.
 
     A tombstoned taskId is NOT recreated: the response carries `ignored: true`
     so the client knows the write was a no-op (it is the stale-cache case)."""
+    _no_store(response)
     if not upsert_server_job(job):
         return {"job": job.model_dump(exclude_none=True), "ignored": True}
     return {"job": job.model_dump(exclude_none=True)}
 
 
 @router.delete("/{task_id}")
-async def delete_job(task_id: str) -> dict[str, bool]:
+async def delete_job(task_id: str, response: Response) -> dict[str, bool]:
+    _no_store(response)
     if not delete_server_job(task_id):
         raise HTTPException(404, "Карточка деплоя не найдена")
     return {"ok": True}

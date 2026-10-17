@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { deployJobsKey } from "../auth/store";
+import { resetJobs, setJobs } from "../data/deployJobsStore";
 import { RknScanners } from "./RknScanners";
 
 /**
@@ -53,7 +53,9 @@ beforeEach(() => {
     entries: [...ENTRIES, { ip: "203.0.113.77", lastSeen: "2026-09-23T11:00:00Z", hits: 1, nodes: ["10.0.0.1"] }],
   };
   localStorage.clear();
-  localStorage.setItem(deployJobsKey(), JSON.stringify([NODE_CARD]));
+  // Карточки нод — из серверного стора (data/deployJobsStore), не из localStorage.
+  resetJobs();
+  setJobs([{ ...NODE_CARD, startedAt: 1 }]);
 
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();

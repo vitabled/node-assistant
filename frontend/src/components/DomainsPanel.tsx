@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Globe, Trash2, Plus, ShieldCheck, Loader2, Download, Image, Info, ArrowLeftRight, X } from "lucide-react";
-import { deployJobsKey, certJobsKey } from "../auth/store";
+import { certJobsKey } from "../auth/store";
+import { getJobs, useDeployJobs } from "../data/deployJobsStore";
 import { toast } from "./infra/Toast";
 import { useTaskStream } from "../hooks/useTaskStream";
 import { TerminalOutput } from "./TerminalOutput";
@@ -21,17 +22,15 @@ interface Creds { ip: string; ssh_user: string; ssh_password: string; ssh_port: 
 interface Row { domain: string; ip?: string; creds?: Creds; manualId?: string; certJob?: boolean; cert?: CertInfo | null; probing?: boolean }
 
 function loadDeployDomains(): Row[] {
-  try {
-    const jobs: DeployJob[] = JSON.parse(localStorage.getItem(deployJobsKey()) || "[]");
-    return (Array.isArray(jobs) ? jobs : [])
-      .filter(j => j.finalStatus === "success" && j.domain && j.savedForm?.mode !== "haproxy")
-      .map(j => {
-        const f = j.savedForm;
-        const port = parseInt(f.change_ssh_port ? f.new_ssh_port : f.current_ssh_port, 10) || 22;
-        return { domain: j.domain, ip: j.ip,
-          creds: { ip: f.ip, ssh_user: f.ssh_user, ssh_password: f.ssh_password, ssh_port: port } };
-      });
-  } catch { return []; }
+  const jobs = getJobs() as unknown as DeployJob[];
+  return jobs
+    .filter(j => j.finalStatus === "success" && j.domain && j.savedForm?.mode !== "haproxy")
+    .map(j => {
+      const f = j.savedForm;
+      const port = parseInt(f.change_ssh_port ? f.new_ssh_port : f.current_ssh_port, 10) || 22;
+      return { domain: j.domain, ip: j.ip,
+        creds: { ip: f.ip, ssh_user: f.ssh_user, ssh_password: f.ssh_password, ssh_port: port } };
+    });
 }
 
 // Domains a cert was deployed to via «Управление SSL». No deploy_jobs entry is
@@ -321,6 +320,10 @@ export function DomainsPanel({ refreshKey = 0 }: { refreshKey?: number }) {
   const [rows, setRows]   = useState<Row[]>([]);
   const [adding, setAdding] = useState("");
   const [err, setErr]     = useState("");
+  // Карточки нод приходят с сервера (data/deployJobsStore): как только снимок
+  // обновился, список доменов пересобирается — без localStorage и без «пустого»
+  // первого рендера, пока сервер ещё отвечает.
+  const deployed = useDeployJobs();
 
   const load = useCallback(async () => {
     // Priority: deployed node > cert deploy > manual — a domain present in a
@@ -338,8 +341,9 @@ export function DomainsPanel({ refreshKey = 0 }: { refreshKey?: number }) {
     setRows([...deployRows, ...certRows, ...manualRows]);
   }, []);
 
-  // Reload on mount AND whenever a cert deploy just succeeded (refreshKey bump).
-  useEffect(() => { load(); }, [load, refreshKey]);
+  // Reload on mount, whenever a cert deploy just succeeded (refreshKey bump) AND
+  // whenever the server-side card list changed (`deployed` — новый снимок стора).
+  useEffect(() => { load(); }, [load, refreshKey, deployed]);
 
   // Probe cert expiry for rows that carry creds (deployed nodes + cert deploys),
   // like DeployCard.

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Gauge, Plus, Trash2, Loader2, TerminalSquare, ChevronDown } from "lucide-react";
-import { deployJobsKey } from "../../auth/store";
+import { getJobs, type DeployJobRecord } from "../../data/deployJobsStore";
 import { toast } from "../infra/Toast";
 import { useTaskStream } from "../../hooks/useTaskStream";
 
@@ -21,16 +21,15 @@ interface TestServer {
 const ADD_INIT = { name: "", ip: "", iperf_port: 5201 };
 const SSH_INIT = { name: "", ip: "", ssh_user: "root", ssh_password: "", ssh_port: 22, iperf_port: 5201 };
 
-// IPs of this account's successfully deployed nodes (from the DeployDashboard's
-// localStorage) — they get UFW access to the iperf3 port at deploy time.
+// IPs of this account's successfully deployed nodes — карточки приходят с
+// сервера (data/deployJobsStore), никакого localStorage: они получают UFW-доступ
+// к порту iperf3 при деплое.
 function collectNodeIps(): string[] {
-  try {
-    const jobs = JSON.parse(localStorage.getItem(deployJobsKey()) || "[]");
-    const ips = (Array.isArray(jobs) ? jobs : [])
-      .filter((j: { finalStatus?: string; ip?: string }) => j.finalStatus === "success" && j.ip)
-      .map((j: { ip: string }) => String(j.ip));
-    return Array.from(new Set(ips));
-  } catch { return []; }
+  const jobs: DeployJobRecord[] = [...getJobs()];
+  const ips = jobs
+    .filter(j => j.finalStatus === "success" && j.ip)
+    .map(j => String(j.ip));
+  return Array.from(new Set(ips));
 }
 
 const fmtDate = (ts: number) => {

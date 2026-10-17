@@ -1,7 +1,8 @@
 // Цветовая маркировка нод (Wave-4 PR-9): один цвет у карточки деплоя и у
-// строки ноды на дашборде доступности. Хранение — в записи deploy_jobs
-// (localStorage, как всё у карточек): поле `color` = ключ пресета.
-import { deployJobsKey } from "../auth/store";
+// строки ноды на дашборде доступности. Хранение — поле `color` в карточке на
+// СЕРВЕРЕ (/api/deploy-jobs): чтение идёт из снимка стора, запись — серверным
+// upsert через data/deployJobsStore. localStorage не участвует.
+import { getJobs, patchJob } from "../data/deployJobsStore";
 
 export interface NodeColorPreset { key: string; hex: string; label: string }
 
@@ -35,26 +36,13 @@ export interface ColoredJob {
 }
 
 export function readJobs(): ColoredJob[] {
-  try {
-    const arr = JSON.parse(localStorage.getItem(deployJobsKey()) || "[]");
-    return Array.isArray(arr) ? arr : [];
-  } catch { return []; }
+  return getJobs() as unknown as ColoredJob[];
 }
 
-/** Записать/сбросить цвет карточки деплоя (null — убрать). */
+/** Записать/сбросить цвет карточки деплоя (null — убрать). Пишет на сервер. */
 export function setJobColor(taskId: string, colorKey: string | null): void {
-  try {
-    const key = deployJobsKey();
-    const jobs = readJobs();
-    const next = jobs.map(j => {
-      if (j.taskId !== taskId) return j;
-      const c = { ...j };
-      if (colorKey) c.color = colorKey;
-      else delete c.color;
-      return c;
-    });
-    localStorage.setItem(key, JSON.stringify(next));
-  } catch { /* ignore */ }
+  void patchJob(taskId, colorKey ? { color: colorKey } : { color: undefined })
+    .catch(() => { /* сервер недоступен — карточка останется без цвета */ });
 }
 
 /** Карта «домен/IP ноды → hex цвета» для дашборда доступности. */

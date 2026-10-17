@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { Zap, Play, Loader2, ArrowRight, History } from "lucide-react";
-import { deployJobsKey, getActiveId } from "../../auth/store";
+import { getActiveId } from "../../auth/store";
+import { getJobs } from "../../data/deployJobsStore";
 import { toast } from "../infra/Toast";
 
 // «Статистика → Тесты скорости» (Ф2b, wave1) — interactive any-to-any iperf3
@@ -55,12 +56,12 @@ function sshPortOf(f: any): number {
 }
 
 // Deploy nodes (successful) + panels (may not exist yet) + registered test
-// servers → a flat resource list for the A/B selectors.
+// servers → a flat resource list for the A/B selectors. Карточки нод берутся из
+// серверного снимка (data/deployJobsStore): localStorage на них не влияет.
 function loadResources(servers: TestServer[]): Resource[] {
   const out: Resource[] = [];
-  const readJobs = (key: string, kind: Kind, domainField: string) => {
+  const pushJobs = (jobs: readonly any[], kind: Kind, domainField: string) => {
     try {
-      const jobs = JSON.parse(localStorage.getItem(key) || "[]");
       for (const j of Array.isArray(jobs) ? jobs : []) {
         const f = j.savedForm || j;
         const ip = f?.ip;
@@ -82,8 +83,11 @@ function loadResources(servers: TestServer[]): Resource[] {
       }
     } catch { /* ignore malformed store */ }
   };
-  readJobs(deployJobsKey(), "node", "domain");
-  readJobs(panelJobsKey(), "panel", "panel_domain");
+  pushJobs(getJobs() as unknown as any[], "node", "domain");
+  // Панели — отдельный локальный список (panel_jobs), карточки нод его не касаются.
+  let panelJobs: any[] = [];
+  try { panelJobs = JSON.parse(localStorage.getItem(panelJobsKey()) || "[]"); } catch { /* ignore */ }
+  pushJobs(Array.isArray(panelJobs) ? panelJobs : [], "panel", "panel_domain");
   for (const s of servers) {
     out.push({
       id: `testserver:${s.id}`,

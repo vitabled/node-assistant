@@ -4,7 +4,7 @@ import {
   FilePlus, FileDown, CheckCircle2, XCircle, ChevronDown, X,
 } from "lucide-react";
 import { toast } from "./infra/Toast";
-import { deployJobsKey } from "../auth/store";
+import { getJobs, useDeployJobs } from "../data/deployJobsStore";
 import type { DeployJobSummary } from "./DeployDashboard";
 import { FlagChip } from "./common/FlagChip";
 import { InputShell, EmptyState } from "../theme/ui";
@@ -142,12 +142,9 @@ function parseImport(text: string, format: ImportFormat): ParsedImport {
   return { add, invalid };
 }
 
+// Ноды — из серверного снимка карточек (data/deployJobsStore), без localStorage.
 function loadNodes(): NodeRef[] {
-  let jobs: DeployJobSummary[] = [];
-  try { jobs = JSON.parse(localStorage.getItem(deployJobsKey()) ?? "[]"); }
-  catch { /* ignore malformed */ }
-  if (!Array.isArray(jobs)) jobs = [];
-  return nodesFromJobs(jobs);
+  return nodesFromJobs(getJobs() as unknown as DeployJobSummary[]);
 }
 
 /** Серверные карточки (GET /api/deploy-jobs) → ноды. savedForm приходит
@@ -226,8 +223,11 @@ export function F2bList() {
   // Экспорт-дропдаун.
   const [exportOpen, setExportOpen] = useState(false);
 
-  // Ноды: сервер — источник правды (GET /api/deploy-jobs), localStorage — фолбэк.
+  // Ноды: сервер — источник правды (GET /api/deploy-jobs через data/deployJobsStore).
   const [nodes, setNodes] = useState<NodeRef[]>(loadNodes);
+  // Снимок серверных карточек: пришёл/изменился — пересобираем ноды.
+  const deployedJobs = useDeployJobs();
+  useEffect(() => { setNodes(loadNodes()); }, [deployedJobs]);
   const [pullOff, setPullOff] = useState<Set<string>>(new Set());
   const [pushOff, setPushOff] = useState<Set<string>>(new Set());
 

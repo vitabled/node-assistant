@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { deployJobsKey } from "../../auth/store";
+import { getJobs, type DeployJobRecord } from "../../data/deployJobsStore";
 
 // Shared dark-theme primitives for the infra-billing pages (Status-Page style).
 
@@ -83,12 +83,9 @@ export const fmtDateShort = (iso: string) => {
   return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
 };
 
-// Deploy nodes for node-linking selectors — read from the DeployDashboard's
-// localStorage (deploy_jobs), avoiding an extra backend round-trip.
+// Деплой-ноды для селекторов привязки — из снимка серверного списка
+// (data/deployJobsStore), без localStorage.
 export function loadDeployNodes(): { value: string; label: string }[] {
-  try {
-    const jobs = JSON.parse(localStorage.getItem(deployJobsKey()) || "[]");
-    return (Array.isArray(jobs) ? jobs : []).map((j: { taskId: string; domain: string; ip: string }) =>
-      ({ value: j.taskId, label: `${j.domain} (${j.ip})` }));
-  } catch { return []; }
+  const jobs: DeployJobRecord[] = [...getJobs()];
+  return jobs.map(j => ({ value: j.taskId, label: `${j.domain} (${j.ip})` }));
 }

@@ -1,8 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { CloudDownload, FileCode, Loader2, Save, ServerCog } from "lucide-react";
 import { Seg } from "../../theme/ui";
 import { toast } from "../infra/Toast";
-import { deployJobsKey } from "../../auth/store";
+import { useDeployJobs } from "../../data/deployJobsStore";
 
 /**
  * «Развёрнутая страница» (Wave-4 PR-10): рабочий редактор РЕАЛЬНО развёрнутой
@@ -44,13 +44,13 @@ export function DeployedEditor() {
   const [preview, setPreview] = useState(false);
   const [err, setErr] = useState("");
 
-  // Серверы панели из карточек деплоя — заполняют креды одним кликом.
-  const [panelJobs] = useState<PanelJob[]>(() => {
-    try {
-      const arr = JSON.parse(localStorage.getItem(deployJobsKey()) || "[]");
-      return Array.isArray(arr) ? arr.filter(j => j.savedForm?.panel_domain || j.savedForm?.sub_domain) : [];
-    } catch { return []; }
-  });
+  // Серверы панели из карточек деплоя (список — с сервера, data/deployJobsStore)
+  // — заполняют креды одним кликом.
+  const deployedJobs = useDeployJobs();
+  const panelJobs = useMemo<PanelJob[]>(() => {
+    const arr = deployedJobs as unknown as PanelJob[];
+    return arr.filter(j => j.savedForm?.panel_domain || j.savedForm?.sub_domain);
+  }, [deployedJobs]);
 
   const pickJob = (j: PanelJob) => {
     const f = j.savedForm!;

@@ -4,7 +4,7 @@ import { Page, PageHeader } from "../../theme/ui";
 import { TerminalOutput } from "../TerminalOutput";
 import { StepProgress } from "../StepProgress";
 import { useTaskStream, type StatusFrame } from "../../hooks/useTaskStream";
-import { deployJobsKey } from "../../auth/store";
+import { useDeployJobs } from "../../data/deployJobsStore";
 
 /**
  * «REGRU хостинг» (Обходы БС, Wave-4 PR-9): привязка домена, размещённого на
@@ -29,12 +29,11 @@ const STEPS = ["Подключение", "Выпуск сертификата", 
 const DOMAIN_RE = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
 
 export function RegruTool() {
-  const jobs = useMemo<DeployJobLite[]>(() => {
-    try {
-      const arr = JSON.parse(localStorage.getItem(deployJobsKey()) || "[]");
-      return Array.isArray(arr) ? arr.filter(j => j.savedForm?.domain) : [];
-    } catch { return []; }
-  }, []);
+  const deployedJobs = useDeployJobs();
+  const jobs = useMemo<DeployJobLite[]>(
+    () => (deployedJobs as unknown as DeployJobLite[]).filter(j => j.savedForm?.domain),
+    [deployedJobs],
+  );
 
   const [jobId, setJobId] = useState("");
   const job = jobs.find(j => j.taskId === jobId) || jobs[0];

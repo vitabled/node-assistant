@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, cleanup, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Heavy children are stubbed — we only exercise DeployDashboard's job loading,
-// the per-account localStorage key, and the server sync. The stub renders a
-// "remove" button so we can drive a real mutation (remove → PUT) end-to-end.
+// Heavy children are stubbed — we only exercise DeployDashboard: загрузка списка
+// карточек С СЕРВЕРА (data/deployJobsStore), фильтры/поиск и серверные мутации.
+// Карточки больше не живут в localStorage: ни чтение, ни запись.
 vi.mock("./DeployCard", () => ({
   DeployCard: ({ job, nodeName, onRemove }: { job: { domain: string; taskId: string }; nodeName?: string; onRemove: (id: string) => void }) => (
     <div>
@@ -23,18 +23,30 @@ vi.mock("./DeployForm", () => ({
 
 import { DeployDashboard } from "./DeployDashboard";
 import { addAccount, forget, getSnapshot } from "../auth/store";
+import { resetJobs, setJobs, getJobs, type DeployJobRecord } from "../data/deployJobsStore";
+
+/** Что «лежит на сервере» в текущем тесте (GET /api/deploy-jobs). */
+let serverJobs: DeployJobRecord[] = [];
 
 function reset() {
   capturedPreset = undefined;
+  serverJobs = [];
+  resetJobs();
   localStorage.clear();
   getSnapshot().accounts.slice().forEach(a => forget(a.id));
+}
+
+/** Засеять серверный список: и снимок стора, и ответ GET. */
+function seed(jobs: DeployJobRecord[]) {
+  serverJobs = jobs;
+  setJobs(jobs);
 }
 
 type Call = { url: string; method: string; body?: unknown };
 type Handler = (url: string, init?: RequestInit) => Promise<unknown> | unknown;
 
-// Stub global fetch with a router + call recorder. Returns the recorded calls
-// so tests can assert exactly which requests (method/body) went out.
+// Stub global fetch with a router + call recorder. Возвращает записанные вызовы,
+// чтобы тесты могли утверждать, какие запросы (метод/тело) ушли.
 function stubFetch(handler: Handler) {
   const calls: Call[] = [];
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -49,59 +61,155 @@ function stubFetch(handler: Handler) {
   return { fn, calls };
 }
 
-const job = (domain: string, taskId = "t1") => ({
-  taskId, domain, ip: "1.2.3.4", newSshPort: 2222, startedAt: 1, savedForm: {},
+/** Роутер по умолчанию: серверный список карточек + успешные POST/DELETE. */
+function stubServer(extra?: Handler) {
+  return stubFetch((url, init) => {
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (extra) {
+      const custom = extra(url, init);
+      if (custom !== undefined) return custom;
+    }
+    if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: serverJobs }) };
+    if (url.includes("/api/deploy-jobs") && method === "POST") return { ok: true, json: async () => ({ job: {} }) };
+    if (url.includes("/api/deploy-jobs") && method === "DELETE") return { ok: true, json: async () => ({ ok: true }) };
+    return { ok: true, json: async () => ({}) };
+  });
+}
+
+const job = (domain: string, taskId = "t1", extra: Partial<DeployJobRecord> = {}): DeployJobRecord => ({
+  taskId, domain, ip: "1.2.3.4", newSshPort: 2222, startedAt: 1, savedForm: {}, ...extra,
 });
 
 describe("DeployDashboard", () => {
   beforeEach(() => {
     reset();
     addAccount({ id: "id-a", login: "alice", token: "t" });
-    // Default: offline, so the mount GET degrades to localStorage unless a test
-    // installs its own router via stubFetch().
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    // По умолчанию сервер пуст и доступен; офлайн/ошибки задаёт конкретный тест.
+    stubServer();
   });
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    resetJobs();
   });
 
-  it("loads jobs from the active account's per-account key", () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example")]));
+  // ── список приходит с сервера ──────────────────────────────
+
+  it("renders cards that come from the server", async () => {
+    seed([job("node1.example")]);
     render(<DeployDashboard />);
-    expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("CARD:node1.example")).toBeInTheDocument());
   });
 
-  it("shows the empty state when the account has no jobs", () => {
+  it("shows the empty state when the account has no jobs", async () => {
     render(<DeployDashboard />);
-    expect(screen.getAllByText("Нет задач деплоя").length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.getAllByText("Нет задач деплоя").length).toBeGreaterThan(0));
   });
 
-  it("protects the node search field from browser autofill", () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example")]));
+  it("does not write the card list into localStorage (no browser cache anymore)", async () => {
+    const { calls } = stubServer();
+    seed([job("server.example", "t1")]);
     render(<DeployDashboard />);
+    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
+
+    // никаких записей в кэш и никаких мутаций на монтировании
+    expect(localStorage.getItem("deploy_jobs_id-a")).toBeNull();
+    expect(calls.some(c => c.method === "POST" || c.method === "DELETE")).toBe(false);
+  });
+
+  it("a stale browser cache cannot add cards: server list wins", async () => {
+    // Старый кэш этого же аккаунта с карточкой, которой на сервере нет.
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("ghost.example", "t-ghost")]));
+    seed([job("server.example", "t1")]);
+    render(<DeployDashboard />);
+
+    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
+    expect(screen.queryByText("CARD:ghost.example")).not.toBeInTheDocument();
+  });
+
+  it("same taskId: the server version is shown, the cached one is ignored", async () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("local.example", "t1")]));
+    seed([job("server.example", "t1")]);
+    render(<DeployDashboard />);
+
+    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
+    expect(screen.queryByText("CARD:local.example")).not.toBeInTheDocument();
+  });
+
+  it("ignores the legacy un-suffixed deploy_jobs key (isolation)", async () => {
+    localStorage.setItem("deploy_jobs", JSON.stringify([job("leaked.example")]));
+    render(<DeployDashboard />);
+    await waitFor(() =>
+      expect(screen.getAllByText("Нет задач деплоя").length).toBeGreaterThan(0));
+    expect(screen.queryByText("CARD:leaked.example")).not.toBeInTheDocument();
+    expect(getJobs()).toEqual([]);
+  });
+
+  it("migrates an old cache to the server once, then drops the cache (nothing lost)", async () => {
+    const legacy = job("legacy.example", "t-legacy");
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([legacy]));
+    const { calls } = stubFetch((url, init) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/deploy-jobs") && method === "GET") {
+        // до заливки сервер пуст, после — карточка уже там
+        const posted = calls.some(c => c.method === "POST");
+        return { ok: true, json: async () => ({ jobs: posted ? [legacy] : [] }) };
+      }
+      if (method === "POST") return { ok: true, json: async () => ({ job: legacy }) };
+      return { ok: true, json: async () => ({}) };
+    });
+    render(<DeployDashboard />);
+
+    await waitFor(() => {
+      const post = calls.find(c => c.method === "POST" && c.url.includes("/api/deploy-jobs"));
+      expect(post?.body).toEqual(legacy);
+    });
+    await waitFor(() => expect(screen.getByText("CARD:legacy.example")).toBeInTheDocument());
+    await waitFor(() => expect(localStorage.getItem("deploy_jobs_id-a")).toBeNull());
+  });
+
+  it("does not upload cached cards when the server already has cards", async () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("local.example", "t-local")]));
+    seed([job("server.example", "t-server")]);
+    const { calls } = stubServer();
+    render(<DeployDashboard />);
+
+    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
+    expect(screen.queryByText("CARD:local.example")).not.toBeInTheDocument();
+    expect(calls.some(c => c.method === "POST")).toBe(false);
+  });
+
+  it("shows an empty list when the server is unreachable (no localStorage fallback)", async () => {
+    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("offline.example", "t-off")]));
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    render(<DeployDashboard />);
+
+    await waitFor(() =>
+      expect(screen.getAllByText("Нет задач деплоя").length).toBeGreaterThan(0));
+    expect(screen.queryByText("CARD:offline.example")).not.toBeInTheDocument();
+  });
+
+  // ── поиск и фильтры ────────────────────────────────────────
+
+  it("protects the node search field from browser autofill", async () => {
+    seed([job("node1.example")]);
+    render(<DeployDashboard />);
+    await waitFor(() => expect(screen.getByText("CARD:node1.example")).toBeInTheDocument());
     const search = screen.getByRole("searchbox", { name: "Поиск нод" });
     expect(search).toHaveAttribute("autoComplete", "off");
     expect(search).toHaveAttribute("inputMode", "search");
     expect(search).toHaveAttribute("enterKeyHint", "search");
   });
 
-  it("keeps cards visible when a value is written directly into the search DOM (autofill spill)", () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([
-      job("node1.example", "t1"),
-      job("node2.example", "t2"),
-    ]));
+  it("keeps cards visible when a value is written directly into the search DOM (autofill spill)", async () => {
+    seed([job("node1.example", "t1"), job("node2.example", "t2")]);
     render(<DeployDashboard />);
-
-    expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
-    expect(screen.getByText("CARD:node2.example")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("CARD:node2.example")).toBeInTheDocument());
 
     const search = screen.getByRole("searchbox", { name: "Поиск нод" }) as HTMLInputElement;
     expect(search.value).toBe("");
 
-    // A password manager writes a value into the DOM and fires an input event.
-    // The search is controlled: the value comes from state, so this DOM write
-    // must NOT become the filter query and must NOT hide any card.
     search.value = "vсskahquyythrgse";
     search.dispatchEvent(new Event("input", { bubbles: true }));
 
@@ -110,9 +218,10 @@ describe("DeployDashboard", () => {
     expect(screen.queryByText(/совпадений нет/)).not.toBeInTheDocument();
   });
 
-  it("shows a clear button only while the search query is non-empty", () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example")]));
+  it("shows a clear button only while the search query is non-empty", async () => {
+    seed([job("node1.example")]);
     render(<DeployDashboard />);
+    await waitFor(() => expect(screen.getByText("CARD:node1.example")).toBeInTheDocument());
 
     expect(screen.queryByRole("button", { name: "Очистить поиск" })).not.toBeInTheDocument();
 
@@ -124,9 +233,10 @@ describe("DeployDashboard", () => {
     expect(screen.queryByRole("button", { name: "Очистить поиск" })).not.toBeInTheDocument();
   });
 
-  it("shows a search-specific empty state and resets it", () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example")]));
+  it("shows a search-specific empty state and resets it", async () => {
+    seed([job("node1.example")]);
     render(<DeployDashboard />);
+    await waitFor(() => expect(screen.getByText("CARD:node1.example")).toBeInTheDocument());
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Поиск нод" }), { target: { value: "abc" } });
 
@@ -138,12 +248,10 @@ describe("DeployDashboard", () => {
     expect((screen.getByRole("searchbox", { name: "Поиск нод" }) as HTMLInputElement).value).toBe("");
   });
 
-  it("normal search typing still filters cards (regression)", () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([
-      job("node1.example", "t1"),
-      job("other.example", "t2"),
-    ]));
+  it("normal search typing still filters cards (regression)", async () => {
+    seed([job("node1.example", "t1"), job("other.example", "t2")]);
     render(<DeployDashboard />);
+    await waitFor(() => expect(screen.getByText("CARD:other.example")).toBeInTheDocument());
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Поиск нод" }), { target: { value: "node1" } });
 
@@ -151,12 +259,13 @@ describe("DeployDashboard", () => {
     expect(screen.queryByText("CARD:other.example")).not.toBeInTheDocument();
   });
 
-  it("status filters still work (regression)", () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([
-      { ...job("node1.example", "t1"), finalStatus: "success" },
-      { ...job("node2.example", "t2"), finalStatus: "failed" },
-    ]));
+  it("status filters still work (regression)", async () => {
+    seed([
+      job("node1.example", "t1", { finalStatus: "success" }),
+      job("node2.example", "t2", { finalStatus: "failed" }),
+    ]);
     render(<DeployDashboard />);
+    await waitFor(() => expect(screen.getByText("CARD:node2.example")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "Успех" }));
     expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
@@ -167,9 +276,10 @@ describe("DeployDashboard", () => {
     expect(screen.getByText("CARD:node2.example")).toBeInTheDocument();
   });
 
-  it("shows a status-filter empty state and «Показать все» restores the cards", () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example")]));
+  it("shows a status-filter empty state and «Показать все» restores the cards", async () => {
+    seed([job("node1.example")]);
     render(<DeployDashboard />);
+    await waitFor(() => expect(screen.getByText("CARD:node1.example")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "Ошибка" }));
 
@@ -180,101 +290,12 @@ describe("DeployDashboard", () => {
     expect(screen.getByText("CARD:node1.example")).toBeInTheDocument();
   });
 
-  it("ignores the legacy un-suffixed deploy_jobs key (isolation)", () => {
-    // Old global key must NOT leak into an account's view.
-    localStorage.setItem("deploy_jobs", JSON.stringify([job("leaked.example")]));
-    render(<DeployDashboard />);
-    expect(screen.queryByText("CARD:leaked.example")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Нет задач деплоя").length).toBeGreaterThan(0);
-  });
-
-  // ── server sync (server is the source of truth) ──────────────
-
-  it("renders the server list and mirrors it into the local cache when nothing is pending", async () => {
-    const serverJob = job("server.example", "t1");
-    const { calls } = stubFetch((url, init) => {
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [serverJob] }) };
-      return { ok: true, json: async () => ({}) };
-    });
-    render(<DeployDashboard />);
-
-    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
-    // No local-only card → no write calls on mount (no POST/DELETE).
-    expect(calls.some(c => c.url.includes("/api/deploy-jobs") && c.method !== "GET")).toBe(false);
-    // Server cards are ADDED to the local cache (server is the source of truth).
-    await waitFor(() => {
-      expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]")).toEqual([serverJob]);
-    });
-  });
-
-  it("uploads a local-only card to the server and mirrors it in the cache", async () => {
-    const local = job("local.example", "t-local");
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([local]));
-    const { calls } = stubFetch((url, init) => {
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [] }) };
-      if (url.includes("/api/deploy-jobs") && method === "POST") return { ok: true, json: async () => ({ job: local }) };
-      return { ok: true, json: async () => ({}) };
-    });
-    render(<DeployDashboard />);
-
-    // Uploaded via a per-card upsert (POST), never a full-list PUT.
-    await waitFor(() => {
-      const post = calls.find(c => c.method === "POST" && c.url.includes("/api/deploy-jobs"));
-      expect(post?.body).toEqual(local);
-    });
-    expect(calls.some(c => c.method === "PUT")).toBe(false);
-    expect(screen.getByText("CARD:local.example")).toBeInTheDocument();
-    // Confirmed card stays mirrored in the local cache (no drain-to-empty).
-    await waitFor(() => {
-      expect(JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]")).toEqual([local]);
-    });
-  });
-
-  it("uploads local-only cards even when the server list is non-empty (no empty-server guard)", async () => {
-    const serverJob = job("server.example", "t-server");
-    const localNew = job("new.example", "t-new");
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([localNew]));
-    const { calls } = stubFetch((url, init) => {
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [serverJob] }) };
-      if (url.includes("/api/deploy-jobs") && method === "POST") return { ok: true, json: async () => ({ job: localNew }) };
-      return { ok: true, json: async () => ({}) };
-    });
-    render(<DeployDashboard />);
-
-    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
-    expect(screen.getByText("CARD:new.example")).toBeInTheDocument();
-    await waitFor(() => {
-      const post = calls.find(c => c.method === "POST" && c.url.includes("/api/deploy-jobs"));
-      expect(post?.body).toEqual(localNew);
-    });
-  });
-
-  it("uses the server list as source of truth (server wins on the same taskId)", async () => {
-    const serverJob = job("server.example", "t1");
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("local.example", "t1")]));
-    stubFetch((url, init) => {
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [serverJob] }) };
-      return { ok: true, json: async () => ({}) };
-    });
-    render(<DeployDashboard />);
-
-    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
-    expect(screen.queryByText("CARD:local.example")).not.toBeInTheDocument();
-  });
+  // ── серверные мутации ──────────────────────────────────────
 
   it("a mutation (remove) deletes the card on the server, not a full-list PUT", async () => {
     const existing = job("node1.example", "t1");
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([existing]));
-    const { calls } = stubFetch((url, init) => {
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [existing] }) };
-      if (url.includes("/api/deploy-jobs") && method === "DELETE") return { ok: true, json: async () => ({ ok: true }) };
-      return { ok: true, json: async () => ({}) };
-    });
+    seed([existing]);
+    const { calls } = stubServer();
     render(<DeployDashboard />);
     await waitFor(() => expect(screen.getByText("CARD:node1.example")).toBeInTheDocument());
 
@@ -286,52 +307,38 @@ describe("DeployDashboard", () => {
     });
     expect(screen.queryByText("CARD:node1.example")).not.toBeInTheDocument();
     expect(calls.some(c => c.method === "PUT")).toBe(false);
+    // и в кэш браузера ничего не уходит
+    expect(localStorage.getItem("deploy_jobs_id-a")).toBeNull();
   });
 
-  it("keeps a local-only card cached when its upsert fails (no loss)", async () => {
-    const serverJob = job("server.example", "t-server");
-    const localNew = job("new.example", "t-new");
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([localNew]));
+  it("does not resurrect a card whose upsert failed", async () => {
+    seed([job("server.example", "t-server")]);
     stubFetch((url, init) => {
       const method = (init?.method ?? "GET").toUpperCase();
-      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [serverJob] }) };
-      if (url.includes("/api/deploy-jobs") && method === "POST") throw new Error("offline");
+      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [job("server.example", "t-server")] }) };
+      if (method === "POST") throw new Error("offline");
       return { ok: true, json: async () => ({}) };
     });
     render(<DeployDashboard />);
+    await waitFor(() => expect(screen.getByText("CARD:server.example")).toBeInTheDocument());
 
-    await waitFor(() => expect(screen.getByText("CARD:new.example")).toBeInTheDocument());
-    // Upsert failed → the pending card stays in the cache, alongside the merged
-    // server card (nothing is lost).
-    await waitFor(() => {
-      const ids = JSON.parse(localStorage.getItem("deploy_jobs_id-a") ?? "[]").map((j: { taskId: string }) => j.taskId);
-      expect(ids).toEqual(["t-server", "t-new"]);
-    });
+    // мутация, ломающаяся на POST, не должна оставить карточку в списке из кэша
+    await expect(
+      import("../data/deployJobsStore").then(m => m.saveJob(job("broken.example", "t-broken"))),
+    ).rejects.toThrow("offline");
+    await waitFor(() => expect(getJobs().map(j => j.taskId)).toEqual(["t-server"]));
   });
 
-  it("degrades to localStorage when the server is unreachable", async () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("offline.example", "t-off")]));
-    stubFetch(() => { throw new Error("network down"); });
-    render(<DeployDashboard />);
-
-    // Card renders from the local buffer; the failed GET doesn't crash the UI.
-    expect(screen.getByText("CARD:offline.example")).toBeInTheDocument();
-    await new Promise(r => setTimeout(r, 0));
-    expect(screen.getByText("CARD:offline.example")).toBeInTheDocument();
-  });
-
-  // ── node names from Remnawave ──────────────────────────────
+  // ── имена нод из Remnawave ─────────────────────────────────
 
   it("passes the node name from /api/remnawave/nodes into the card", async () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example", "t1")]));
+    seed([job("node1.example", "t1")]);
     stubFetch((url, init) => {
       const method = (init?.method ?? "GET").toUpperCase();
       if (url.includes("/api/remnawave/nodes")) {
-        return { ok: true, json: async () => [{ uuid: "u1", name: "astra1nl", address: "1.2.3.4" }] };
+        return { ok: true, json: async () => ([{ uuid: "u1", name: "astra1nl", address: "1.2.3.4" }]) };
       }
-      if (url.includes("/api/deploy-jobs") && method === "GET") {
-        return { ok: true, json: async () => ({ jobs: [job("node1.example", "t1")] }) };
-      }
+      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [job("node1.example", "t1")] }) };
       return { ok: true, json: async () => ({}) };
     });
     render(<DeployDashboard />);
@@ -340,13 +347,11 @@ describe("DeployDashboard", () => {
   });
 
   it("renders without a node name when /api/remnawave/nodes fails", async () => {
-    localStorage.setItem("deploy_jobs_id-a", JSON.stringify([job("node1.example", "t1")]));
+    seed([job("node1.example", "t1")]);
     stubFetch((url, init) => {
       const method = (init?.method ?? "GET").toUpperCase();
       if (url.includes("/api/remnawave/nodes")) throw new Error("no nodes");
-      if (url.includes("/api/deploy-jobs") && method === "GET") {
-        return { ok: true, json: async () => ({ jobs: [job("node1.example", "t1")] }) };
-      }
+      if (url.includes("/api/deploy-jobs") && method === "GET") return { ok: true, json: async () => ({ jobs: [job("node1.example", "t1")] }) };
       return { ok: true, json: async () => ({}) };
     });
     render(<DeployDashboard />);
@@ -365,6 +370,7 @@ describe("DeployDashboard", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
+        jobs: [],
         results: { remnanode: "present", ssl: "present", haproxy: "present" },
         settings: {},
       }),
@@ -388,7 +394,7 @@ describe("DeployDashboard", () => {
     expect(capturedPreset?.skip_components).toEqual([]);
   });
 
-  // ── Remnawave sync toolbar action (dry run → apply) ──────────
+  // ── Remnawave sync toolbar action (dry run → apply) ─────────
 
   const syncReport = (dryRun: boolean) => ({
     ok: true,
@@ -402,12 +408,7 @@ describe("DeployDashboard", () => {
   });
 
   it("does not touch the sync endpoint on a plain page load", async () => {
-    const { calls } = stubFetch((url, init) => {
-      if (url.includes("/api/deploy-jobs") && (init?.method ?? "GET") === "GET") {
-        return { ok: true, json: async () => ({ jobs: [] }) };
-      }
-      return { ok: true, json: async () => ({}) };
-    });
+    const { calls } = stubServer();
     render(<DeployDashboard />);
     await waitFor(() => expect(calls.length).toBeGreaterThan(0));
 
@@ -415,14 +416,14 @@ describe("DeployDashboard", () => {
   });
 
   it("previews the difference with a dry run and applies only after confirmation", async () => {
+    seed([job("live.example", "t-live")]);
     const { calls } = stubFetch((url, init) => {
       if (url.includes("/sync-remnawave")) {
         const body = JSON.parse(String(init?.body ?? "{}"));
         return { ok: true, json: async () => syncReport(Boolean(body.dry_run)) };
       }
-      if (url.includes("/tombstones")) return { ok: true, json: async () => ({ taskIds: [] }) };
       if (url.includes("/api/deploy-jobs") && (init?.method ?? "GET") === "GET") {
-        return { ok: true, json: async () => ({ jobs: [job("live.example", "t-live")] }) };
+        return { ok: true, json: async () => ({ jobs: serverJobs }) };
       }
       return { ok: true, json: async () => ({}) };
     });
@@ -430,7 +431,6 @@ describe("DeployDashboard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Синхронизировать с Remnawave/ }));
 
-    // dry run first: preview shows what would be added / removed
     await screen.findByText(/добавить 1/);
     expect(screen.getByText(/убрать 1/)).toBeInTheDocument();
     expect(screen.getByText(/пропущено 1/)).toBeInTheDocument();
@@ -440,7 +440,6 @@ describe("DeployDashboard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Применить" }));
 
-    // the apply call is the only non-dry-run one, and it happens after the click
     await waitFor(() => expect(syncCalls()).toHaveLength(2));
     expect(syncCalls()[1].body).toEqual({ dry_run: false });
     await waitFor(() => expect(screen.queryByText(/добавить 1/)).not.toBeInTheDocument());
@@ -449,12 +448,8 @@ describe("DeployDashboard", () => {
   it("keeps the apply button disabled when there is nothing to do", async () => {
     stubFetch((url, init) => {
       if (url.includes("/sync-remnawave")) {
-        return {
-          ok: true,
-          json: async () => ({ ...syncReport(true), added: [], removed: [], skipped: [] }),
-        };
+        return { ok: true, json: async () => ({ ...syncReport(true), added: [], removed: [], skipped: [] }) };
       }
-      if (url.includes("/tombstones")) return { ok: true, json: async () => ({ taskIds: [] }) };
       if (url.includes("/api/deploy-jobs") && (init?.method ?? "GET") === "GET") {
         return { ok: true, json: async () => ({ jobs: [] }) };
       }
@@ -470,7 +465,6 @@ describe("DeployDashboard", () => {
   it("surfaces a dry-run failure instead of applying anything", async () => {
     const { calls } = stubFetch((url, init) => {
       if (url.includes("/sync-remnawave")) return { ok: false, status: 400, json: async () => ({}) };
-      if (url.includes("/tombstones")) return { ok: true, json: async () => ({ taskIds: [] }) };
       if (url.includes("/api/deploy-jobs") && (init?.method ?? "GET") === "GET") {
         return { ok: true, json: async () => ({ jobs: [] }) };
       }

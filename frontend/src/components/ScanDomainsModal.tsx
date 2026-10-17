@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, ScanSearch, Server, X } from "lucide-react";
-import { deployJobsKey } from "../auth/store";
+import { useDeployJobs } from "../data/deployJobsStore";
 
 /**
  * «Авто» для «Управления SSL» (Wave-4 PR-3): сервис заходит на сервер по SSH
@@ -33,27 +33,26 @@ export function ScanDomainsModal({ defaults, onClose, onAdded }: {
   const [found, setFound] = useState<FoundDomain[] | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
 
-  // Известные серверы из деплоя — выбор заполняет креды одним кликом.
+  // Известные серверы из деплоя (список — с сервера, data/deployJobsStore):
+  // выбор заполняет креды одним кликом.
+  const deployedJobs = useDeployJobs();
   const known = useMemo<KnownServer[]>(() => {
-    try {
-      const jobs = JSON.parse(localStorage.getItem(deployJobsKey()) || "[]");
-      const arr = Array.isArray(jobs) ? jobs : [];
-      const seen = new Set<string>();
-      return arr
-        .map((j: { savedForm?: KnownServer; ip?: string }) => ({
-          ip: j.savedForm?.ip || j.ip || "",
-          ssh_user: j.savedForm?.ssh_user || "root",
-          ssh_password: j.savedForm?.ssh_password || "",
-          ssh_port: j.savedForm?.ssh_port || 22,
-          domain: j.savedForm?.domain,
-        }))
-        .filter((s: KnownServer) => {
-          if (!s.ip || seen.has(s.ip)) return false;
-          seen.add(s.ip);
-          return true;
-        });
-    } catch { return []; }
-  }, []);
+    const arr = deployedJobs as unknown as { savedForm?: KnownServer; ip?: string }[];
+    const seen = new Set<string>();
+    return arr
+      .map(j => ({
+        ip: j.savedForm?.ip || j.ip || "",
+        ssh_user: j.savedForm?.ssh_user || "root",
+        ssh_password: j.savedForm?.ssh_password || "",
+        ssh_port: j.savedForm?.ssh_port || 22,
+        domain: j.savedForm?.domain,
+      }))
+      .filter(s => {
+        if (!s.ip || seen.has(s.ip)) return false;
+        seen.add(s.ip);
+        return true;
+      });
+  }, [deployedJobs]);
 
   const pick = (s: KnownServer) => {
     setIp(s.ip); setUser(s.ssh_user); setPassword(s.ssh_password);

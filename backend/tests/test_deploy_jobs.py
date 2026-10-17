@@ -152,6 +152,31 @@ def test_finished_pipeline_updates_deploy_job_final_status(monkeypatch):
         accounts.current_account.reset(token)
 
 
+def test_job_endpoints_are_never_cacheable():
+    """Сервер — единственный источник карточек: ответы не должны кешироваться.
+
+    Иначе HTTP-кеш браузера/прокси мог бы отдать старый список и «решить» за
+    сервер, что показывать в карточках.
+    """
+    _account_id, headers = _auth()
+    job = _job("task-cache")
+    assert client.post("/api/deploy-jobs", headers=headers, json=job).status_code == 200
+
+    responses = [
+        client.get("/api/deploy-jobs", headers=headers),
+        client.get("/api/deploy-jobs/tombstones", headers=headers),
+        client.post("/api/deploy-jobs", headers=headers, json=job),
+        client.put("/api/deploy-jobs", headers=headers, json={"jobs": [job]}),
+        client.delete("/api/deploy-jobs/task-cache", headers=headers),
+    ]
+
+    for response in responses:
+        assert response.status_code < 300, response.text
+        cache_control = response.headers.get("cache-control", "")
+        assert "no-store" in cache_control, (response.request.url, cache_control)
+        assert response.headers.get("pragma") == "no-cache"
+
+
 def test_backfill_adds_missing_cards_without_duplicating_existing(tmp_path, monkeypatch):
     account_id, _headers = _auth()
     monkeypatch.setattr(accounts, "DATA_DIR", tmp_path)

@@ -5,13 +5,18 @@ import {
 } from "lucide-react";
 import { DeployCard } from "./DeployCard";
 import { DeployForm, type FormData } from "./DeployForm";
-import { deployJobsKey } from "../auth/store";
 import { Page, Seg, EmptyState, FormDialog } from "../theme/ui";
 import { Stagger, StaggerItem } from "../theme/motion";
 import {
-  upsertDeployJob, deleteDeployJob, syncDeployJobs,
   syncRemnawaveCards, type RemnawaveSyncReport,
 } from "./deployJobsSync";
+// Карточки нод — ТОЛЬКО с сервера: getJobs() отдаёт снимок /api/deploy-jobs,
+// refreshJobs() перечитывает, saveJob/removeJob пишут и обновляют снимок.
+// localStorage здесь больше не читается и не пишется.
+import {
+  getJobs, refreshJobs, removeJob as removeJobOnServer, saveJob as saveJobOnServer,
+  setJobs as setStoreJobs,
+} from "../data/deployJobsStore";
 import { toast } from "./infra/Toast";
 
 export interface DeployJobSummary {
@@ -35,31 +40,16 @@ const STATUS_LABEL: Record<StatusFilter, string> = {
   failed:  "Ошибка",
 };
 
-function loadJobs(): DeployJobSummary[] {
-  try { return JSON.parse(localStorage.getItem(deployJobsKey()) ?? "[]"); }
-  catch { return []; }
-}
-
-function saveJobs(jobs: DeployJobSummary[]) {
-  try { localStorage.setItem(deployJobsKey(), JSON.stringify(jobs)); }
-  catch {}
-}
-
-// localStorage is a local CACHE mirroring the merged list (server + still-pending
-// local-only cards). It is authoritative only for offline fallback; the server
-// stays the source of truth and the cache is never used to drive a server delete.
-// bufferUpsert/bufferRemove keep the cache in step with the in-memory list on
-// every mutation (add/edit/status/color/remove).
-function bufferUpsert(job: DeployJobSummary) {
-  saveJobs([...loadJobs().filter(j => j.taskId !== job.taskId), job]);
-}
-
-function bufferRemove(taskId: string) {
-  saveJobs(loadJobs().filter(j => j.taskId !== taskId));
+// Сервер — единственный источник карточек (data/deployJobsStore): здесь нет ни
+// чтения, ни записи localStorage. Список приходит из GET /api/deploy-jobs, а
+// каждая мутация (добавить/изменить/цвет/удалить) уходит на сервер и обновляет
+// снимок стора — поэтому кеш и память браузера на карточки не влияют.
+function currentJobs(): DeployJobSummary[] {
+  return getJobs() as unknown as DeployJobSummary[];
 }
 
 export function DeployDashboard() {
-  const [jobs,     setJobs]     = useState<DeployJobSummary[]>(loadJobs);
+  const [jobs,     setJobs]     = useState<DeployJobSummary[]>(currentJobs);
   const [showForm, setShowForm] = useState(false);
   const [editJob,  setEditJob]  = useState<DeployJobSummary | null>(null);
   // Add-existing-server flow: `showExisting` = the detect/checklist modal;
@@ -115,15 +105,17 @@ export function DeployDashboard() {
     // upserted so its status/color/savedForm reaches the server.
     const changed = next.filter(n => !prev.includes(n));
 
+    // Снимок стора = ровно то, что сейчас на сервере: сразу после локального
+    // решения, до ответов сети (их результат только подтверждает/чинит список).
+    setStoreJobs(next);
+
     for (const j of removed) {
-      bufferRemove(j.taskId);
-      deleteDeployJob(j.taskId)
+      removeJobOnServer(j.taskId)
         .then(() => { dirtyRef.current = false; })
         .catch(notifyDirty);
     }
     for (const j of changed) {
-      bufferUpsert(j);
-      upsertDeployJob(j)
+      saveJobOnServer(j)
         .then(() => { dirtyRef.current = false; })
         .catch(notifyDirty);
     }
@@ -142,33 +134,29 @@ export function DeployDashboard() {
   }, [syncDiff]);
 
   // Перечитать карточки с сервера после серверной синхронизации с Remnawave:
-  // additive-merge подтянет новые карточки и (через tombstones) уберёт из кэша
-  // удалённые. Ничего не удаляет на сервере — только читает.
+  // список приходит из GET /api/deploy-jobs (сервер — источник истины, tombstones
+  // уже отфильтрованы на его стороне).
   const refreshFromServer = useCallback(async () => {
-    const { jobs: synced } = await syncDeployJobs({
-      loadLocal: loadJobs,
-      saveLocal: saveJobs,
-    });
-    setJobs(synced);
+    const synced = await refreshJobs().catch(() => null);
+    if (synced) setJobs(synced as unknown as DeployJobSummary[]);
   }, []);
 
-  // On mount, run the one-shot additive sync (syncDeployJobs):
-  //  - pull the authoritative server list and merge it into the local cache
-  //    (server wins on taskId conflicts) — server cards we didn't know about are
-  //    ADDED to localStorage, never removed;
-  //  - upload local-only cards (POST, one at a time) — never DELETE anything;
-  //  - server unreachable (network/5xx/401) -> degrade to the local cache.
+  // On mount, pull the authoritative list from the server. Никакого локального
+  // кеша: пока сервер не ответил — список пуст (и это честно), при ошибке
+  // показываем плашку «не синхронизировано» и пробуем ещё раз.
   useEffect(() => {
     let live = true;
     (async () => {
-      const { jobs: synced, offline, pushFailed } = await syncDeployJobs({
-        loadLocal: loadJobs,
-        saveLocal: saveJobs,
-      });
-      if (!live) return;
-      if (!offline && !pushFailed) dirtyRef.current = false;
-      else if (pushFailed) notifyDirty();
-      setJobs(synced);
+      try {
+        const synced = await refreshJobs();
+        if (!live) return;
+        dirtyRef.current = false;
+        setJobs(synced as unknown as DeployJobSummary[]);
+      } catch {
+        if (!live) return;
+        notifyDirty();
+        setJobs(currentJobs());
+      }
     })();
     return () => { live = false; };
   }, [notifyDirty]);

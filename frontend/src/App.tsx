@@ -126,6 +126,7 @@ import { useRemnawaveStatus, type RwStatus } from "./hooks/useRemnawaveStatus";
 import { AccountMenu }                     from "./auth/AccountMenu";
 import { usePermissions }                  from "./auth/usePermissions";
 import { tabKey, getActiveId, certJobsKey } from "./auth/store";
+import { refreshJobs, resetJobs } from "./data/deployJobsStore";
 import {
   applyAccent, applyDensity, applyThemeMode, applySkin, applyPalette, applyStyle,
   loadDensity, loadThemeMode, loadSkin, loadPalette, loadStylePreset,
@@ -309,6 +310,16 @@ export default function App() {
     applyAccent(resolveAccentForSkin(skin, palette));
     applyDensity(loadDensity());
     applyNeonGlow(loadNeonGlow());
+  }, []);
+
+  // ── Карточки нод с сервера ─────────────────────────────────
+  // Единственный источник списка — GET /api/deploy-jobs (data/deployJobsStore).
+  // Грузим при старте и при смене аккаунта (App keyed by activeId): сбрасываем
+  // снимок прежнего аккаунта и тянем новый. localStorage тут не участвует —
+  // только одноразовая миграция старого кэша внутри refreshJobs().
+  useEffect(() => {
+    resetJobs();
+    refreshJobs().catch(() => { /* 401/сеть: список останется пустым, панели покажут пусто */ });
   }, []);
 
   // ── Certs task state ───────────────────────────────────────

@@ -10,7 +10,7 @@ import { resolveCountryCode, splitFlagEmoji } from "../utils/countryAliases";
 import { nodeColorLookup } from "../utils/nodeColors";
 import { Page, Seg, EmptyState, Table, Stat as StatTile } from "../theme/ui";
 import { Stagger, StaggerItem, Skeleton } from "../theme/motion";
-import { deployJobsKey } from "../auth/store";
+import { useDeployJobs } from "../data/deployJobsStore";
 
 // ── Types (mirror /api/checker/statuspage + /incidents) ───────
 type TickStatus = "up" | "slow" | "down";
@@ -429,6 +429,10 @@ function ServerUptime() {
   const [importing, setImporting] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSig = useRef("");
+  // Серверный список карточек нод (data/deployJobsStore) + отпечаток последнего
+  // авто-синка, чтобы не дублировать POST при каждом обновлении снимка.
+  const deployedJobs = useDeployJobs();
+  const deployedSyncSig = useRef("");
 
   const load = useCallback(async (n: number) => {
     try {
@@ -446,26 +450,27 @@ function ServerUptime() {
     setLoading(false);
   }, []);
 
-  // Auto-sync deployed nodes from the browser's deploy_jobs on mount.
+  // Auto-sync deployed nodes from the SERVER card list (data/deployJobsStore) —
+  // никакого localStorage. Ждём первый непустой снимок с сервера и отправляем
+  // его в server-monitor один раз (повторный тот же набор не дублируем).
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(deployJobsKey());
-      const jobs = raw ? JSON.parse(raw) : [];
-      const deployed = (Array.isArray(jobs) ? jobs : [])
-        .filter((j: any) => j?.savedForm?.mode === "remnanode" && j?.savedForm?.ip)
-        .map((j: any) => ({
-          name: j.savedForm.domain || j.savedForm.ip,
-          country: (j.savedForm.country_code || "").toUpperCase(),
-          ip: j.savedForm.ip,
-          port: 443,
-        }));
-      if (deployed.length)
-        fetch("/api/server-monitor/servers/sync-deployed", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(deployed),
-        }).catch(() => {});
-    } catch { /* ignore */ }
-  }, []);
+    const deployed = (deployedJobs as unknown as { savedForm?: Record<string, any> }[])
+      .filter(j => j?.savedForm?.mode === "remnanode" && j?.savedForm?.ip)
+      .map(j => ({
+        name: String(j.savedForm!.domain || j.savedForm!.ip),
+        country: String(j.savedForm!.country_code || "").toUpperCase(),
+        ip: String(j.savedForm!.ip),
+        port: 443,
+      }));
+    if (!deployed.length) return;
+    const sig = JSON.stringify(deployed);
+    if (sig === deployedSyncSig.current) return;
+    deployedSyncSig.current = sig;
+    fetch("/api/server-monitor/servers/sync-deployed", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(deployed),
+    }).catch(() => {});
+  }, [deployedJobs]);
 
   useEffect(() => {
     load(ticks);

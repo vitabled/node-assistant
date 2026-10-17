@@ -4,7 +4,7 @@ import {
   CheckCircle2, XCircle, ChevronDown,
 } from "lucide-react";
 import { toast } from "./infra/Toast";
-import { deployJobsKey } from "../auth/store";
+import { getJobs, useDeployJobs } from "../data/deployJobsStore";
 import type { DeployJobSummary } from "./DeployDashboard";
 import { FlagChip } from "./common/FlagChip";
 import { InputShell, EmptyState, Table } from "../theme/ui";
@@ -178,12 +178,10 @@ function upsert(list: RknEntry[], entry: RknEntry): RknEntry[] {
   return list.map((e, i) => (i === idx ? { ...e, ...entry } : e));
 }
 
+// Ноды для сбора — из серверного снимка карточек (data/deployJobsStore).
+// localStorage не участвует: кеш браузера не влияет на список нод.
 function loadNodes(): NodeRef[] {
-  let jobs: DeployJobSummary[] = [];
-  try { jobs = JSON.parse(localStorage.getItem(deployJobsKey()) ?? "[]"); }
-  catch { /* ignore malformed */ }
-  if (!Array.isArray(jobs)) jobs = [];
-  return nodesFromJobs(jobs);
+  return nodesFromJobs(getJobs() as unknown as DeployJobSummary[]);
 }
 
 /** Серверные карточки (GET /api/deploy-jobs) → ноды. savedForm приходит
@@ -246,8 +244,12 @@ export function RknScanners() {
   const [sortKey, setSortKey] = useState<SortKey>("lastSeen");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  // Ноды: сервер — источник правды (GET /api/deploy-jobs), localStorage — фолбэк.
+  // Ноды: сервер — источник правды (GET /api/deploy-jobs через data/deployJobsStore).
   const [nodes, setNodes] = useState<NodeRef[]>(loadNodes);
+  // Серверный снимок карточек: как только он пришёл/изменился — пересобираем
+  // список нод (кеш браузера на него не влияет).
+  const deployedJobs = useDeployJobs();
+  useEffect(() => { setNodes(loadNodes()); }, [deployedJobs]);
   const [sinceHours, setSinceHours] = useState("24");
   const [nodesOpen, setNodesOpen] = useState(false);
 
