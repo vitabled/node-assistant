@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#141218" />
+<title>Node Assistant</title>
+<link rel="stylesheet" href="m3.css" />
+</head>
+<body>
+<header class="top-app-bar">
+  <h1 class="title-large">Node Assistant</h1>
+</header>
+<main>
+  <p class="body-medium on-surface-variant">Выберите сервер NA — откроется полный интерфейс управления (деплой нод, Remnawave, мониторинг, настройки).</p>
+  <ul id="list" class="list" aria-label="Серверы"></ul>
+  <div id="empty" class="empty body-large" hidden>Серверов пока нет. Добавьте адрес панели NA.</div>
+  <label class="switch-row body-large">
+    <span>Сразу открывать последний сервер</span>
+    <input id="auto" type="checkbox" role="switch" class="m3-switch" />
+  </label>
+</main>
+<button id="fab" class="fab" aria-label="Добавить сервер"><span class="icon" aria-hidden="true">+</span><span class="label-large">Сервер</span></button>
+
+<dialog id="dlg" class="dialog">
+  <form method="dialog" id="form">
+    <h2 class="headline-small">Добавить сервер</h2>
+    <label class="field"><span class="body-small">Адрес панели NA</span>
+      <input id="url" name="url" type="url" inputmode="url" autocomplete="url" placeholder="https://na.example.com" required /></label>
+    <label class="field"><span class="body-small">Название (необязательно)</span>
+      <input id="name" name="name" type="text" autocomplete="off" placeholder="Прод" /></label>
+    <p id="err" class="error body-small" role="alert" hidden></p>
+    <div class="actions">
+      <button type="button" id="cancel" class="text-btn label-large">Отмена</button>
+      <button type="submit" id="save" class="filled-btn label-large">Проверить и открыть</button>
+    </div>
+  </form>
+</dialog>
+<div id="snack" class="snackbar body-medium" role="status" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

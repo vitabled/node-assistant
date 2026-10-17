@@ -1,0 +1,16 @@
+{
+  "appId": "com.dozavpn.nodeassistant",
+  "appName": "Node Assistant",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": [
+      "*"
+    ],
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#141218"
+  }
+}
