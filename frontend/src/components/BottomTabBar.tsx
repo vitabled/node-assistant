@@ -1,14 +1,14 @@
-import { Activity, Rocket, ShieldCheck, Gauge, Menu } from "lucide-react";
+import { Activity, Users, Zap, LayoutDashboard, Menu } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Tab } from "./Sidebar";
 
 // Native-style bottom tab bar — mobile only (shown via .ni-tabbar CSS ≤820px).
-// 4 primary destinations + «Ещё» which opens the full-nav drawer.
+// Только разделы мониторинга + «Ещё» (полное меню: деплой, SSL и всё остальное).
 const TABS: { tab: Tab; label: string; Icon: LucideIcon }[] = [
-  { tab: "dashboard", label: "Статус", Icon: Activity },
-  { tab: "deploy",    label: "Деплой", Icon: Rocket },
-  { tab: "certs",     label: "SSL",    Icon: ShieldCheck },
-  { tab: "traffic",   label: "Трафик", Icon: Gauge },
+  { tab: "dashboard",        label: "Статус",       Icon: Activity },
+  { tab: "stats-users",      label: "Пользователи", Icon: Users },
+  { tab: "stats-speedtests", label: "Скорость",     Icon: Zap },
+  { tab: "haproxy-overview", label: "HAProxy",      Icon: LayoutDashboard },
 ];
 
 // The tab-bar's primary destinations. Exported so App.tsx derives «Ещё»'s
