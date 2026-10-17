@@ -41,6 +41,46 @@ export async function deleteDeployJob(taskId: string): Promise<void> {
   if (!res.ok && res.status !== 404) throw new Error(`deploy-jobs DELETE ${res.status}`);
 }
 
+// taskIds the SERVER deleted on purpose (tombstones). A card removed there but
+// still present in this browser's cache must be dropped locally — otherwise the
+// additive sync uploads it back and "resurrects" it. GET /api/deploy-jobs
+// already hides them; this pulls the list so the cache can be pruned too.
+export async function fetchDeployJobTombstones(): Promise<string[]> {
+  const res = await fetch("/api/deploy-jobs/tombstones", { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`deploy-jobs tombstones GET ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data?.taskIds) ? (data.taskIds as string[]) : [];
+}
+
+// ── Remnawave reconciliation (server-side) ───────────────────────────────────
+// POST /api/deploy-jobs/sync-remnawave reconciles the cards with Remnawave: it
+// adds a card for every node without one and removes remnanode cards whose node
+// is gone (HAProxy relay cards are never touched). dry_run=true only previews.
+// The removal lives on the SERVER (it writes tombstones); this client never
+// deletes anything itself.
+export interface RemnawaveSyncEntry { taskId: string; ip: string; domain: string }
+export interface RemnawaveSyncSkipped { ip: string; reason: string }
+export interface RemnawaveSyncReport {
+  ok: boolean;
+  dry_run: boolean;
+  added: RemnawaveSyncEntry[];
+  removed: RemnawaveSyncEntry[];
+  skipped: RemnawaveSyncSkipped[];
+  nodes_total: number;
+  cards_before: number;
+  cards_after: number;
+}
+
+export async function syncRemnawaveCards(dryRun: boolean): Promise<RemnawaveSyncReport> {
+  const res = await fetch("/api/deploy-jobs/sync-remnawave", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dry_run: dryRun }),
+  });
+  if (!res.ok) throw new Error(`sync-remnawave ${res.status}`);
+  return (await res.json()) as RemnawaveSyncReport;
+}
+
 // Merge the authoritative server list with the local cache by taskId. The server
 // wins for any taskId it already knows; local-only taskIds (cards that haven't
 // reached the server yet) are returned as `localOnly` so the caller can push them.
@@ -54,12 +94,14 @@ export function reconcileJobs<T extends { taskId: string }>(
   return { merged: [...serverJobs, ...localOnly], localOnly };
 }
 
-// One-shot additive sync: pull the authoritative server list, merge it with the
-// local cache (server wins on taskId conflicts), upload any local-only cards, and
-// write the merged list back to the local cache. It NEVER deletes anything on the
-// server — deletion is only the explicit UI "delete" button (deleteDeployJob).
-// If the API is unreachable it degrades to the local cache (offline) without
-// touching the server, so local data is never lost.
+// One-shot additive sync: pull the authoritative server list, drop cards the
+// server has tombstoned (deleted on purpose) from the local cache, merge server
+// cards with the remaining local cache (server wins on taskId conflicts), upload
+// any local-only cards, and write the merged list back to the local cache. It
+// NEVER deletes anything on the server — deletion is only the explicit UI
+// "delete" button (deleteDeployJob) or the server-side Remnawave sync (which
+// writes its OWN tombstones). If the API is unreachable it degrades to the local
+// cache (offline) without touching the server, so local data is never lost.
 export interface SyncDeployJobsResult<T> {
   jobs: T[];
   /** true when the server was unreachable and the local cache was returned as-is. */
@@ -78,7 +120,17 @@ export async function syncDeployJobs<T extends { taskId: string }>(
     return { jobs: opts.loadLocal(), offline: true, pushFailed: false };
   }
 
-  const local = opts.loadLocal();
+  // Tombstones are best-effort: an old backend without the route must not break
+  // the sync (no tombstones → the previous behaviour, unchanged).
+  let tombstones: string[] = [];
+  try {
+    tombstones = await fetchDeployJobTombstones();
+  } catch { /* no tombstone list available → skip the cache prune */ }
+  const tombstoned = new Set(tombstones);
+
+  // Purge cards the server deleted on purpose BEFORE merging, so a stale cache
+  // can't re-upload them (the additive-sync resurrection).
+  const local = opts.loadLocal().filter(j => !tombstoned.has(j.taskId));
   const { merged, localOnly } = reconcileJobs(serverJobs, local);
 
   let pushFailed = false;

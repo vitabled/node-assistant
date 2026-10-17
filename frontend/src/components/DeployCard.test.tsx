@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { DeployCard, manageableComponents, opPayload, VnstatBlock } from "./DeployCard";
 import { FORM_DEFAULT, type FormData } from "./DeployForm";
 
@@ -515,5 +515,79 @@ describe("task gone from the backend (Task not found)", () => {
     // «Повторить» доступен, а «Перезапустить» (очередь, которой больше нет) — убран.
     expect(screen.getByRole("button", { name: "Перезапустить деплой с теми же параметрами" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Перезапустить ожидающий деплой" })).not.toBeInTheDocument();
+  });
+});
+
+// Карточка, которую создаёт серверная синхронизация с Remnawave для ноды без
+// записи в node_creds: пароля нет (выдумывать нельзя), ключа нет, домена нет,
+// finalStatus=success → «существующий сервер», у которого нет живых данных.
+// Такая карточка не должна показывать «Task not found» и не должна падать на
+// каждом поллинге.
+describe("card created by the Remnawave sync (no stored creds)", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const syncedForm: FormData = {
+    ...FORM_DEFAULT, mode: "remnanode", ip: "203.0.113.5", domain: "",
+    ssh_password: "", ssh_key_ref: "", country_code: "XX",
+  };
+  const syncedJob = {
+    taskId: "rw-11111111-1111-1111-1111-111111111111",
+    domain: "", ip: "203.0.113.5", newSshPort: 2222, startedAt: Date.now(),
+    savedForm: syncedForm, finalStatus: "success" as const,
+  };
+
+  it("shows the «no SSH password» status instead of a false green check", () => {
+    render(<DeployCard
+      job={syncedJob} onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+
+    expect(screen.getByLabelText("Нет SSH-пароля — статистика недоступна")).toBeInTheDocument();
+    expect(screen.getByText(/203\.0\.113\.5:2222/)).toBeInTheDocument();
+  });
+
+  it("never surfaces «Task not found» and does not reconnect in a loop", () => {
+    render(<DeployCard
+      job={syncedJob} onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+
+    // Синтетический taskId никогда не существовал на бэкенде — панель ответит
+    // именно этим текстом, и он не должен доехать до карточки.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    act(() => FakeWebSocket.instances[0].emit({ type: "error", message: "Task not found" }));
+
+    expect(screen.queryByText(/Task not found/i)).not.toBeInTheDocument();
+    expect(FakeWebSocket.instances[0].closed).toBe(true);   // поток закрыт, реконнекта нет
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    // карточка на месте и после ошибки стрима
+    expect(screen.getByLabelText("Нет SSH-пароля — статистика недоступна")).toBeInTheDocument();
+    expect(screen.getByText(/203\.0\.113\.5:2222/)).toBeInTheDocument();
+  });
+
+  it("survives a failing stats poll without an error message", async () => {
+    // Без пароля сбор статистики по SSH обречён; ошибка должна быть проглочена,
+    // а не показана пользователю (панель не «ошибается» на каждом поллинге).
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ online: false }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DeployCard
+      job={syncedJob} onRemove={vi.fn()} onEdit={vi.fn()} onRetry={vi.fn()}
+      onRestart={vi.fn()} onStatusChange={vi.fn()}
+    />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const statsCall = fetchMock.mock.calls.find(c => String(c[0]).includes("/api/stats/node"));
+    expect(statsCall).toBeTruthy();
+    // Пароль уходит пустым — ничего не выдумывается на клиенте.
+    expect(JSON.parse(String((statsCall![1] as RequestInit).body)).ssh_password).toBe("");
+
+    await waitFor(() =>
+      expect(screen.queryByText(/ошибк|Ошибк/)).not.toBeInTheDocument());
+    expect(screen.queryByText(/Task not found/i)).not.toBeInTheDocument();
   });
 });

@@ -387,4 +387,101 @@ describe("DeployDashboard", () => {
     expect(capturedPreset?.mode).toBe(expectedMode);
     expect(capturedPreset?.skip_components).toEqual([]);
   });
+
+  // ── Remnawave sync toolbar action (dry run → apply) ──────────
+
+  const syncReport = (dryRun: boolean) => ({
+    ok: true,
+    dry_run: dryRun,
+    added: [{ taskId: "rw-u1", ip: "5.6.7.8", domain: "" }],
+    removed: [{ taskId: "dead", ip: "9.9.9.9", domain: "dead.example" }],
+    skipped: [{ ip: "172.30.0.1", reason: "private-address" }],
+    nodes_total: 3,
+    cards_before: 2,
+    cards_after: 2,
+  });
+
+  it("does not touch the sync endpoint on a plain page load", async () => {
+    const { calls } = stubFetch((url, init) => {
+      if (url.includes("/api/deploy-jobs") && (init?.method ?? "GET") === "GET") {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    render(<DeployDashboard />);
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
+
+    expect(calls.some(c => c.url.includes("/sync-remnawave"))).toBe(false);
+  });
+
+  it("previews the difference with a dry run and applies only after confirmation", async () => {
+    const { calls } = stubFetch((url, init) => {
+      if (url.includes("/sync-remnawave")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        return { ok: true, json: async () => syncReport(Boolean(body.dry_run)) };
+      }
+      if (url.includes("/tombstones")) return { ok: true, json: async () => ({ taskIds: [] }) };
+      if (url.includes("/api/deploy-jobs") && (init?.method ?? "GET") === "GET") {
+        return { ok: true, json: async () => ({ jobs: [job("live.example", "t-live")] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    render(<DeployDashboard />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Синхронизировать с Remnawave/ }));
+
+    // dry run first: preview shows what would be added / removed
+    await screen.findByText(/добавить 1/);
+    expect(screen.getByText(/убрать 1/)).toBeInTheDocument();
+    expect(screen.getByText(/пропущено 1/)).toBeInTheDocument();
+    const syncCalls = () => calls.filter(c => c.url.includes("/sync-remnawave"));
+    expect(syncCalls()).toHaveLength(1);
+    expect(syncCalls()[0].body).toEqual({ dry_run: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "Применить" }));
+
+    // the apply call is the only non-dry-run one, and it happens after the click
+    await waitFor(() => expect(syncCalls()).toHaveLength(2));
+    expect(syncCalls()[1].body).toEqual({ dry_run: false });
+    await waitFor(() => expect(screen.queryByText(/добавить 1/)).not.toBeInTheDocument());
+  });
+
+  it("keeps the apply button disabled when there is nothing to do", async () => {
+    stubFetch((url, init) => {
+      if (url.includes("/sync-remnawave")) {
+        return {
+          ok: true,
+          json: async () => ({ ...syncReport(true), added: [], removed: [], skipped: [] }),
+        };
+      }
+      if (url.includes("/tombstones")) return { ok: true, json: async () => ({ taskIds: [] }) };
+      if (url.includes("/api/deploy-jobs") && (init?.method ?? "GET") === "GET") {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    render(<DeployDashboard />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Синхронизировать с Remnawave/ }));
+    await screen.findByText(/добавить 0/);
+    expect(screen.getByRole("button", { name: "Применить" })).toBeDisabled();
+  });
+
+  it("surfaces a dry-run failure instead of applying anything", async () => {
+    const { calls } = stubFetch((url, init) => {
+      if (url.includes("/sync-remnawave")) return { ok: false, status: 400, json: async () => ({}) };
+      if (url.includes("/tombstones")) return { ok: true, json: async () => ({ taskIds: [] }) };
+      if (url.includes("/api/deploy-jobs") && (init?.method ?? "GET") === "GET") {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    render(<DeployDashboard />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Синхронизировать с Remnawave/ }));
+    await screen.findByText(/sync-remnawave 400/);
+
+    expect(calls.filter(c => c.url.includes("/sync-remnawave"))).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Применить" })).toBeDisabled();
+  });
 });

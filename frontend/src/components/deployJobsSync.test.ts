@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchDeployJobs, upsertDeployJob, deleteDeployJob, reconcileJobs, syncDeployJobs,
+  fetchDeployJobTombstones, syncRemnawaveCards,
 } from "./deployJobsSync";
 
 const j = (taskId: string) => ({
@@ -168,5 +169,80 @@ describe("syncDeployJobs", () => {
     expect(ids(res.jobs)).toEqual(["s1", "local"]);
     expect(ids(saved[0])).toEqual(["s1", "local"]); // pending card not lost
     expect(deletes(fetchMock)).toHaveLength(0);
+  });
+});
+
+describe("tombstones", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("fetchDeployJobTombstones returns the taskIds array", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ taskIds: ["a", "b"] }) }));
+    expect(await fetchDeployJobTombstones()).toEqual(["a", "b"]);
+  });
+
+  it("fetchDeployJobTombstones returns [] when the body has no taskIds", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    expect(await fetchDeployJobTombstones()).toEqual([]);
+  });
+
+  it("drops a tombstoned card from the local cache and never uploads it back", async () => {
+    const server = [j("keep")];
+    const local = [j("keep"), j("dead")]; // "dead" was deleted on the server
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tombstones")) return { ok: true, json: async () => ({ taskIds: ["dead"] }) };
+      if ((init?.method ?? "GET").toUpperCase() === "GET") return { ok: true, json: async () => ({ jobs: server }) };
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const saved: { taskId: string }[][] = [];
+    const res = await syncDeployJobs({ loadLocal: () => local, saveLocal: j => { saved.push(j); } });
+
+    expect(res.jobs.map(x => x.taskId)).toEqual(["keep"]);
+    expect(saved[0].map(x => x.taskId)).toEqual(["keep"]);
+    // the tombstoned card is never POSTed back (that was the resurrection bug)
+    expect(fetchMock.mock.calls.filter(c => (c[1] as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+  });
+
+  it("still syncs when the tombstones route is unavailable (old backend)", async () => {
+    const local = [j("local")];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tombstones")) throw new Error("404");
+      if ((init?.method ?? "GET").toUpperCase() === "GET") return { ok: true, json: async () => ({ jobs: [] }) };
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await syncDeployJobs({ loadLocal: () => local, saveLocal: () => {} });
+
+    expect(res.offline).toBe(false);
+    expect(res.pushFailed).toBe(false);
+    expect(res.jobs.map(x => x.taskId)).toEqual(["local"]);
+  });
+});
+
+describe("syncRemnawaveCards", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("POSTs dry_run and returns the report", async () => {
+    const report = {
+      ok: true, dry_run: true, added: [{ taskId: "rw-1", ip: "1.2.3.4", domain: "" }],
+      removed: [], skipped: [], nodes_total: 1, cards_before: 0, cards_after: 1,
+    };
+    const fn = vi.fn().mockResolvedValue({ ok: true, json: async () => report });
+    vi.stubGlobal("fetch", fn);
+
+    expect(await syncRemnawaveCards(true)).toEqual(report);
+    const [url, init] = fn.mock.calls[0];
+    expect(String(url)).toContain("/api/deploy-jobs/sync-remnawave");
+    expect((init as RequestInit).method).toBe("POST");
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({ dry_run: true });
+  });
+
+  it("throws on a non-ok response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 400 }));
+    await expect(syncRemnawaveCards(false)).rejects.toThrow("sync-remnawave 400");
   });
 });
