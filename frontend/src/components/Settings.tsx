@@ -649,6 +649,7 @@ export function ThemeTab() {
     neon: "Неон, свечения и градиенты",
     nodeflow: "Лесная зелень и Inter, как в панели NodeFlow",
     remnawave: "GitHub-dark и cyan, как в панели Remnawave",
+    m3: "Material Design 3: тональные поверхности, rail-навигация",
   };
 
   return (

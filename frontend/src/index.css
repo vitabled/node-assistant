@@ -717,6 +717,113 @@ kbd{background:var(--bg3);border:1px solid var(--line);border-bottom-width:2px;b
   background:var(--accent-dim); border:1px solid var(--accent-line); color:var(--accent-hi);
 }
 
+/* ════════ Material 3 skin — шестой data-skin, аддитивный ════════
+   Claude Design «Node Assistant M3 — Full»: тональная палитра M3 (seed #415F91),
+   Roboto Flex, карточки-поверхности без рамок (radius 16/24), кнопки-пилюли,
+   outlined-поля, навигация rail 88px + drawer 280px (components/M3Nav.tsx).
+   Акцент ставит applyAccent (ACCENTS.m3 + .light-вариант), как у nodeflow. */
+:root[data-skin="m3"]{
+  --font:'Roboto Flex',system-ui,sans-serif;
+  --r-sm:8px; --r-md:16px; --r-lg:24px;
+  --glass-blur:0px;
+}
+/* M3 · Dark — surface/container ramp тёмной схемы */
+:root[data-skin="m3"]:not([data-theme="light"]){
+  --bg0:#111318;                    /* surface                     */
+  --bg1:#191C20;                    /* surface-container-low       */
+  --bg2:#1D2024;                    /* surface-container (карточки)*/
+  --bg3:#282A2F;                    /* surface-container-high      */
+  --line:#44474F;                   /* outline-variant             */
+  --line-soft:#2A2D33;
+  --t-hi:#E2E2E9; --t-mid:#C4C6D0; --t-low:#B4B6C0; --t-faint:#9FA1AA;
+  --ok:#7DDB9A;   --ok-dim:rgba(125,219,154,.14);  --ok-line:rgba(125,219,154,.34);
+  --warn:#F3BF48; --warn-dim:rgba(243,191,72,.14); --warn-line:rgba(243,191,72,.34);
+  --err:#FFB4AB;  --err-dim:rgba(255,180,171,.14); --err-line:rgba(255,180,171,.36);
+  --raised:#191C20; --row-hover:rgba(226,226,233,.04); --overlay:rgba(0,0,0,.55);
+  --topbar-bg:#111318; --sidebar-bg:#1D2024; --term-bg:#0C0E13; --scroll-thumb:#33353A;
+  --nav-active-bg:#3F4759; --nav-active-fg:#DBE2F9;   /* secondary-container */
+  --shadow-pop:0 4px 8px 3px rgba(0,0,0,.3); --shadow-modal:0 8px 12px 6px rgba(0,0,0,.25);
+  --viz-1:#ADC6FF; --viz-2:#7DDB9A; --viz-3:#F3BF48; --viz-4:#FFB4AB;
+  --viz-5:#D8E2FF; --viz-6:#BFC6DC; --viz-7:#DEBCDF; --viz-8:#A6F2C0;
+}
+/* M3 · Light */
+:root[data-skin="m3"][data-theme="light"]{
+  --bg0:#F9F9FF; --bg1:#F3F3FA; --bg2:#EDEDF4; --bg3:#E2E2E9;
+  --line:#C4C6D0; --line-soft:#E1E2EA;
+  --t-hi:#191C20; --t-mid:#44474E; --t-low:#4A4D55; --t-faint:#55585F;
+  --ok:#1B6D3C;   --ok-dim:rgba(27,109,60,.12);   --ok-line:rgba(27,109,60,.3);
+  --warn:#6F5300; --warn-dim:rgba(111,83,0,.12);  --warn-line:rgba(111,83,0,.3);
+  --err:#BA1A1A;  --err-dim:rgba(186,26,26,.10);  --err-line:rgba(186,26,26,.3);
+  --raised:#F3F3FA; --row-hover:rgba(25,28,32,.04); --overlay:rgba(0,0,0,.32);
+  --topbar-bg:#F9F9FF; --sidebar-bg:#EDEDF4; --term-bg:#1D2024; --scroll-thumb:#C4C6D0;
+  --nav-active-bg:#D7E2FF; --nav-active-fg:#001B3F;
+  --shadow-pop:0 4px 8px 3px rgba(0,0,0,.12); --shadow-modal:0 8px 12px 6px rgba(0,0,0,.15);
+  --viz-1:#415F91; --viz-2:#1B6D3C; --viz-3:#6F5300; --viz-4:#BA1A1A;
+  --viz-5:#565F71; --viz-6:#705575; --viz-7:#2E6C80; --viz-8:#3B6939;
+}
+/* Компоненты: тональные карточки без рамок, кнопки-пилюли 40px, outlined-поля. */
+:root[data-skin="m3"] .card{ border-color:transparent; }
+:root[data-skin="m3"] .panel{ border-color:transparent; }
+:root[data-skin="m3"] .btn{ border-radius:20px; min-height:40px; padding:0 20px; font-weight:600; }
+:root[data-skin="m3"] .btn-primary{ background:var(--accent); color:var(--accent-ink); }
+:root[data-skin="m3"] .btn-primary:hover:not(:disabled){ background:var(--accent); box-shadow:0 1px 3px rgba(0,0,0,.4); }
+:root[data-skin="m3"] .btn-soft{ background:var(--nav-active-bg); color:var(--nav-active-fg); border-color:transparent; }
+:root[data-skin="m3"] .btn-soft:hover:not(:disabled){ background:var(--nav-active-bg); color:var(--nav-active-fg); box-shadow:0 1px 3px rgba(0,0,0,.3); }
+:root[data-skin="m3"] .btn-ghost{ color:var(--accent); }
+:root[data-skin="m3"] .input,
+:root[data-skin="m3"] .selectbox,
+:root[data-skin="m3"] textarea.input,
+:root[data-skin="m3"] .ni-select-trigger{ border-radius:4px; background:transparent; border-color:var(--t-faint); }
+:root[data-skin="m3"] .input:focus,
+:root[data-skin="m3"] .selectbox:focus,
+:root[data-skin="m3"] textarea.input:focus{ border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+:root[data-skin="m3"] .chip{ border-radius:8px; }
+:root[data-skin="m3"] .seg{ border-radius:20px; border-color:var(--t-faint); background:transparent; padding:0; gap:0; overflow:hidden; }
+:root[data-skin="m3"] .seg button{ border-radius:0; }
+:root[data-skin="m3"] .seg button + button{ border-left:1px solid var(--t-faint); }
+:root[data-skin="m3"] .seg button.on{ background:var(--nav-active-bg); color:var(--nav-active-fg); box-shadow:none; }
+:root[data-skin="m3"] .seg-wrap{ border:none; gap:8px; overflow:visible; }
+:root[data-skin="m3"] .seg-wrap button{ border:1px solid var(--t-faint); border-radius:8px; }
+:root[data-skin="m3"] .seg-wrap button + button{ border-left:1px solid var(--t-faint); }
+:root[data-skin="m3"] .switch{ width:52px; height:32px; border:2px solid var(--t-faint); background:var(--bg3); }
+:root[data-skin="m3"] .switch::after{ top:6px; left:6px; width:16px; height:16px; background:var(--t-faint); }
+:root[data-skin="m3"] .switch.on{ background:var(--accent); border-color:var(--accent); }
+:root[data-skin="m3"] .switch.on::after{ top:2px; left:2px; width:24px; height:24px; transform:translateX(20px); background:var(--accent-ink); }
+:root[data-skin="m3"] .modal{ border:none; border-radius:28px; background:var(--bg3); }
+:root[data-skin="m3"] .overlay{ backdrop-filter:none; }
+:root[data-skin="m3"] .navitem{ border-radius:24px; min-height:44px; padding:0 16px; font-size:14px; font-weight:600; color:var(--t-mid); }
+:root[data-skin="m3"] .navitem.active::before{ display:none; }
+:root[data-skin="m3"] .ni-topbar{ border-bottom-color:transparent !important; height:64px !important; }
+
+/* M3Nav: rail 88px + drawer 280px. ≤820px оба прячутся (.ni-sidebar) — там
+   работают BottomTabBar и мобильный drawer, как у остальных скинов. */
+.ni-m3nav{ display:flex; flex:none; height:100%; }
+.ni-m3rail{ width:88px; flex:none; display:flex; flex-direction:column; align-items:center; gap:6px;
+  padding:12px 0; background:var(--bg0); overflow-y:auto; scrollbar-width:none; }
+.ni-m3rail-menu{ width:48px; height:48px; border-radius:24px; border:none; background:none; cursor:pointer;
+  color:var(--t-mid); display:grid; place-items:center; flex:none; }
+.ni-m3rail-menu:hover{ background:var(--row-hover); }
+.ni-m3fab{ width:56px; height:56px; border-radius:16px; border:none; cursor:pointer; flex:none; margin-bottom:10px;
+  background:var(--nav-active-bg); color:var(--nav-active-fg); display:grid; place-items:center;
+  box-shadow:0 1px 3px rgba(0,0,0,.4),0 4px 8px 3px rgba(0,0,0,.15); }
+.ni-m3fab:hover{ filter:brightness(1.08); }
+.ni-m3rail-item{ width:80px; flex:none; border:none; background:none; cursor:pointer; display:flex; flex-direction:column;
+  align-items:center; gap:4px; padding:0 0 4px; color:var(--t-mid); font-family:var(--font); }
+.ni-m3rail-pill{ width:56px; height:32px; border-radius:16px; display:grid; place-items:center; transition:background .2s; }
+.ni-m3rail-item:hover .ni-m3rail-pill{ background:var(--row-hover); }
+.ni-m3rail-item.active{ color:var(--t-hi); }
+.ni-m3rail-item.active .ni-m3rail-pill{ background:var(--nav-active-bg); color:var(--nav-active-fg); }
+.ni-m3rail-label{ font-size:11px; font-weight:600; letter-spacing:.01em; line-height:16px; max-width:80px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ni-m3drawer{ width:280px; flex:none; display:flex; flex-direction:column; gap:2px; overflow-y:auto;
+  padding:20px 12px 24px; background:var(--sidebar-bg); border-radius:0 16px 16px 0; animation:ni-fadeIn .2s; }
+.ni-m3drawer-head{ display:flex; align-items:center; gap:12px; padding:4px 16px 18px; }
+.ni-m3drawer-logo{ width:36px; height:36px; border-radius:10px; background:var(--accent); color:var(--accent-ink);
+  display:grid; place-items:center; flex:none; }
+.ni-m3drawer-group{ font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--t-faint); padding:14px 16px 6px; }
+.ni-m3drawer .navitem{ gap:12px; flex:none; }
+
 /* Shimmer skeleton — animated only when motion is allowed. */
 @media (prefers-reduced-motion: no-preference){
   @keyframes ni-shimmer{ 0%{background-position:-200% 0} 100%{background-position:200% 0} }

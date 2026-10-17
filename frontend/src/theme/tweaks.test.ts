@@ -212,8 +212,8 @@ describe("skin", () => {
     expect(loadSkin("acc1")).toBe("axottle");
   });
 
-  it("exposes exactly the six skin options, Axottle first", () => {
-    expect(SKINS.map(s => s.key)).toEqual(["axottle", "apple", "console", "neon", "nodeflow", "remnawave"]);
+  it("exposes exactly the seven skin options, Axottle first", () => {
+    expect(SKINS.map(s => s.key)).toEqual(["axottle", "apple", "console", "neon", "nodeflow", "remnawave", "m3"]);
   });
 
   it("keeps the five legacy skins selectable", () => {
@@ -223,6 +223,13 @@ describe("skin", () => {
       applySkin(s);
       expect(document.documentElement.dataset.skin).toBe(s);
     }
+  });
+
+  it("persists the m3 skin and defaults its accent to m3", () => {
+    saveSkin("acc1", "m3");
+    expect(loadSkin("acc1")).toBe("m3");
+    localStorage.removeItem("ni_accent");
+    expect(resolveAccentForSkin("m3")).toBe("m3");
   });
 
   it("persists and reads back the remnawave skin", () => {

@@ -53,6 +53,7 @@ import {
 } from "lucide-react";
 import { Sidebar, NAV_TABS, tabPermission, type Tab } from "./components/Sidebar";
 import { InstanceSidebar }                 from "./components/InstanceSidebar";
+import { M3Nav, useSkin }                  from "./components/M3Nav";
 import { BottomTabBar, PRIMARY_TABS }       from "./components/BottomTabBar";
 import { Dashboard }                       from "./components/Dashboard";
 import { DeployDashboard }                 from "./components/DeployDashboard";
@@ -372,6 +373,8 @@ export default function App() {
   }, [certStepStatus.status]);
 
   const crumb = CRUMB[tab];
+  // Скин «Material 3» несёт свою навигацию (rail + drawer) вместо Sidebar.
+  const isM3 = useSkin() === "m3";
   const rw = RW_VIEW[useRemnawaveStatus()];
 
   const stopCert = async () => {
@@ -389,7 +392,9 @@ export default function App() {
           панели (components/infra/Toast) не конфликтует с ней визуально. */}
       <AxoToastHost />
       <InstanceSidebar />
-      <Sidebar activeTab={tab} onTabChange={goTab} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+      {isM3
+        ? <M3Nav activeTab={tab} onTabChange={goTab} />
+        : <Sidebar activeTab={tab} onTabChange={goTab} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />}
 
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         {/* Topbar */}
