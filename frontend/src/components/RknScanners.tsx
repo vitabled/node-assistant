@@ -30,7 +30,7 @@ import { InputShell, EmptyState, Table } from "../theme/ui";
  * словесному контракту; после сбора таблица всегда перечитывается через GET.
  *
  * Список нод — тот же механизм, что в F2bList: серверные карточки
- * (GET /api/deploy-jobs, ssh-креды расшифрованы сервером) поверх localStorage
+ * (GET /api/deploy-jobs, ssh-креды расшифрованы сервером) поверх снимка карточек
  * `deploy_jobs_<account>` как офлайн-фолбэка.
  */
 
@@ -290,7 +290,7 @@ export function RknScanners() {
   }, [refresh]);
 
   // Свежий список карточек с сервера (с расшифрованными ssh-кредами) —
-  // если пришёл, заменяет локальный; иначе остаётся localStorage-фолбэк.
+  // обновляет снимок нод; «локального фолбэка» из кеша больше нет.
   useEffect(() => {
     let alive = true;
     fetch("/api/deploy-jobs")
@@ -620,7 +620,7 @@ export function RknScanners() {
         </div>
       )}
 
-      {/* Ноды (тот же источник, что в Fail2Ban): сервер + localStorage-фолбэк. */}
+      {/* Ноды (тот же источник, что в Fail2Ban): карточки с сервера. */}
       <details open={nodesOpen} onToggle={e => setNodesOpen(e.currentTarget.open)}
         className="rounded-md border" style={{ borderColor: "var(--line-soft)" }}>
         <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"

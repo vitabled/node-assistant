@@ -18,7 +18,7 @@ import { InputShell, EmptyState } from "../theme/ui";
  *  - счётчик адресов + построчный поиск с предпросмотром совпадений (textarea остаётся редактируемой);
  *  - импорт (TXT/CSV/JSON) через inline-диалог с дедупом/тримом и пометкой подозрительных строк;
  *  - экспорт (TXT/CSV/JSON) через Blob + a.download;
- *  - сворачиваемая панель синхронизации с нодами (localStorage `deploy_jobs`), чекбоксы pull/push,
+ *  - сворачиваемая панель синхронизации с нодами (карточки с сервера — data/deployJobsStore), чекбоксы pull/push,
  *    массовый collect/push через POST /api/f2b-list/nodes/sync, результаты по каждой ноде.
  */
 
@@ -246,7 +246,7 @@ export function F2bList() {
   }, []);
 
   // Свежий список карточек с сервера (с расшифрованными ssh-кредами) —
-  // если пришёл, заменяет локальный; иначе остаётся localStorage-фолбэк.
+  // обновляет снимок нод; «локального фолбэка» из кеша больше нет.
   useEffect(() => {
     let alive = true;
     fetch("/api/deploy-jobs")
@@ -477,11 +477,11 @@ export function F2bList() {
         <Btn label="Собрать с нод" icon={<Download size={13} />}
           onClick={() => sync("collect")} loading={busy === "collect"}
           disabled={loading || busy !== null || pullNodes.length === 0}
-          title={pullNodes.length === 0 ? "Нет нод (localStorage deploy_jobs)" : "Собрать IP с отмеченных нод"} />
+          title={pullNodes.length === 0 ? "Нет нод (карточки с сервера)" : "Собрать IP с отмеченных нод"} />
         <Btn label="Загрузить на ноды" icon={<Upload size={13} />}
           onClick={() => sync("push")} loading={busy === "push"}
           disabled={loading || busy !== null || pushNodes.length === 0}
-          title={pushNodes.length === 0 ? "Нет нод (localStorage deploy_jobs)" : "Загрузить центральный список на отмеченные ноды"} />
+          title={pushNodes.length === 0 ? "Нет нод (карточки с сервера)" : "Загрузить центральный список на отмеченные ноды"} />
         <Btn label="Импорт" icon={<FilePlus size={13} />}
           onClick={() => setImportOpen(v => !v)} disabled={loading} />
         <div style={{ position: "relative" }}>
