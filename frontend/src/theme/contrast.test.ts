@@ -130,6 +130,8 @@ const MINT_DARK = axoVars(':root[data-skin="axottle"][data-palette="mint"]:not([
 const MINT_LIGHT = axoVars(':root[data-skin="axottle"][data-palette="mint"][data-theme="light"]', AXO_LIGHT);
 const axottleMintDark = { ...consoleDark, ...axoVars(':root[data-skin="axottle"]:not([data-theme="light"])', MINT_DARK) };
 const axottleMintLight = { ...consoleLight, ...axoVars(':root[data-skin="axottle"][data-theme="light"]', MINT_LIGHT) };
+const m3Dark = { ...consoleDark, ...block(':root[data-skin="m3"]:not([data-theme="light"])') };
+const m3Light = { ...consoleLight, ...block(':root[data-skin="m3"][data-theme="light"]') };
 
 const PALETTES: Record<string, Record<string, string>> = {
   "console-dark": consoleDark,
@@ -145,6 +147,8 @@ const PALETTES: Record<string, Record<string, string>> = {
   "axottle-light": axottleLight,
   "axottle-mint-dark": axottleMintDark,
   "axottle-mint-light": axottleMintLight,
+  "m3-dark": m3Dark,
+  "m3-light": m3Light,
 };
 
 const INKS = ["--t-faint", "--t-low", "--t-mid", "--t-hi"];

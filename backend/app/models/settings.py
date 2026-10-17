@@ -249,9 +249,10 @@ class AppearanceConfig(BaseModel):
     localStorage stays the fast local cache; this is the seed on first login on a
     new device. Literal fields reject invalid values with 422."""
 
-    skin: Literal["apple", "console", "neon"] = "apple"
+    skin: Literal["apple", "console", "neon", "nodeflow", "remnawave", "m3"] = "apple"
     mode: Literal["light", "dark", "system"] = "system"
-    accent: Literal["blue", "green", "violet", "amber", "cyan", "magenta", "lime"] = "blue"
+    accent: Literal["blue", "green", "violet", "amber", "cyan", "magenta", "lime",
+                    "nodeflow", "remnawave", "m3"] = "blue"
     density: Literal["comfortable", "compact"] = "comfortable"
     animations: bool = True
     neon_glow: bool = True

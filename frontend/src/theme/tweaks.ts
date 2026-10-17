@@ -1,7 +1,7 @@
 // Appearance tweaks — accent colour + density. Writes CSS variables on :root,
 // fully self-contained (no other component needs to know). Persisted locally.
 
-export type AccentKey = "axottle" | "axomint" | "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime" | "nodeflow" | "remnawave";
+export type AccentKey = "axottle" | "axomint" | "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime" | "nodeflow" | "remnawave" | "m3";
 export type Density = "comfortable" | "compact";
 export type ThemeMode = "light" | "dark" | "system";
 
@@ -36,7 +36,9 @@ export const THEME_MODES: { key: ThemeMode; label: string }[] = [
 // "nodeflow" = лесная зелёная палитра панели NodeFlow + Inter;
 // "remnawave" = GitHub-dark палитра панели Remnawave, cyan-акцент, Montserrat.
 // Axottle is default; the five legacy skins stay available per account.
-export type AppSkin = "axottle" | "apple" | "console" | "neon" | "nodeflow" | "remnawave";
+// "m3" = Material Design 3 (Claude Design «Node Assistant M3 — Full»): тональная
+// палитра M3, Roboto Flex, навигация rail + drawer (components/M3Nav.tsx).
+export type AppSkin = "axottle" | "apple" | "console" | "neon" | "nodeflow" | "remnawave" | "m3";
 export const SKINS: { key: AppSkin; label: string }[] = [
   { key: "axottle",   label: "Axottle" },
   { key: "apple",     label: "Apple" },
@@ -44,6 +46,7 @@ export const SKINS: { key: AppSkin; label: string }[] = [
   { key: "neon",      label: "Неон" },
   { key: "nodeflow",  label: "NodeFlow" },
   { key: "remnawave", label: "Remnawave" },
+  { key: "m3",        label: "Material 3" },
 ];
 
 interface AccentDef {
@@ -87,6 +90,10 @@ export const ACCENTS: Record<AccentKey, AccentDef> = {
   // активный текст/иконки берут тот же тёмный cyan.
   remnawave: { base: "#0096b5", hi: "#2ad4f0", ink: "#00161a",
               light: { base: "#00677a", hi: "#00677a", ink: "#FFFFFF" } },
+  // Material 3 primary (seed #415F91): dark — primary #ADC6FF / on-primary
+  // #002E69, light — primary #415F91 / on-primary #FFFFFF.
+  m3: { base: "#ADC6FF", hi: "#D8E2FF", ink: "#002E69",
+        light: { base: "#415F91", hi: "#415F91", ink: "#FFFFFF" } },
 };
 
 function hexA(hex: string, a: number): string {
@@ -212,7 +219,7 @@ export function resolveAccentForSkin(skin: AppSkin, palette: Palette = loadPalet
   const v = localStorage.getItem(ACCENT_KEY);
   if (v && v in ACCENTS) return v as AccentKey;
   if (skin === "axottle") return palette === "mint" ? "axomint" : "axottle";
-  return skin === "nodeflow" ? "nodeflow" : skin === "remnawave" ? "remnawave" : "blue";
+  return skin === "nodeflow" ? "nodeflow" : skin === "remnawave" ? "remnawave" : skin === "m3" ? "m3" : "blue";
 }
 export function loadDensity(): Density {
   return localStorage.getItem(DENSITY_KEY) === "compact" ? "compact" : "comfortable";
@@ -230,7 +237,7 @@ export function loadSkin(accountId?: string | null): AppSkin {
   const v = localStorage.getItem(skinKey(accountId));
   // Дефолт — axottle (дизайн Axottle). Мусор в localStorage тоже даёт дефолт:
   // иначе опечатка в значении оставила бы пользователя без палитры.
-  return v === "apple" || v === "console" || v === "neon" || v === "nodeflow" || v === "remnawave"
+  return v === "apple" || v === "console" || v === "neon" || v === "nodeflow" || v === "remnawave" || v === "m3"
     ? v : "axottle";
 }
 export function saveSkin(accountId: string | null | undefined, s: AppSkin): void {
