@@ -33,6 +33,10 @@
   --shadow-pop:0 16px 44px rgba(0,0,0,.55); --shadow-modal:0 24px 70px rgba(0,0,0,.65);
   --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --font:'Inter',system-ui,sans-serif;
+  /* Paper — заведомо белая поверхность предпросмотра (рендер клиентской страницы
+     в iframe и просмотр файла). Белая в ОБЕИХ темах намеренно: это то, как страницу
+     увидит клиент, поэтому она не следует за темой панели. */
+  --paper:#ffffff;
   /* Glow — inert unless the neon skin renders it (--glow:none). */
   --glow:none; --accent-glow:rgba(139,92,246,.10);
   /* Data-viz ink ramp (charts/bars); the neon skin boosts these. */

@@ -1,9 +1,24 @@
 // Appearance tweaks — accent colour + density. Writes CSS variables on :root,
 // fully self-contained (no other component needs to know). Persisted locally.
 
-export type AccentKey = "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime" | "nodeflow" | "remnawave";
+export type AccentKey = "axottle" | "axomint" | "blue" | "green" | "violet" | "amber" | "cyan" | "magenta" | "lime" | "nodeflow" | "remnawave";
 export type Density = "comfortable" | "compact";
 export type ThemeMode = "light" | "dark" | "system";
+
+// ── Оси дизайн-системы панели Axottle (третий и четвёртый уровни после skin × mode) ──
+// Палитра: панель держит ДВЕ (blush — дефолт, mint) и в каждой свой акцент.
+// Стиль: cloud (скругления + тени, дефолт) / sharp (прямые углы, теней нет).
+// Обе оси — атрибуты на <html> (data-palette / data-style); имена совпадают с панелью.
+export type Palette = "blush" | "mint";
+export type StylePreset = "cloud" | "sharp";
+export const PALETTES: { key: Palette; label: string; accent: AccentKey }[] = [
+  { key: "blush", label: "Blush", accent: "axottle" },
+  { key: "mint",  label: "Mint",  accent: "axomint" },
+];
+export const STYLE_PRESETS: { key: StylePreset; label: string }[] = [
+  { key: "cloud", label: "Cloud" },
+  { key: "sharp", label: "Sharp" },
+];
 
 export const THEME_MODES: { key: ThemeMode; label: string }[] = [
   { key: "system", label: "Системная" },
@@ -12,13 +27,18 @@ export const THEME_MODES: { key: ThemeMode; label: string }[] = [
 ];
 
 // Design skin — a second, independent theme axis on :root (data-skin), on top of
-// the light/dark data-theme axis. "apple" = System-Settings aesthetic (SF font,
-// iOS controls, glass); "console" = the JetBrains-Mono default; "neon" = glow;
+// the light/dark data-theme axis. "axottle" = дизайн-система панели Axottle v1.8.3
+// (палитры blush/mint, акцент #FC9CA1 в тёмной и #C82C3C в светлой, сетка радиусов
+// 8/12/14/24px, Google Sans/Inter/Manrope) — дефолт; значения сняты с живой панели,
+// см. /root/work/axottle_live/design/design-system.md и src/theme/axottle.css;
+// "apple" = System-Settings aesthetic (SF font, iOS controls, glass);
+// "console" = the JetBrains-Mono default; "neon" = glow;
 // "nodeflow" = лесная зелёная палитра панели NodeFlow + Inter;
 // "remnawave" = GitHub-dark палитра панели Remnawave, cyan-акцент, Montserrat.
-// Apple is default.
-export type AppSkin = "apple" | "console" | "neon" | "nodeflow" | "remnawave";
+// Axottle is default; the five legacy skins stay available per account.
+export type AppSkin = "axottle" | "apple" | "console" | "neon" | "nodeflow" | "remnawave";
 export const SKINS: { key: AppSkin; label: string }[] = [
+  { key: "axottle",   label: "Axottle" },
   { key: "apple",     label: "Apple" },
   { key: "console",   label: "Консоль" },
   { key: "neon",      label: "Неон" },
@@ -36,6 +56,17 @@ interface AccentDef {
 }
 
 export const ACCENTS: Record<AccentKey, AccentDef> = {
+  // Панель Axottle, палитра blush (дефолт): dark --axo-accent #FC9CA1 с чернилами
+  // --axo-accent-text #2A0E10 (8.91:1), light --axo-accent #C82C3C с белыми чернилами
+  // (5.41:1). Значения сняты с живой панели v1.8.3 — см.
+  // /root/work/axottle_live/design/design-system.md (extract_design.py → tokens.json).
+  axottle: { base: "#FC9CA1", hi: "#FFB4B8", ink: "#2A0E10",
+             light: { base: "#C82C3C", hi: "#C82C3C", ink: "#FFFFFF" } },
+  // Вторая палитра панели, mint (data-palette="mint"): accent #34D8A8 / #0E8E72.
+  // Нужна как ОТДЕЛЬНЫЙ акцент: applyAccent пишет --accent инлайном и перебил бы
+  // палитру из CSS, поэтому акцент палитры выбирается на уровне ACCENTS.
+  axomint:  { base: "#34D8A8", hi: "#5BE5B7", ink: "#06120E",
+              light: { base: "#0E8E72", hi: "#0E8E72", ink: "#FFFFFF" } },
   blue:    { base: "#8b5cf6", hi: "#a78bfa", ink: "#0a0a0a" },
   green:   { base: "#3ECF8E", hi: "#63E0A7", ink: "#04140D" },
   violet:  { base: "#9D7BFF", hi: "#B9A0FF", ink: "#0E0A1A" },
@@ -85,6 +116,37 @@ export function applyAccent(key: AccentKey): void {
 
 export function applyDensity(d: Density): void {
   document.body.dataset.density = d;
+}
+
+// Палитра и стиль — атрибуты на <html>, ровно как в панели (data-axo-palette / data-style).
+// Хранятся per-account (как skin и mode): у разных аккаунтов панели может быть свой вид.
+export function applyPalette(p: Palette): void {
+  document.documentElement.dataset.palette = p;
+}
+export function applyStyle(s: StylePreset): void {
+  document.documentElement.dataset.style = s;
+}
+
+const PALETTE_KEY = "ni_palette";
+const STYLE_KEY = "ni_style";
+const paletteKey = (accountId?: string | null) =>
+  accountId ? `ni_palette_${accountId}` : PALETTE_KEY;
+const styleKey = (accountId?: string | null) =>
+  accountId ? `ni_style_${accountId}` : STYLE_KEY;
+
+export function loadPalette(accountId?: string | null): Palette {
+  const v = localStorage.getItem(paletteKey(accountId));
+  return v === "mint" ? "mint" : "blush";
+}
+export function savePalette(accountId: string | null | undefined, p: Palette): void {
+  localStorage.setItem(paletteKey(accountId), p);
+}
+export function loadStylePreset(accountId?: string | null): StylePreset {
+  const v = localStorage.getItem(styleKey(accountId));
+  return v === "sharp" ? "sharp" : "cloud";
+}
+export function saveStylePreset(accountId: string | null | undefined, s: StylePreset): void {
+  localStorage.setItem(styleKey(accountId), s);
 }
 
 export function applySkin(s: AppSkin): void {
@@ -143,12 +205,13 @@ export function loadAccent(): AccentKey {
   return v && v in ACCENTS ? (v as AccentKey) : "blue";
 }
 
-// Акцент по умолчанию зависит от скина: nodeflow несёт свой фирменный зелёный,
-// но ТОЛЬКО если пользователь никогда не выбирал акцент явно — сохранённый
-// выбор всегда побеждает (пикер продолжает работать на любом скине).
-export function resolveAccentForSkin(skin: AppSkin): AccentKey {
+// Акцент по умолчанию зависит от скина и палитры: у axottle.blush — #FC9CA1,
+// у axottle.mint — #34D8A8, у nodeflow — фирменный зелёный, у remnawave — cyan.
+// Явный выбор пользователя (ни_accent) всегда важнее любого дефолта.
+export function resolveAccentForSkin(skin: AppSkin, palette: Palette = loadPalette()): AccentKey {
   const v = localStorage.getItem(ACCENT_KEY);
   if (v && v in ACCENTS) return v as AccentKey;
+  if (skin === "axottle") return palette === "mint" ? "axomint" : "axottle";
   return skin === "nodeflow" ? "nodeflow" : skin === "remnawave" ? "remnawave" : "blue";
 }
 export function loadDensity(): Density {
@@ -165,7 +228,10 @@ export function saveThemeMode(accountId: string | null | undefined, m: ThemeMode
 }
 export function loadSkin(accountId?: string | null): AppSkin {
   const v = localStorage.getItem(skinKey(accountId));
-  return v === "console" || v === "neon" || v === "nodeflow" || v === "remnawave" ? v : "apple";
+  // Дефолт — axottle (дизайн Axottle). Мусор в localStorage тоже даёт дефолт:
+  // иначе опечатка в значении оставила бы пользователя без палитры.
+  return v === "apple" || v === "console" || v === "neon" || v === "nodeflow" || v === "remnawave"
+    ? v : "axottle";
 }
 export function saveSkin(accountId: string | null | undefined, s: AppSkin): void {
   localStorage.setItem(skinKey(accountId), s);

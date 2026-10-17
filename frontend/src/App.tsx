@@ -116,6 +116,8 @@ const InfraPayments      = lazy(() => import("./components/infra/InfraPayments")
 const InfraSettings      = lazy(() => import("./components/infra/InfraSettings").then(m => ({ default: m.InfraSettings })));
 const InfraApiTokens     = lazy(() => import("./components/infra/InfraApiTokens").then(m => ({ default: m.InfraApiTokens })));
 import { Toaster }                        from "./components/infra/Toast";
+// Кит и каркас дизайн-системы Axottle (см. src/theme/kit.tsx + theme/axottle.css).
+import { AxoThemeToggle, AxoToastHost }   from "./theme/kit";
 import { StepProgress, RENEW_STEPS }       from "./components/StepProgress";
 import { TerminalOutput }                  from "./components/TerminalOutput";
 import { useTaskStream, type StatusFrame } from "./hooks/useTaskStream";
@@ -124,8 +126,8 @@ import { AccountMenu }                     from "./auth/AccountMenu";
 import { usePermissions }                  from "./auth/usePermissions";
 import { tabKey, getActiveId, certJobsKey } from "./auth/store";
 import {
-  applyAccent, applyDensity, applyThemeMode, applySkin,
-  loadDensity, loadThemeMode, loadSkin,
+  applyAccent, applyDensity, applyThemeMode, applySkin, applyPalette, applyStyle,
+  loadDensity, loadThemeMode, loadSkin, loadPalette, loadStylePreset,
   loadNeonGlow, applyNeonGlow, resolveAccentForSkin,
 } from "./theme/tweaks";
 import { motion } from "motion/react";
@@ -293,11 +295,17 @@ export default function App() {
   // re-read and its matchMedia listener re-armed. The controls live in
   // Settings → Тема and call apply*/save* imperatively; nothing to lift here.
   useEffect(() => {
-    const skin = loadSkin(getActiveId());
+    const id = getActiveId();
+    const skin = loadSkin(id);
+    const palette = loadPalette(id);
     applySkin(skin);
-    applyThemeMode(loadThemeMode(getActiveId()));
-    // Акцент ПОСЛЕ темы: applyAccent тема-зависим (light-вариант у nodeflow).
-    applyAccent(resolveAccentForSkin(skin));
+    // Оси дизайн-системы Axottle: палитра (blush/mint) и стиль (cloud/sharp) — атрибуты
+    // на <html>, как в панели. Ставятся ДО акцента: акцент палитры resolve берёт отсюда.
+    applyPalette(palette);
+    applyStyle(loadStylePreset(id));
+    applyThemeMode(loadThemeMode(id));
+    // Акцент ПОСЛЕ темы: applyAccent тема-зависим (light-вариант у nodeflow/axottle).
+    applyAccent(resolveAccentForSkin(skin, palette));
     applyDensity(loadDensity());
     applyNeonGlow(loadNeonGlow());
   }, []);
@@ -377,6 +385,9 @@ export default function App() {
   return (
     <div style={{ display: "flex", height: "100%", position: "relative" }}>
       <Toaster />
+      {/* Стопка тостов кита Axottle: пустая — ничего не рендерит, поэтому второй тостер
+          панели (components/infra/Toast) не конфликтует с ней визуально. */}
+      <AxoToastHost />
       <InstanceSidebar />
       <Sidebar activeTab={tab} onTabChange={goTab} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
 
@@ -404,6 +415,10 @@ export default function App() {
             <span className={`chip ${rw.chip}`} style={{ padding: "1px 7px", fontSize: 10 }}>{rw.text}</span>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+            {/* Переключатель темы — пункт каркаса из доков Axottle (panel__overview.md: «верхняя
+                панель — глобальный поиск, переключатель светлой/тёмной темы и меню выхода»).
+                Пишет ni_thememode_<account> и сразу применяет data-theme — как Settings → Тема. */}
+            <AxoThemeToggle />
             <AccountMenu />
           </div>
         </header>

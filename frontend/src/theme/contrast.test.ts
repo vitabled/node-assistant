@@ -45,6 +45,69 @@ function block(selector: string): Record<string, string> {
   return out;
 }
 
+// ── Палитра скина `axottle` (Axottle) ─────────────────────────────────────────
+// Живёт в src/theme/axottle.css и ссылается на родные токены --axo-* через var(),
+// поэтому одного регулярного выражения на hex мало: var(--x) разворачивается по
+// картам :root / :root[data-theme="light"] того же файла. Иначе гейт молча мерил бы
+// ЧУЖУЮ палитру (значения из console-dark по каскаду) и был бы зелёным неправдой.
+//
+// ⚠️ Комментарии снимаются ДО разбора: в axottle.css есть пояснения вида
+// `/* .platform-nav a{color:#8e9a94} */`, и поиск конца блока по первому `}` обрывал
+// разбор на этом комментарии — половина токенов палитры не попадала в замер
+// (поймано собственным тестом «NA-маппинг совпадает с --axo-*»).
+const AXO_CSS = readFileSync(resolve(process.cwd(), "src/theme/axottle.css"), "utf8")
+  .replace(/\/\*[\s\S]*?\*\//g, "");
+
+function resolveHex(value: string, vars: Record<string, string>): string | undefined {
+  const v = value.trim();
+  if (/^#[0-9A-Fa-f]{6}$/.test(v)) return v;
+  const m = /^var\((--[\w-]+)\)$/.exec(v);
+  if (!m) return undefined;
+  const next = vars[m[1]];
+  return next ? resolveHex(next, vars) : undefined;
+}
+
+/** Сырые объявления токенов (имя + значение) по ВСЕМ блокам с этим селектором.
+ *  Палитра разложена на несколько `:root{}` — читать только первый блок ошибка. */
+function axoDeclarations(selector: string): [string, string][] {
+  const out: [string, string][] = [];
+  let from = 0;
+  for (;;) {
+    const i = AXO_CSS.indexOf(selector + "{", from);
+    if (i < 0) return out;
+    const end = AXO_CSS.indexOf("}", i);
+    for (const m of AXO_CSS.slice(i + selector.length + 1, end).matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      out.push([m[1], m[2]]);
+    }
+    from = end + 1;
+  }
+}
+
+/** Токены блоков: var(--x) разворачивается по `base` и по уже собранному в этом вызове. */
+function axoVars(selector: string, base: Record<string, string> = {}): Record<string, string> {
+  const out: Record<string, string> = { ...base };
+  for (const [k, raw] of axoDeclarations(selector)) {
+    const hex = resolveHex(raw, out);
+    if (hex) out[k] = hex;
+  }
+  return out;
+}
+
+/** Только то, что ОБЪЯВЛЕНО в блоках селектора, с разворотом var() по `vars`.
+ *  Строгая версия axoVars: ключ, которого в блоке нет, остаётся отсутствующим —
+ *  иначе сравнение с палитрой прошло бы по подставленному base. */
+function axoMapped(selector: string, vars: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, raw] of axoDeclarations(selector)) {
+    const hex = resolveHex(raw, vars);
+    if (hex) out[k] = hex;
+  }
+  return out;
+}
+
+const AXO_DARK = axoVars(":root", {});
+const AXO_LIGHT = axoVars(':root[data-theme="light"]', AXO_DARK);
+
 // Палитры наследуются: apple/neon переопределяют только часть токенов поверх
 // соответствующей базы, ровно как каскад в браузере.
 const consoleDark = block(":root");
@@ -56,6 +119,17 @@ const nodeflowDark = { ...consoleDark, ...block(':root[data-skin="nodeflow"]:not
 const nodeflowLight = { ...consoleLight, ...block(':root[data-skin="nodeflow"][data-theme="light"]') };
 const remnawaveDark = { ...consoleDark, ...block(':root[data-skin="remnawave"]:not([data-theme="light"])') };
 const remnawaveLight = { ...consoleLight, ...block(':root[data-skin="remnawave"][data-theme="light"]') };
+// Axottle — шестой скин и дефолт приложения; палитра в src/theme/axottle.css (§7 плана).
+const axottleDark = { ...consoleDark, ...axoMapped(':root[data-skin="axottle"]:not([data-theme="light"])', AXO_DARK) };
+const axottleLight = { ...consoleLight, ...axoMapped(':root[data-skin="axottle"][data-theme="light"]', AXO_LIGHT) };
+// Вторая палитра панели (data-palette="mint"). Блоки оси палитры перекрывают ТОЛЬКО родные
+// токены --axo-*, а маппинг на имена NA читает их через var() — поэтому палитра собирается
+// в два шага: (1) родные токены mint поверх blush, (2) тот же маппинг поверх НИХ. Иначе гейт
+// мерил бы blush под именем mint и «проходил» бы по чужим числам.
+const MINT_DARK = axoVars(':root[data-skin="axottle"][data-palette="mint"]:not([data-theme="light"])', AXO_DARK);
+const MINT_LIGHT = axoVars(':root[data-skin="axottle"][data-palette="mint"][data-theme="light"]', AXO_LIGHT);
+const axottleMintDark = { ...consoleDark, ...axoVars(':root[data-skin="axottle"]:not([data-theme="light"])', MINT_DARK) };
+const axottleMintLight = { ...consoleLight, ...axoVars(':root[data-skin="axottle"][data-theme="light"]', MINT_LIGHT) };
 
 const PALETTES: Record<string, Record<string, string>> = {
   "console-dark": consoleDark,
@@ -67,6 +141,10 @@ const PALETTES: Record<string, Record<string, string>> = {
   "nodeflow-light": nodeflowLight,
   "remnawave-dark": remnawaveDark,
   "remnawave-light": remnawaveLight,
+  "axottle-dark": axottleDark,
+  "axottle-light": axottleLight,
+  "axottle-mint-dark": axottleMintDark,
+  "axottle-mint-light": axottleMintLight,
 };
 
 const INKS = ["--t-faint", "--t-low", "--t-mid", "--t-hi"];
@@ -212,5 +290,51 @@ describe("no hardcoded theme-blind colors in components", () => {
     walk(root);
 
     expect(hits).toEqual([]);
+  });
+});
+
+// ── Скин `axottle`: маппинг на токены NA и родные токены --axo-* не разошлись ──
+//
+// Токены скина лежат в двух файлах: NA-имена (--bg0/--t-*/…) — в src/theme/axottle.css,
+// родные --axo-* — там же. Часть маппинга ссылается на var(--axo-*) (тогда расхождение
+// невозможно по построению), но статусные и «приглушённые» цвета записаны литералами,
+// ради собственного гейта AA. Этот тест ловит правку одной половины без другой.
+describe("axottle: NA-маппинг совпадает с токенами --axo-*", () => {
+  const PAIRS: [string, string][] = [
+    ["--bg0", "--axo-bg"],
+    ["--bg1", "--axo-sidebar"],
+    ["--bg2", "--axo-surface"],
+    ["--bg3", "--axo-surface-raised"],
+    ["--line", "--axo-line"],
+    ["--line-soft", "--axo-line-hairline"],
+    ["--line-strong", "--axo-line-strong"],
+    ["--t-hi", "--axo-text"],
+    ["--t-mid", "--axo-muted"],
+    ["--t-faint", "--axo-faint"],
+    ["--ok", "--axo-ok"],
+    ["--warn", "--axo-warn"],
+    ["--err", "--axo-bad"],
+  ];
+
+  it("тёмная тема", () => {
+    const mapped = axoMapped(':root[data-skin="axottle"]:not([data-theme="light"])', AXO_DARK);
+    const mismatched = PAIRS
+      .filter(([na, axo]) => mapped[na] !== AXO_DARK[axo])
+      .map(([na, axo]) => `${na}=${mapped[na]} ≠ ${axo}=${AXO_DARK[axo]}`);
+    expect(mismatched).toEqual([]);
+  });
+
+  it("светлая тема", () => {
+    const mapped = axoMapped(':root[data-skin="axottle"][data-theme="light"]', AXO_LIGHT);
+    const mismatched = PAIRS
+      .filter(([na, axo]) => mapped[na] !== AXO_LIGHT[axo])
+      .map(([na, axo]) => `${na}=${mapped[na]} ≠ ${axo}=${AXO_LIGHT[axo]}`);
+    expect(mismatched).toEqual([]);
+  });
+
+  it("акцент скина — тот же, что заявляет ACCENTS.axottle", () => {
+    expect(ACCENTS.axottle.base).toBe(AXO_DARK["--axo-accent"]);
+    expect(ACCENTS.axottle.ink).toBe(AXO_DARK["--axo-accent-ink"]);
+    expect(ACCENTS.axottle.light!.base).toBe(AXO_LIGHT["--axo-accent"]);
   });
 });

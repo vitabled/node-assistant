@@ -4,6 +4,8 @@ import {
   loadAccent, loadDensity, loadThemeMode,
   saveAccent, saveDensity, saveThemeMode, THEME_MODES,
   applySkin, loadSkin, saveSkin, SKINS, resolveAccentForSkin,
+  PALETTES, STYLE_PRESETS, applyPalette, applyStyle,
+  loadPalette, savePalette, loadStylePreset, saveStylePreset,
 } from "./tweaks";
 
 // jsdom has no matchMedia — install a controllable stub. `_light` flips the
@@ -115,6 +117,39 @@ describe("accent", () => {
     expect(resolveAccentForSkin("nodeflow")).toBe("nodeflow"); // мусор = «не выбирал»
   });
 
+  it("resolveAccentForSkin: axottle skin defaults to the panel accent of the palette", () => {
+    localStorage.clear();
+    expect(resolveAccentForSkin("axottle")).toBe("axottle");
+    applyAccent("axottle");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#FC9CA1");
+    expect(document.documentElement.style.getPropertyValue("--accent-ink")).toBe("#2A0E10");
+    saveAccent("lime");
+    expect(resolveAccentForSkin("axottle")).toBe("lime");
+  });
+
+  it("axottle palette mint несёт свой акцент — #34D8A8", () => {
+    localStorage.clear();
+    expect(resolveAccentForSkin("axottle", "mint")).toBe("axomint");
+    expect(resolveAccentForSkin("axottle", "blush")).toBe("axottle");
+    applyAccent("axomint");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#34D8A8");
+    expect(document.documentElement.style.getPropertyValue("--accent-ink")).toBe("#06120E");
+    // Явный выбор акцента важнее палитры.
+    saveAccent("cyan");
+    expect(resolveAccentForSkin("axottle", "mint")).toBe("cyan");
+  });
+
+  it("axottle accent uses the panel light variant on light theme and reverts on dark", () => {
+    mockMatchMedia(false);
+    applyThemeMode("light");
+    applyAccent("axottle");
+    const s = document.documentElement.style;
+    expect(s.getPropertyValue("--accent")).toBe("#C82C3C");
+    expect(s.getPropertyValue("--accent-ink")).toBe("#FFFFFF");
+    applyThemeMode("dark");
+    expect(s.getPropertyValue("--accent")).toBe("#FC9CA1");
+  });
+
   it("resolveAccentForSkin: remnawave defaults to its cyan accent", () => {
     localStorage.clear();
     expect(resolveAccentForSkin("remnawave")).toBe("remnawave");
@@ -152,31 +187,42 @@ describe("density", () => {
 describe("skin", () => {
   beforeEach(() => { document.documentElement.removeAttribute("data-skin"); });
 
-  it("defaults to apple when nothing stored", () => {
-    expect(loadSkin("acc1")).toBe("apple");
-    expect(loadSkin(null)).toBe("apple");
+  it("defaults to axottle (дизайн Axottle) when nothing stored", () => {
+    expect(loadSkin("acc1")).toBe("axottle");
+    expect(loadSkin(null)).toBe("axottle");
   });
 
   it("persists per-account and reads back (isolated)", () => {
     saveSkin("acc1", "console");
     expect(loadSkin("acc1")).toBe("console");
-    expect(loadSkin("acc2")).toBe("apple");
+    expect(loadSkin("acc2")).toBe("axottle");
   });
 
   it("applySkin sets data-skin on :root", () => {
+    applySkin("axottle");
+    expect(document.documentElement.dataset.skin).toBe("axottle");
     applySkin("apple");
     expect(document.documentElement.dataset.skin).toBe("apple");
     applySkin("console");
     expect(document.documentElement.dataset.skin).toBe("console");
   });
 
-  it("ignores garbage stored value → apple", () => {
+  it("ignores garbage stored value → axottle", () => {
     localStorage.setItem("ni_skin_acc1", "frutiger");
-    expect(loadSkin("acc1")).toBe("apple");
+    expect(loadSkin("acc1")).toBe("axottle");
   });
 
-  it("exposes exactly the five skin options", () => {
-    expect(SKINS.map(s => s.key)).toEqual(["apple", "console", "neon", "nodeflow", "remnawave"]);
+  it("exposes exactly the six skin options, Axottle first", () => {
+    expect(SKINS.map(s => s.key)).toEqual(["axottle", "apple", "console", "neon", "nodeflow", "remnawave"]);
+  });
+
+  it("keeps the five legacy skins selectable", () => {
+    for (const s of ["apple", "console", "neon", "nodeflow", "remnawave"] as const) {
+      saveSkin("acc1", s);
+      expect(loadSkin("acc1")).toBe(s);
+      applySkin(s);
+      expect(document.documentElement.dataset.skin).toBe(s);
+    }
   });
 
   it("persists and reads back the remnawave skin", () => {
@@ -184,5 +230,47 @@ describe("skin", () => {
     expect(loadSkin("acc1")).toBe("remnawave");
     applySkin("remnawave");
     expect(document.documentElement.dataset.skin).toBe("remnawave");
+  });
+});
+
+// ── Оси дизайн-системы панели Axottle: палитра и стиль ────────────────────────
+// Обе оси — атрибуты на <html> (data-palette / data-style), как в панели
+// (data-axo-palette / data-style), и хранятся per-account, как skin и mode.
+describe("palette & style (оси панели Axottle)", () => {
+  beforeEach(() => {
+    delete document.documentElement.dataset.palette;
+    delete document.documentElement.dataset.style;
+  });
+
+  it("палитра по умолчанию blush, мусор тоже даёт blush", () => {
+    expect(loadPalette("acc1")).toBe("blush");
+    expect(loadPalette(null)).toBe("blush");
+    localStorage.setItem("ni_palette_acc1", "chartreuse");
+    expect(loadPalette("acc1")).toBe("blush");
+  });
+
+  it("applyPalette ставит data-palette, save/load изолированы по аккаунтам", () => {
+    applyPalette("mint");
+    expect(document.documentElement.dataset.palette).toBe("mint");
+    savePalette("acc1", "mint");
+    expect(loadPalette("acc1")).toBe("mint");
+    expect(loadPalette("acc2")).toBe("blush");
+  });
+
+  it("стиль по умолчанию cloud, sharp читается обратно", () => {
+    expect(loadStylePreset("acc1")).toBe("cloud");
+    localStorage.setItem("ni_style_acc1", "bogus");
+    expect(loadStylePreset("acc1")).toBe("cloud");
+    saveStylePreset("acc1", "sharp");
+    applyStyle("sharp");
+    expect(loadStylePreset("acc1")).toBe("sharp");
+    expect(document.documentElement.dataset.style).toBe("sharp");
+    expect(loadStylePreset("acc2")).toBe("cloud");
+  });
+
+  it("PALETTES/STYLE_PRESETS описывают ровно то, что умеет панель", () => {
+    expect(PALETTES.map(p => p.key)).toEqual(["blush", "mint"]);
+    expect(PALETTES.map(p => p.accent)).toEqual(["axottle", "axomint"]);
+    expect(STYLE_PRESETS.map(s => s.key)).toEqual(["cloud", "sharp"]);
   });
 });

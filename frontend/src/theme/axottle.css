@@ -1,0 +1,751 @@
+/* ════════════════════════════════════════════════════════════════════════════════
+   Axottle design layer — скин `axottle` (data-skin="axottle" на :root).
+
+   Источник значений — ЖИВАЯ панель Axottle v1.8.3: развёрнута локально
+   (http://127.0.0.1:8123), значения сняты с её собственных CSS-чанков
+   (/_next/static/css/*.css, 255 КБ) скриптом extract_design.py. Разбор, таблицы
+   и скриншоты — /root/work/axottle_live/design/ + копия в frontend/docs/axottle/
+   (design-system.md, deploy-panel.md, tokens.json). Как панель поднята —
+   docs/axottle/deploy-panel.md. Ни одно число здесь не выдумано: у каждого блока
+   в комментарии указан селектор-источник.
+
+   Из чего состоит файл:
+     A. --axo-*  — родные токены панели (для tailwind.config.ts и новых компонентов);
+     A2. тот же набор для светлой темы;  A3. вторая палитра панели (mint);
+     A4. ось стиля panel cloud/sharp (радиусы, тени, зазор);
+     B. маппинг на существующие токены NA (--bg0…--r-lg) — так ВСЕ компоненты панели
+        получают дизайн Axottle без единой правки в TSX;
+     C. структурные (тема-независимые) правила скина: шрифты, радиусы, геометрия контролов;
+     D. перерисовка существующих классов NA (.btn/.input/.card/.tbl/.navitem/.ni-*) в язык Axottle;
+     E. новый кит .axo-* (карточка, таблица, статус, табы, диалог, тост, скелетон, пустое
+        состояние, хлебные крошки, каркас сайдбар/топбар, прогресс);
+     F. адаптация под мобилу и reduced-motion.
+
+   ⚠️ Расхождения с сырыми hex панели — ТОЛЬКО там, где свой гейт контраста NA
+   (src/theme/contrast.test.ts) требует ≥4.5:1 для четырёх чернильных токенов на bg1/bg2/bg3,
+   а панель гейта не держит. Поднят ровно --faint (и добавлен четвёртый тон --axo-text-low,
+   которого в панели нет — у неё три чернильных токена против четырёх у NA):
+     blush dark  #776C6C → #8E8080 (3.67 → 4.69)   · blush light #9A8B8B → #7C6C6C (3.26 → 4.63)
+     mint  dark  #6A7770 → #8A9893 (3.66 → 5.70)   · mint  light #8A9893 → #65736D (2.85 → 4.52)
+   ════════════════════════════════════════════════════════════════════════════════ */
+
+/* ════════ A. Родные токены Axottle — СНЯТО С ЖИВОЙ ПАНЕЛИ v1.8.3 ════════
+   Источник: локально развёрнутая панель Axottle v1.8.3 (http://127.0.0.1:8123),
+   её собственные CSS-чанки /_next/static/css/*.css (255 КБ, 2 файла).
+   Значения — 1:1. Как панель поднята и как пересобрать этот разбор:
+   /root/work/axottle_live/design/deploy_panel.md, extract_design.py, tokens.json.
+
+   Панель держит оформление ЧЕТЫРЬМЯ наборами: палитра (blush|mint) × режим (light|dark),
+   плюс ось стиля (cloud|sharp) — радиусы и тени. Здесь A = blush · dark (дефолт панели).
+
+   Блок лежит на голом `:root`, а НЕ на [data-skin="axottle"], намеренно: кит .axo-* должен
+   работать и после переключения на прежние скины, а палитру ему всё равно подменяют
+   блоки A2/B/B2 и ось палитры ниже.
+
+   ⚠️ Расхождения с сырым hex панели — ТОЛЬКО там, где наш гейт контраста
+   (src/theme/contrast.test.ts) требует ≥4.5:1 для ЧЕТЫРЁХ чернильных токенов на bg1/bg2/bg3,
+   а панель гейта не имеет: её --axo-text-faint #776C6C даёт 3.67:1. Такие места помечены
+   «NA AA» с измеренным числом. Всё остальное — как в панели.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root{
+  /* surfaces · [data-axo-new][data-axo-mode=dark] · сама панель: --axo-bg/-bg-elev/-surface/-2/-3 */
+  --axo-bg:#0A0708;
+  --axo-bg-elev:#100C0D;
+  --axo-sidebar:#100C0D;              /* панель сайдбар = bg-elev (отдельного токена нет) */
+  --axo-surface:#181113;
+  --axo-surface-2:#1E1618;
+  --axo-surface-3:#251B1E;
+  --axo-surface-raised:#1E1618;       /* NA: hover/raised → панельный surface-2 */
+  --axo-surface-table-head:#1E1618;   /* отдельного токена в панели нет → surface-2 */
+  --axo-surface-empty:#181113;
+  --axo-canvas:#181113;               /* холст Flow Studio: панель = surface */
+  --axo-canvas-dot:#35272A;           /* сетка холста: панель = border-strong */
+  /* lines · [data-axo-new]{--axo-border/-border-strong}; hairline — рецепт самой панели
+     `1px solid color-mix(in srgb, var(--axo-text) 8%, transparent)` */
+  --axo-line:#281D20;
+  --axo-line-hairline:rgba(242,235,235,.08);
+  --axo-line-strong:#35272A;
+  --axo-logo-bg:#241A1C;              /* dark · --axo-logo-bg */
+  --axo-logo-border:#3A2B2E;
+  /* ink · панель: --axo-text / -text-muted / -text-faint. --axo-text-low — НАШЕ дополнение:
+     у NA четыре чернильных токена (--t-hi/-mid/-low/-faint) против трёх в панели. */
+  --axo-text:#F2EBEB;
+  --axo-muted:#A99C9C;
+  --axo-text-low:#968888;
+  --axo-faint:#8E8080;                /* NA AA: панель #776C6C = 3.67:1 → 4.69:1 на bg3 */
+  --axo-text-inverse:#F2EBEB;
+  /* accent · [data-axo-new][data-axo-mode=dark]: accent/accent-hover/accent-soft/accent-text */
+  --axo-accent:#FC9CA1;
+  --axo-accent-hover:#FFB4B8;
+  --axo-accent-soft:rgba(252,156,161,.14);
+  --axo-accent-soft-strong:rgba(252,156,161,.22);
+  --axo-accent-ink:#2A0E10;
+  /* status · панель: --axo-status-ok/warn/crit/info/mute + парные -soft */
+  --axo-ok:#3FCB8E;   --axo-ok-soft:rgba(63,203,142,.14);
+  --axo-warn:#F1B748; --axo-warn-soft:rgba(241,183,72,.14);
+  --axo-bad:#F97A45;  --axo-bad-soft:rgba(249,122,69,.16);
+  --axo-info:#6BB7F1; --axo-info-soft:rgba(107,183,241,.14);
+  --axo-mute:#776C6C; --axo-mute-soft:rgba(169,156,156,.10);
+  --axo-bad-ink:#2A0E0A;              /* --axo-status-crit-text */
+  /* границы статусных чипов: панель рисует `border-<status>/30…40` от того же цвета */
+  --axo-ok-line:rgba(63,203,142,.3);
+  --axo-warn-line:rgba(241,183,72,.3);
+  --axo-bad-line:rgba(249,122,69,.34);
+  /* charts · [data-axo-support] + dark-переопределение */
+  --axo-chart-1:#199E70; --axo-chart-2:#3987E5; --axo-chart-3:#C98500;
+  --axo-chart-4:#9085E9; --axo-chart-5:#E66767; --axo-chart-6:#D95926;
+  --axo-chart-track:var(--axo-surface-3);
+  --axo-chart-grid:var(--axo-line);
+  /* type · [data-axo-new]{--axo-font-sans/--axo-font-mono}; вордмарк — "Cause" 27px/600/-.045em */
+  --axo-sans:'Google Sans','Inter','Manrope','Geist',ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --axo-mono:'Google Sans Code','JetBrains Mono','Geist Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --axo-display:var(--axo-sans);      /* в панели заголовки — sans semibold tracking-tight */
+  --axo-brand:'Cause','Avenir Next',var(--axo-sans),sans-serif;
+  /* radii · панель: --axo-radius-xs/sm/md/lg/xl/2xl/pill (8/12/16/20/24/28/999).
+     Здесь — по РЕАЛЬНЫМ рецептам панели: чип 8, кнопка/поле 12–14, карточка (.axo-card = radius-xl) 24. */
+  --axo-r-xs:8px;
+  --axo-r-sm:12px;
+  --axo-r-md:14px;
+  --axo-r-lg:24px;
+  --axo-r-2xl:28px;
+  --axo-r-pill:999px;
+  /* родные имена панели + токены оси стиля (cloud/sharp) */
+  --axo-radius-xs:8px;  --axo-radius-sm:12px; --axo-radius-md:16px;
+  --axo-radius-lg:20px; --axo-radius-xl:24px; --axo-radius-2xl:28px; --axo-radius-pill:999px;
+  --axo-radius-card:20px; --axo-radius-btn:12px; --axo-radius-input:12px; --axo-radius-panel:24px;
+  --axo-style-gap:12px;
+  /* shadows · панель (dark): sm/md/lg/xl/glow/accent-hover */
+  --axo-shadow-sm:0 1px 2px rgba(0,0,0,.3);
+  --axo-shadow-md:0 4px 16px rgba(0,0,0,.35),0 1px 2px rgba(0,0,0,.25);
+  --axo-shadow-lg:0 12px 40px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.3);
+  --axo-shadow-xl:0 24px 64px rgba(0,0,0,.55);
+  --axo-shadow-glow:0 0 0 4px rgba(252,156,161,.18);
+  --axo-shadow-accent-hover:0 6px 18px rgba(252,156,161,.20);
+  --axo-ring:var(--axo-shadow-glow);
+  --axo-shadow-card:var(--axo-shadow-sm);
+  --axo-shadow-pop:var(--axo-shadow-md);
+  --axo-shadow-toast:var(--axo-shadow-lg);
+  --axo-shadow-dialog:var(--axo-shadow-xl);
+  --axo-shadow-panel:var(--axo-shadow-lg);
+  /* motion · --axo-ease / --axo-ease-out панели; длительности из её переходов (.15/.18/.2/.3/.5) */
+  --axo-ease:cubic-bezier(.22,1,.36,1);
+  --axo-ease-out:cubic-bezier(.16,1,.3,1);
+  --axo-t-fast:.15s; --axo-t-base:.2s; --axo-t-card:.45s;
+  --axo-content:1400px;
+}
+
+/* ════════ A2. Тот же набор — СВЕТЛАЯ тема (blush · light) ════════
+   Источник: [data-axo-new]{--axo-bg:#FBF4F4; --axo-surface:#FFFFFF; --axo-accent:#C82C3C; …}.
+   Блок висит на :root[data-theme="light"] (а не на скине), чтобы кит .axo-* оставался
+   консистентным и на прежних светлых скинах. */
+:root[data-theme="light"]{
+  --axo-bg:#FBF4F4;
+  --axo-bg-elev:#FDFBFB;
+  --axo-sidebar:#FDFBFB;
+  --axo-surface:#FFFFFF;
+  --axo-surface-2:#FCF5F5;
+  --axo-surface-3:#F7EBEB;
+  --axo-surface-raised:#FCF5F5;
+  --axo-surface-table-head:#FCF5F5;
+  --axo-surface-empty:#FFFFFF;
+  --axo-canvas:#FFFFFF;
+  --axo-canvas-dot:#E3CCCC;
+  --axo-line:#F2E3E3;
+  --axo-line-hairline:rgba(26,19,19,.08);
+  --axo-line-strong:#E3CCCC;
+  --axo-logo-bg:#FBF3F3;
+  --axo-logo-border:#E8D6D6;
+  --axo-text:#1A1313;
+  --axo-muted:#6B5B5B;
+  --axo-text-low:#746464;
+  --axo-faint:#7C6C6C;                /* NA AA: панель #9A8B8B = 3.26:1 → 4.63:1 на bg3 */
+  --axo-text-inverse:#FDF5F5;
+  --axo-accent:#C82C3C;
+  --axo-accent-hover:#AC2433;
+  --axo-accent-soft:#FDECEE;
+  --axo-accent-soft-strong:rgba(200,44,60,.18);
+  --axo-accent-ink:#FFFFFF;
+  --axo-ok:#0E7A52;   --axo-ok-soft:#DDF2E8;   --axo-ok-line:rgba(14,122,82,.3);
+  --axo-warn:#8A5F05; --axo-warn-soft:#FAEDCD; --axo-warn-line:rgba(138,95,5,.3);
+  --axo-bad:#AF4519;  --axo-bad-soft:#FBE7DC;  --axo-bad-line:rgba(175,69,25,.3);
+  --axo-info:#2264A8; --axo-info-soft:#DAEAF7;
+  --axo-mute:#9A8B8B; --axo-mute-soft:#F0EAEA;
+  --axo-bad-ink:#FFFFFF;
+  --axo-chart-1:#0E8E72; --axo-chart-2:#2A78D6; --axo-chart-3:#EDA100;
+  --axo-chart-4:#6B4FD8; --axo-chart-5:#E34948; --axo-chart-6:#EB6834;
+  --axo-shadow-sm:0 1px 2px rgba(26,19,19,.04),0 1px 1px rgba(26,19,19,.03);
+  --axo-shadow-md:0 4px 16px rgba(26,19,19,.05),0 1px 2px rgba(26,19,19,.03);
+  --axo-shadow-lg:0 12px 40px rgba(26,19,19,.08),0 2px 6px rgba(26,19,19,.04);
+  --axo-shadow-xl:0 24px 64px rgba(26,19,19,.12);
+  --axo-shadow-glow:0 0 0 4px rgba(200,44,60,.12);
+  --axo-shadow-accent-hover:0 6px 18px rgba(200,44,60,.24);
+}
+
+/* ════════ A3. Ось ПАЛИТРЫ: mint (вторая палитра панели) ════════
+   Панель: [data-axo-palette=mint]. Перекрываем только РОДНЫЕ токены — блоки B/B2 читают их
+   через var(), поэтому маппинг на имена NA подхватывает палитру автоматически. */
+:root[data-skin="axottle"][data-palette="mint"]:not([data-theme="light"]){
+  --axo-bg:#07090C; --axo-bg-elev:#0B0F14; --axo-sidebar:#0B0F14;
+  --axo-surface:#11161D; --axo-surface-2:#161C25; --axo-surface-3:#1C2330;
+  --axo-surface-raised:#161C25; --axo-surface-table-head:#161C25; --axo-surface-empty:#11161D;
+  --axo-canvas:#11161D; --axo-canvas-dot:#2A3340;
+  --axo-line:#1E2632; --axo-line-hairline:rgba(234,241,237,.08); --axo-line-strong:#2A3340;
+  --axo-logo-bg:#1A2029; --axo-logo-border:#313B48;
+  --axo-text:#EAF1ED; --axo-muted:#9AA8A2; --axo-text-low:#93A19B; --axo-faint:#8A9893;
+  --axo-accent:#34D8A8; --axo-accent-hover:#5BE5B7;
+  --axo-accent-soft:rgba(52,216,168,.12); --axo-accent-soft-strong:rgba(52,216,168,.2);
+  --axo-accent-ink:#06120E;
+  --axo-ok:#34D8A8; --axo-ok-soft:rgba(52,216,168,.14);
+  --axo-shadow-glow:0 0 0 4px rgba(52,216,168,.18);
+  --axo-shadow-accent-hover:0 6px 18px rgba(52,216,168,.22);
+}
+:root[data-skin="axottle"][data-palette="mint"][data-theme="light"]{
+  --axo-bg:#F1F6F4; --axo-bg-elev:#FBFCFC; --axo-sidebar:#FBFCFC;
+  --axo-surface:#FFFFFF; --axo-surface-2:#F6FAF8; --axo-surface-3:#EEF4F1;
+  --axo-surface-raised:#F6FAF8; --axo-surface-table-head:#F6FAF8; --axo-surface-empty:#FFFFFF;
+  --axo-canvas:#FFFFFF; --axo-canvas-dot:#CFDBD4;
+  --axo-line:#E3ECE7; --axo-line-hairline:rgba(15,26,22,.08); --axo-line-strong:#CFDBD4;
+  --axo-logo-bg:#F3F6F5; --axo-logo-border:#D8E1DC;
+  --axo-text:#0F1A16; --axo-muted:#5B6B65; --axo-text-low:#616F69; --axo-faint:#65736D;
+  --axo-accent:#0E8E72; --axo-accent-hover:#0B7861;
+  --axo-accent-soft:#DCEFE7; --axo-accent-soft-strong:rgba(14,142,114,.18);
+  --axo-accent-ink:#FFFFFF;
+  --axo-ok:#16A07A; --axo-ok-soft:#DCEFE7;
+  --axo-shadow-glow:0 0 0 4px rgba(14,142,114,.12);
+  --axo-shadow-accent-hover:0 6px 18px rgba(14,142,114,.25);
+}
+
+/* ════════ A4. Ось СТИЛЯ: cloud (дефолт) / sharp ════════
+   Панель: [data-style=cloud]{--radius-card:1.25rem;--radius-btn:.75rem;--radius-input:.75rem;
+   --radius-panel:1.5rem;--panel-gap:.75rem} и [data-style=sharp]{--radius-panel:0;
+   --shadow-panel:none;--panel-gap:0}. */
+:root[data-style="cloud"]{
+  --axo-radius-card:20px; --axo-radius-btn:12px; --axo-radius-input:12px;
+  --axo-radius-panel:24px; --axo-style-gap:12px;
+  --axo-shadow-panel:var(--axo-shadow-lg);
+}
+:root[data-style="sharp"]{
+  --axo-r-xs:0px; --axo-r-sm:0px; --axo-r-md:0px; --axo-r-lg:0px; --axo-r-2xl:0px;
+  --axo-radius-card:0px; --axo-radius-btn:0px; --axo-radius-input:0px; --axo-radius-panel:0px;
+  --axo-style-gap:0px; --axo-shadow-panel:none; --axo-shadow-card:none;
+}
+
+/* ════════ B. Маппинг на токены NA — ТЁМНАЯ тема ════════
+   Все значения — ссылки на родные токены, поэтому палитра (blush/mint) и стиль (cloud/sharp)
+   подменяют всю панель одной переменной. Селектор намеренно `:not([data-theme="light"])`
+   (специфичность 0,3,0) — так он перебивает палитры соседних скинов независимо от порядка. */
+:root[data-skin="axottle"]:not([data-theme="light"]){
+  --bg0:var(--axo-bg);              /* #0A0708  app canvas  */
+  --bg1:var(--axo-sidebar);         /* #100C0D  sidebar/topbar */
+  --bg2:var(--axo-surface);         /* #181113  cards, inputs  */
+  --bg3:var(--axo-surface-raised);  /* #1E1618  hover/raised   */
+  --line:var(--axo-line);
+  --line-soft:var(--axo-line-hairline);
+  --line-strong:var(--axo-line-strong);
+  --t-hi:var(--axo-text);
+  --t-mid:var(--axo-muted);
+  --t-low:var(--axo-text-low);
+  --t-faint:var(--axo-faint);
+  --ok:var(--axo-ok);     --ok-dim:var(--axo-ok-soft);   --ok-line:var(--axo-ok-line);
+  --warn:var(--axo-warn); --warn-dim:var(--axo-warn-soft); --warn-line:var(--axo-warn-line);
+  --err:var(--axo-bad);   --err-dim:var(--axo-bad-soft); --err-line:var(--axo-bad-line);
+  --raised:var(--axo-surface-raised);
+  --row-hover:var(--axo-surface-raised);
+  --overlay:rgba(10,7,8,.72);          /* диалог панели: подложка ~72 % */
+  --topbar-bg:var(--axo-bg-elev);
+  --sidebar-bg:var(--axo-sidebar);
+  --scroll-thumb:var(--axo-line-strong);
+  --glass-blur:20px;                   /* панель: backdrop blur(20px) на верхней панели */
+  --shadow-pop:var(--axo-shadow-pop);
+  --shadow-modal:var(--axo-shadow-dialog);
+  --nav-active-bg:var(--axo-accent-soft);
+  --nav-active-fg:var(--accent);
+  --row-py:10px; --card-p:18px; --ctl-py:10px; --nav-py:11px;
+}
+
+/* ════════ B2. Маппинг на токены NA — СВЕТЛАЯ тема ════════ */
+:root[data-skin="axottle"][data-theme="light"]{
+  --bg0:var(--axo-bg);
+  --bg1:var(--axo-sidebar);
+  --bg2:var(--axo-surface);
+  --bg3:var(--axo-surface-raised);
+  --line:var(--axo-line);
+  --line-soft:var(--axo-line-hairline);
+  --line-strong:var(--axo-line-strong);
+  --t-hi:var(--axo-text);
+  --t-mid:var(--axo-muted);
+  --t-low:var(--axo-text-low);
+  --t-faint:var(--axo-faint);
+  --ok:var(--axo-ok);     --ok-dim:var(--axo-ok-soft);   --ok-line:var(--axo-ok-line);
+  --warn:var(--axo-warn); --warn-dim:var(--axo-warn-soft); --warn-line:var(--axo-warn-line);
+  --err:var(--axo-bad);   --err-dim:var(--axo-bad-soft); --err-line:var(--axo-bad-line);
+  --raised:var(--axo-surface-raised);
+  --row-hover:var(--axo-surface-raised);
+  --overlay:rgba(26,19,19,.34);
+  --topbar-bg:rgba(253,251,251,.9);
+  --sidebar-bg:var(--axo-sidebar);
+  --term-bg:#1C1C1E;                   /* терминал остаётся тёмным в обеих темах */
+  --scroll-thumb:var(--axo-line-strong);
+  --glass-blur:18px;
+  --shadow-pop:var(--axo-shadow-pop);
+  --shadow-modal:var(--axo-shadow-dialog);
+  --nav-active-bg:var(--axo-accent-soft);
+  --nav-active-fg:var(--accent);
+}
+
+/* ════════ C. Структурные правила скина (тема-независимые) ════════
+   Источник: --font-sans/--font-unbounded/--font-mono из all.css; .platform-shell{--ui-body:14px;
+   letter-spacing:-.012em}; радиусы .platform-card(18px)/.platform-button(11px)/.platform-dialog(20px). */
+:root[data-skin="axottle"]{
+  --font:var(--axo-sans);
+  --mono:var(--axo-mono);
+  --r-sm:var(--axo-r-sm);
+  --r-md:var(--axo-r-md);
+  --r-lg:var(--axo-r-lg);
+  --axo-font-display:var(--axo-display);
+  letter-spacing:-.012em;
+}
+:root[data-skin="axottle"] body{ font-family:var(--axo-sans) }
+/* Заголовки — display-шрифтом: .platform-page-header h1, .license-card-title h2, .tariff-card h2
+   { font-family:var(--font-unbounded); font-weight:600; letter-spacing:-.035em } */
+:root[data-skin="axottle"] .h1{
+  font-family:var(--axo-display); font-weight:600; font-size:17px; letter-spacing:-.035em;
+}
+/* Моно-мета: .data-table-head / .platform-status / .axo-canvas-count — капс + tracking .12em */
+:root[data-skin="axottle"] .micro{ letter-spacing:.13em }
+/* Фокус-кольцо панели: не обводка, а свечение `0 0 0 4px accent/18%`
+   ([data-axo-new] .axo-focus-ring:focus-visible{outline:none;box-shadow:var(--axo-shadow-glow)}).
+   Кольцо остаётся видимым для клавиатуры — это тот же приём, что в панели, просто тенью. */
+:root[data-skin="axottle"] :focus-visible{
+  outline:none; box-shadow:var(--axo-ring);
+}
+:root[data-skin="axottle"] ::selection{
+  background:var(--axo-accent-soft-strong); color:var(--t-hi);
+}
+:root[data-skin="axottle"] ::-webkit-scrollbar-thumb{
+  background:var(--scroll-thumb); border-radius:5px; border:2px solid var(--bg0);
+}
+
+/* ════════ D. Перерисовка существующих классов NA в язык Axottle ════════
+   Здесь и живёт «минимальное переключение страниц»: 204 компонента панели читают эти классы,
+   поэтому геометрия и состояния меняются без правок в TSX. */
+
+/* Кнопка: .platform-button{min-height:42px;border-radius:11px;font-weight:750;padding:0 15px} */
+:root[data-skin="axottle"] .btn{
+  border-radius:var(--axo-r-md); min-height:36px; font-weight:650; font-size:13px;
+  gap:8px; padding:8px 14px;
+}
+:root[data-skin="axottle"] .btn-primary{
+  background:var(--accent); color:var(--accent-ink); border:1px solid transparent; border-radius:var(--axo-r-md);
+}
+:root[data-skin="axottle"] .btn-primary:hover:not(:disabled){
+  background:var(--accent); filter:brightness(1.06); transform:translateY(-1px);
+  box-shadow:0 10px 30px var(--axo-accent-soft-strong);
+}
+:root[data-skin="axottle"] .btn-primary:active:not(:disabled){ transform:scale(.98) }
+:root[data-skin="axottle"] .btn-soft{
+  border-radius:var(--axo-r-md); border-color:var(--line);
+  color:var(--t-hi); background:var(--raised);
+}
+:root[data-skin="axottle"] .btn-soft:hover:not(:disabled){ background:var(--bg3) }
+:root[data-skin="axottle"] .btn-ghost{ border-radius:var(--axo-r-md); color:var(--t-low) }
+:root[data-skin="axottle"] .btn-ghost:hover:not(:disabled){ background:var(--bg3); color:var(--t-hi) }
+:root[data-skin="axottle"] .btn-danger,
+:root[data-skin="axottle"] .btn-warn{ border-radius:var(--axo-r-md) }
+:root[data-skin="axottle"] .btn:disabled{ opacity:.55 }
+:root[data-skin="axottle"] .iconbtn{ border-radius:var(--axo-r-sm); width:30px; height:30px }
+
+/* Поля: .profile-form-card input{height:44px;border:1px solid #293440;border-radius:11px;background:#0d1217}
+   + :focus{border-color:#f3a7c5;box-shadow:0 0 0 3px rgba(243,167,197,.09)} */
+:root[data-skin="axottle"] .input,
+:root[data-skin="axottle"] .selectbox,
+:root[data-skin="axottle"] textarea.input{
+  border-radius:var(--axo-r-md); background:var(--bg2); border-color:var(--line);
+  font-size:13px; min-height:38px;
+}
+:root[data-skin="axottle"] .input:focus,
+:root[data-skin="axottle"] .selectbox:focus,
+:root[data-skin="axottle"] textarea.input:focus{
+  border-color:var(--accent-line); box-shadow:var(--axo-ring);
+}
+:root[data-skin="axottle"] .label{
+  font-family:var(--axo-mono); font-size:11px; font-weight:650; letter-spacing:.12em;
+}
+:root[data-skin="axottle"] .ni-select-trigger{ border-radius:var(--axo-r-md); min-height:38px; background:var(--bg2) }
+:root[data-skin="axottle"] .ni-select-trigger:focus-visible{ box-shadow:var(--axo-ring) }
+:root[data-skin="axottle"] .ni-select-menu{ border-radius:var(--axo-r-md); background:var(--bg1) }
+
+/* Переключатель: .settings-toggle-list>label>i{width:34px;height:19px;padding:3px} + b{width:11px}
+   с translateX(15px) во включённом состоянии. */
+:root[data-skin="axottle"] .switch{ width:34px; height:19px; background:var(--bg3); border-color:var(--line-strong) }
+:root[data-skin="axottle"] .switch::after{ width:11px; height:11px; top:3px; left:3px; background:var(--t-faint) }
+:root[data-skin="axottle"] .switch.on{ background:var(--accent); border-color:var(--accent) }
+:root[data-skin="axottle"] .switch.on::after{ transform:translateX(15px); background:var(--accent-ink) }
+/* Чекбокс: .platform-checkbox input{width:17px;height:17px;accent-color:#f3a7c5} */
+:root[data-skin="axottle"] .ck{ width:16px; height:16px; border-radius:var(--axo-r-xs); border-color:var(--line-strong) }
+
+/* Карточки: .platform-card{border:1px solid #1e2632;border-radius:18px;background:#11161d;
+   box-shadow:0 12px 32px rgba(0,0,0,.13)} */
+:root[data-skin="axottle"] .card,
+:root[data-skin="axottle"] .panel{
+  border-radius:var(--axo-r-lg); border-color:var(--line); box-shadow:var(--axo-shadow-card);
+}
+:root[data-skin="axottle"] .ni-card-section{ border-top-color:var(--line-soft) }
+:root[data-skin="axottle"] .ni-kv{ font-size:12px }
+
+/* Таблица: .data-table-head{min-height:43px;padding:0 17px;background:#141a21;border-bottom:1px solid #27313c;
+   color:#647069;font:650 14px var(--font-mono);text-transform:uppercase} / .data-table-row{min-height:68px;
+   padding:9px 17px;border-bottom:1px solid #202933;transition:background .2s} hover #151b22 */
+:root[data-skin="axottle"] .tbl thead th{
+  font-family:var(--axo-mono); font-weight:650; letter-spacing:.09em;
+  background:var(--axo-surface-table-head); color:var(--t-low);
+  border-bottom:1px solid var(--line);
+}
+:root[data-skin="axottle"] .tbl tbody td{ border-bottom:1px solid var(--line-soft); }
+:root[data-skin="axottle"] .tbl tbody tr:hover{ background:var(--bg3) }
+
+/* Статусы: .platform-status{min-height:26px;border-radius:999px;font:650 11px var(--font-mono)} */
+:root[data-skin="axottle"] .chip{
+  border-radius:var(--axo-r-pill); font-family:var(--axo-mono); font-weight:650;
+  font-size:11px; padding:3px 9px;
+}
+:root[data-skin="axottle"] .tag{
+  border-radius:var(--axo-r-sm); font-family:var(--axo-mono); background:var(--bg3);
+}
+
+/* Табы: .user-detail-tabs button.is-active{background:#1a212a;color:#f3a7c5} */
+:root[data-skin="axottle"] .ni-tabs{ border-bottom-color:var(--line) }
+:root[data-skin="axottle"] .ni-tabs-tab{ font-weight:600; font-size:13px }
+:root[data-skin="axottle"] .ni-tabs-tab.on::after{ background:var(--accent); height:2px }
+:root[data-skin="axottle"] .seg{ border-radius:var(--axo-r-md); background:var(--bg2) }
+:root[data-skin="axottle"] .seg button{ border-radius:var(--axo-r-sm) }
+:root[data-skin="axottle"] .seg button.on{ background:var(--axo-surface-raised); color:var(--t-hi) }
+
+/* Сайдбар: .platform-nav a{min-height:44px;padding:0 11px;gap:10px;border-radius:11px;color:#8e9a94;
+   font-weight:620} :hover{background:#151a20;color:#edf2ef} .is-active{border:1px solid rgba(243,167,197,.14);
+   background:rgba(243,167,197,.075);color:#f3a7c5} + точка 5px справа с ореолом 4px. */
+:root[data-skin="axottle"] .navitem{
+  border-radius:var(--axo-r-md); min-height:36px; font-size:13px; font-weight:600; gap:10px;
+}
+:root[data-skin="axottle"] .navitem:hover{ background:var(--bg3); color:var(--t-hi) }
+:root[data-skin="axottle"] .navitem.active{
+  color:var(--nav-active-fg); background:var(--nav-active-bg); border-color:var(--accent-line);
+}
+:root[data-skin="axottle"] .navitem.active::before{ display:none }
+:root[data-skin="axottle"] .navitem.active::after{
+  content:""; position:absolute; right:10px; width:5px; height:5px; border-radius:50%;
+  background:var(--accent); box-shadow:0 0 0 4px var(--axo-accent-soft-strong);
+}
+/* Заголовок группы: .platform-nav>span{font:700 14px var(--font-mono);letter-spacing:.13em;text-transform:uppercase;
+   color:#59645f} */
+:root[data-skin="axottle"] .ni-nav-section{
+  font-family:var(--axo-mono); font-weight:700; letter-spacing:.13em; font-size:10px;
+  text-transform:uppercase; color:var(--t-faint);
+}
+
+/* Модалки: .platform-dialog{padding:27px;border:1px solid #2a3541;border-radius:20px;background:#11161d;
+   box-shadow:0 30px 100px rgba(0,0,0,.55)} */
+:root[data-skin="axottle"] .ni-modal-panel{ border-radius:20px; border-color:var(--line-strong) }
+:root[data-skin="axottle"] .ni-modal-head{ font-family:var(--axo-display); }
+:root[data-skin="axottle"] .overlay{ background:var(--overlay); backdrop-filter:blur(6px) }
+:root[data-skin="axottle"] .modal{ border-radius:20px; border-color:var(--line-strong) }
+
+/* Тост: .ConnectionCanvasDemo_toast{border-radius:11px;box-shadow:0 12px 34px rgba(0,0,0,.5)} */
+:root[data-skin="axottle"] .toast{ border-radius:var(--axo-r-md); box-shadow:var(--axo-shadow-toast) }
+
+/* Скелетон: .skeleton{background:#141a21;border-radius:10px} + shimmer 1.4s */
+:root[data-skin="axottle"] .ni-skeleton{ border-radius:var(--axo-r-sm) }
+:root[data-skin="axottle"] kbd{ border-radius:var(--axo-r-xs); font-family:var(--axo-mono) }
+
+/* ════════ E. Кит .axo-* — компоненты Axottle для новых экранов ════════ */
+
+/* Текстовые роли (см. design-system.md §2) */
+.axo-eyebrow{
+  font-family:var(--axo-mono); font-size:11px; font-weight:650; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--accent);
+}
+.axo-page-title{
+  font-family:var(--axo-display); font-weight:600; font-size:clamp(24px,3vw,34px);
+  line-height:1.05; letter-spacing:-.045em; color:var(--t-hi); margin:8px 0 0;
+}
+.axo-page-sub{ max-width:720px; margin:8px 0 0; color:var(--t-low); font-size:14px; line-height:1.55 }
+.axo-mono{ font-family:var(--axo-mono); font-variant-numeric:tabular-nums }
+
+/* Кнопка — .platform-button: min-height 42px, padding 0 14px, radius 11-13px, 750, hover подъём 1px */
+.axo-btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  min-height:38px; padding:0 14px; border-radius:var(--axo-r-md);
+  border:1px solid transparent; background:var(--accent); color:var(--accent-ink);
+  font-family:var(--axo-sans); font-size:13px; font-weight:700; line-height:1; white-space:nowrap;
+  cursor:pointer; transition:background var(--axo-t-base) ease, border-color var(--axo-t-base) ease,
+    color var(--axo-t-base) ease, transform var(--axo-t-base) ease, box-shadow var(--axo-t-base) ease;
+}
+.axo-btn:hover:not(:disabled){ transform:translateY(-1px); box-shadow:0 10px 30px var(--axo-accent-soft-strong) }
+.axo-btn:active:not(:disabled){ transform:scale(.98) }
+.axo-btn:focus-visible{ outline:none; box-shadow:var(--axo-ring) }
+.axo-btn:disabled{
+  /* Нейтральная заливка вместо opacity .55 на акцентной: розовый по розовому в светлой
+     теме нечитаем (у Axottle тут просто opacity — их палитра AA не проверяет). */
+  opacity:1; cursor:not-allowed; background:var(--bg3); border-color:var(--line-soft);
+  color:var(--t-faint); box-shadow:none; transform:none;
+}
+.axo-btn.is-quiet{ background:var(--bg2); border-color:var(--line); color:var(--t-low) }
+.axo-btn.is-quiet:hover:not(:disabled){ background:var(--bg3); color:var(--t-hi); box-shadow:none }
+.axo-btn.is-ghost{ background:transparent; color:var(--t-low) }
+.axo-btn.is-ghost:hover:not(:disabled){ background:var(--bg3); color:var(--t-hi); box-shadow:none }
+.axo-btn.is-danger{ background:var(--err-dim); border-color:var(--err-line); color:var(--err) }
+.axo-btn.is-danger:hover:not(:disabled){ box-shadow:none; filter:brightness(1.12) }
+.axo-btn.is-lg{ min-height:44px; padding:0 18px; font-size:14px }
+.axo-btn.is-sm{ min-height:32px; padding:0 10px; font-size:12px }
+.axo-btn.is-icon{ width:38px; min-height:38px; padding:0; border-radius:var(--axo-r-md);
+  background:var(--bg3); border-color:var(--line); color:var(--t-low) }
+.axo-btn.is-icon:hover:not(:disabled){ background:var(--bg2); border-color:var(--line-strong); color:var(--t-hi); box-shadow:none }
+
+/* Поле — .platform-form-dialog input{height:42px;border:1px solid #293840;border-radius:10px;background:#0b1115} */
+.axo-field{ display:flex; flex-direction:column; gap:6px }
+.axo-field > span{ color:var(--t-low); font-size:12px; font-weight:600 }
+.axo-input,
+.axo-textarea,
+.axo-select-native{
+  width:100%; min-height:40px; padding:0 11px; border-radius:var(--axo-r-md);
+  border:1px solid var(--line); background:var(--bg2); color:var(--t-hi);
+  font-family:var(--axo-sans); font-size:13px; font-weight:500; outline:0;
+  transition:border-color var(--axo-t-fast) ease, box-shadow var(--axo-t-fast) ease;
+}
+.axo-textarea{ min-height:88px; padding:9px 11px; line-height:1.5; resize:vertical }
+.axo-input::placeholder, .axo-textarea::placeholder{ color:var(--t-faint) }
+.axo-input:focus, .axo-textarea:focus, .axo-select-native:focus{
+  border-color:var(--accent-line); box-shadow:var(--axo-ring);
+}
+.axo-input.is-err{ border-color:var(--err) }   /* ошибку видно, а не «на 30% прозрачности» */
+.axo-select-native{ appearance:none; cursor:pointer; padding-right:30px }
+.axo-hint{ color:var(--t-faint); font-size:11.5px; line-height:1.45 }
+.axo-errmsg{ color:var(--err); font-size:11.5px; line-height:1.45 }
+
+/* Чекбокс/свитч */
+.axo-check{ display:inline-flex; align-items:center; gap:9px; color:var(--t-low); font-size:13px; cursor:pointer }
+.axo-check input{ width:17px; height:17px; accent-color:var(--accent); cursor:pointer }
+.axo-switch{ position:relative; width:34px; height:19px; border-radius:var(--axo-r-pill);
+  background:var(--bg3); border:1px solid var(--line-strong); flex:none; cursor:pointer;
+  transition:background var(--axo-t-base), border-color var(--axo-t-base) }
+.axo-switch::after{ content:""; position:absolute; top:3px; left:3px; width:11px; height:11px;
+  border-radius:50%; background:var(--t-faint); transition:transform var(--axo-t-base), background var(--axo-t-base) }
+.axo-switch[aria-checked="true"]{ background:var(--accent); border-color:var(--accent) }
+.axo-switch[aria-checked="true"]::after{ transform:translateX(15px); background:var(--accent-ink) }
+
+/* Карточка — .platform-card{border:1px solid #1e2632;border-radius:18px;background:#11161d;
+   box-shadow:0 12px 32px rgba(0,0,0,.13)} + влёт portal-card-in .45s cubic-bezier(.22,1,.36,1) */
+@keyframes axo-card-in{ from{ opacity:0; transform:translateY(10px) scale(.99) } to{ opacity:1; transform:none } }
+.axo-card{
+  border:1px solid var(--line); border-radius:var(--axo-r-lg); background:var(--bg2);
+  box-shadow:var(--axo-shadow-card); color:var(--t-mid);
+  animation:axo-card-in var(--axo-t-card) var(--axo-ease) both;
+}
+.axo-card-head{ display:flex; align-items:center; gap:11px; padding:16px 18px;
+  border-bottom:1px solid var(--line-soft) }
+.axo-card-head h2{ margin:0; font-family:var(--axo-display); font-weight:600; font-size:16px;
+  letter-spacing:-.035em; color:var(--t-hi) }
+.axo-card-head small{ display:block; margin-top:3px; color:var(--t-faint);
+  font-family:var(--axo-mono); font-size:11px; text-transform:uppercase; letter-spacing:.09em }
+.axo-card-icon{ width:38px; height:38px; flex:none; display:grid; place-items:center;
+  border:1px solid var(--accent-line); border-radius:var(--axo-r-md);
+  background:var(--axo-accent-soft); color:var(--accent) }
+.axo-card-body{ padding:18px }
+.axo-card-foot{ padding:14px 18px; border-top:1px solid var(--line-soft);
+  display:flex; align-items:center; justify-content:space-between; gap:10px }
+.axo-card.is-interactive{ transition:transform var(--axo-t-base) var(--axo-ease), border-color var(--axo-t-base) }
+.axo-card.is-interactive:hover{ transform:translateY(-2px); border-color:var(--line-strong) }
+
+/* Таблица — .data-table (шапка #141a21 моно капсом, строки 68px, hover #151b22) */
+.axo-table{ width:100%; border-collapse:separate; border-spacing:0; font-size:13px }
+.axo-table thead th{
+  text-align:left; padding:12px 16px; background:var(--axo-surface-table-head);
+  border-bottom:1px solid var(--line); color:var(--t-low);
+  font-family:var(--axo-mono); font-size:11px; font-weight:650; letter-spacing:.09em; text-transform:uppercase;
+  position:sticky; top:0; z-index:1;
+}
+.axo-table tbody td{ padding:12px 16px; border-bottom:1px solid var(--line-soft); color:var(--t-mid) }
+.axo-table tbody tr:last-child td{ border-bottom:0 }
+.axo-table tbody tr{ transition:background var(--axo-t-base) }
+.axo-table tbody tr:hover{ background:var(--bg3) }
+.axo-table td .axo-mono, .axo-table td code{ color:var(--t-hi); font-family:var(--axo-mono); font-weight:600 }
+.axo-table td.num{ text-align:right; font-family:var(--axo-mono); font-variant-numeric:tabular-nums }
+.axo-table-wrap{ border:1px solid var(--line); border-radius:var(--axo-r-lg); background:var(--bg2);
+  overflow:auto; box-shadow:var(--axo-shadow-card) }
+
+/* Бейдж/статус — .platform-status{min-height:26px;padding:0 8px;border-radius:999px;
+   font:650 11px var(--font-mono)} + .tone-* (фон .08, рамка .16-.2, яркий текст) */
+.axo-status{
+  display:inline-flex; align-items:center; gap:6px; min-height:24px; padding:0 8px;
+  border:1px solid var(--line-strong); background:var(--bg3); color:var(--t-low);
+  border-radius:var(--axo-r-pill); font-family:var(--axo-mono); font-size:11px; font-weight:650;
+  white-space:nowrap;
+}
+.axo-status::before{ content:""; width:5px; height:5px; border-radius:50%; background:currentColor; flex:none }
+.axo-status.tone-success{ border-color:var(--ok-line); background:var(--ok-dim); color:var(--ok) }
+.axo-status.tone-warning{ border-color:var(--warn-line); background:var(--warn-dim); color:var(--warn) }
+.axo-status.tone-danger{ border-color:var(--err-line); background:var(--err-dim); color:var(--err) }
+.axo-status.tone-info{ border-color:var(--accent-line); background:var(--accent-dim); color:var(--accent) }
+.axo-status.no-dot::before{ display:none }
+
+/* Табы — .platform-filter-pills button.is-active{background:#1a212a;color:#eaf1ed} */
+.axo-tabs{ display:flex; align-items:center; gap:4px; padding:4px; border:1px solid var(--line);
+  border-radius:var(--axo-r-md); background:var(--bg2); overflow-x:auto }
+.axo-tabs button{
+  min-height:32px; padding:0 12px; border:1px solid transparent; border-radius:var(--axo-r-sm);
+  background:transparent; color:var(--t-low); font-family:var(--axo-sans); font-size:13px;
+  font-weight:600; white-space:nowrap; cursor:pointer; transition:background var(--axo-t-base), color var(--axo-t-base);
+}
+.axo-tabs button:hover{ color:var(--t-hi) }
+.axo-tabs button.is-active{ background:var(--bg3); color:var(--t-hi); border-color:var(--line-strong) }
+.axo-tabs.is-accent button.is-active{ background:var(--accent-dim); border-color:var(--accent-line); color:var(--accent) }
+
+/* Модалка/диалог — .platform-dialog-layer{background:rgba(0,0,0,.7);backdrop-filter:blur(6px)} +
+   .platform-dialog{padding:27px;border-radius:20px;border:1px solid #2a3541;background:#11161d;
+   box-shadow:0 30px 100px rgba(0,0,0,.55);max-height:calc(100dvh - 40px);overflow:auto} */
+@keyframes axo-fade{ from{ opacity:0 } to{ opacity:1 } }
+.axo-dialog-layer{
+  position:fixed; inset:0; z-index:100; display:grid; place-items:center; padding:20px;
+  background:var(--overlay); backdrop-filter:blur(6px); animation:axo-fade .18s ease-out;
+}
+.axo-dialog{
+  position:relative; width:min(430px,100%); max-height:calc(100dvh - 40px); overflow:auto;
+  overscroll-behavior:contain; padding:27px; border:1px solid var(--line-strong);
+  border-radius:20px; background:var(--bg2); box-shadow:var(--axo-shadow-dialog);
+  animation:axo-card-in var(--axo-t-base) var(--axo-ease) both;
+}
+.axo-dialog.is-wide{ width:min(560px,100%) }
+.axo-dialog h2{ margin:0; font-family:var(--axo-display); font-weight:600; font-size:19px;
+  letter-spacing:-.035em; color:var(--t-hi) }
+.axo-dialog p{ margin:9px 0 0; color:var(--t-low); font-size:14px; line-height:1.6 }
+.axo-dialog-icon{ width:48px; height:48px; display:grid; place-items:center;
+  border:1px solid var(--warn-line); border-radius:14px; background:var(--warn-dim); color:var(--warn) }
+.axo-dialog-icon.is-danger{ border-color:var(--err-line); background:var(--err-dim); color:var(--err) }
+.axo-dialog-foot{ margin-top:21px; display:flex; justify-content:flex-end; gap:8px }
+.axo-dialog-close{
+  position:absolute; right:13px; top:13px; width:36px; height:36px; display:grid; place-items:center;
+  border:1px solid var(--line-strong); border-radius:var(--axo-r-sm); background:var(--bg3);
+  color:var(--t-low); cursor:pointer;
+}
+.axo-dialog-close:hover{ color:var(--t-hi) }
+
+/* Тост — .ConnectionCanvasDemo_toast{padding:10px 13px;border-radius:11px;font-size:11.5px;
+   box-shadow:0 12px 34px rgba(0,0,0,.5)}: danger #f0b9bc, info #e8ca9a */
+@keyframes axo-toast-in{ from{ opacity:0; transform:translateY(8px) } to{ opacity:1; transform:none } }
+.axo-toast-host{
+  position:fixed; left:50%; bottom:18px; z-index:120; transform:translateX(-50%);
+  display:flex; flex-direction:column; gap:8px; width:min(430px, calc(100vw - 24px)); pointer-events:none;
+}
+.axo-toast{
+  pointer-events:auto; padding:10px 13px; border:1px solid var(--line); border-radius:var(--axo-r-md);
+  background:var(--bg2); color:var(--t-mid); font-size:11.5px; line-height:1.5;
+  box-shadow:var(--axo-shadow-toast); animation:axo-toast-in var(--axo-t-base) ease-out;
+  display:flex; align-items:flex-start; gap:8px;
+}
+.axo-toast strong{ display:block; color:var(--t-hi); font-size:12px }
+.axo-toast.is-error{ border-color:var(--err-line); background:var(--err-dim); color:var(--err) }
+.axo-toast.is-warn{ border-color:var(--warn-line); background:var(--warn-dim); color:var(--warn) }
+.axo-toast.is-success{ border-color:var(--ok-line); background:var(--ok-dim); color:var(--ok) }
+.axo-toast.is-error strong, .axo-toast.is-warn strong, .axo-toast.is-success strong{ color:inherit }
+
+/* Скелетон — .skeleton{border-radius:10px;background:#141a21} + ::after shimmer 1.4s */
+@keyframes axo-shimmer{ to{ transform:translateX(100%) } }
+.axo-skeleton{
+  position:relative; overflow:hidden; border-radius:var(--axo-r-sm); background:var(--bg3);
+}
+.axo-skeleton::after{
+  content:""; position:absolute; inset:0; transform:translateX(-100%);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.06),transparent);
+  animation:axo-shimmer 1.4s infinite;
+}
+.axo-skeleton.is-title{ width:280px; max-width:70%; height:42px }
+.axo-skeleton.is-copy{ width:520px; max-width:80%; height:18px }
+.axo-skeleton.is-card{ height:145px; border-radius:var(--axo-r-lg) }
+.axo-skeleton.is-table{ height:360px; border-radius:var(--axo-r-lg) }
+.axo-skeleton-page{ display:flex; flex-direction:column; gap:14px }
+
+/* Пустое состояние — .platform-state{min-height:430px;padding:50px 24px;border:1px dashed #29333f;
+   border-radius:18px;background:#0e1217} + плитка иконки 56x56 радиусом 17px */
+.axo-empty{
+  min-height:260px; padding:40px 24px; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; text-align:center; border:1px dashed var(--line-strong);
+  border-radius:var(--axo-r-lg); background:var(--axo-surface-empty);
+}
+.axo-empty-icon{
+  width:56px; height:56px; display:grid; place-items:center; border:1px solid var(--line-strong);
+  border-radius:17px; background:var(--bg3); color:var(--t-low);
+}
+.axo-empty.is-error .axo-empty-icon{ border-color:var(--err-line); background:var(--err-dim); color:var(--err) }
+.axo-empty h2{ margin:18px 0 8px; font-family:var(--axo-display); font-weight:600; font-size:19px;
+  letter-spacing:-.035em; color:var(--t-hi) }
+.axo-empty p{ max-width:500px; margin:0; color:var(--t-low); font-size:13.5px; line-height:1.6 }
+.axo-empty-actions{ margin-top:18px; display:flex; gap:8px }
+.axo-empty.is-compact{ min-height:130px; padding:20px; flex-direction:row; gap:14px; text-align:left;
+  align-items:center }
+.axo-empty.is-compact h2{ margin:0 0 4px; font-size:15px }
+.axo-empty.is-compact .axo-empty-icon{ width:44px; height:44px; border-radius:13px; color:var(--accent) }
+
+/* Хлебные крошки — надзаголовок .platform-page-header>div:first-child>span (моно, капс, акцент) */
+.axo-breadcrumbs{ display:flex; align-items:center; gap:8px; font-size:12px; min-width:0 }
+.axo-breadcrumbs a, .axo-breadcrumbs button{
+  background:none; border:0; padding:0; cursor:pointer; color:var(--t-low); font-size:inherit;
+  font-family:var(--axo-mono); letter-spacing:.09em; text-transform:uppercase; font-weight:650;
+}
+.axo-breadcrumbs a:hover, .axo-breadcrumbs button:hover{ color:var(--t-hi) }
+.axo-breadcrumbs .sep{ color:var(--t-faint); flex:none }
+.axo-breadcrumbs .cur{ color:var(--t-hi); font-weight:600; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap }
+
+/* Каркас — .platform-shell{grid-template-columns:248px minmax(0,1fr);background:#08090a} +
+   .platform-sidebar{padding:20px 13px 15px;border-right:1px solid #1e2632} +
+   .platform-topbar{min-height:72px;padding:0 26px;background:rgba(8,9,10,.88);backdrop-filter:blur(20px)} */
+.axo-shell{ display:grid; grid-template-columns:248px minmax(0,1fr); min-height:100vh;
+  background:var(--bg0); color:var(--t-mid) }
+.axo-shell-sidebar{
+  display:flex; flex-direction:column; padding:20px 13px 15px; border-right:1px solid var(--line);
+  background:var(--bg1); position:sticky; top:0; height:100vh; overflow-y:auto;
+}
+.axo-shell-head{ padding:0 8px 20px; display:flex; align-items:center; justify-content:space-between }
+.axo-shell-main{ min-width:0; display:flex; flex-direction:column }
+.axo-topbar{
+  position:sticky; top:0; z-index:40; min-height:64px; padding:0 22px; display:flex; align-items:center;
+  gap:12px; border-bottom:1px solid var(--line); background:var(--topbar-bg);
+  backdrop-filter:blur(var(--glass-blur)); -webkit-backdrop-filter:blur(var(--glass-blur));
+}
+.axo-shell-content{ width:min(var(--axo-content),100%); margin-inline:auto; padding:30px 28px 64px }
+
+/* Прогресс — .platform-progress>i{height:6px;border-radius:999px;background:#202832} b{background:accent;
+   animation portal-progress .7s cubic-bezier(.22,1,.36,1)} */
+.axo-progress-track{ height:6px; border-radius:var(--axo-r-pill); background:var(--bg3); overflow:hidden }
+.axo-progress-fill{ height:100%; background:var(--accent); border-radius:inherit; transform-origin:left;
+  animation:axo-progress .7s var(--axo-ease) both }
+@keyframes axo-progress{ from{ transform:scaleX(0) } to{ transform:scaleX(1) } }
+
+/* Плитка поиска — .platform-search{height:42px;border-radius:11px;border:1px solid #28333f;background:#11161d} */
+.axo-search{
+  display:flex; align-items:center; gap:9px; min-height:40px; padding:0 12px;
+  border:1px solid var(--line); border-radius:var(--axo-r-md); background:var(--bg2);
+}
+.axo-search > svg{ color:var(--t-faint); flex:none }
+.axo-search input{ flex:1; min-width:0; border:0; outline:0; background:transparent;
+  color:var(--t-hi); font-family:var(--axo-sans); font-size:13px }
+
+/* ════════ F. Мобила и reduced-motion ════════
+   Источники: .platform-sidebar (fixed drawer min(310px,88vw), translateX(-105%) → 0 за .25s),
+   .platform-content{padding:26px 18px 56px} на узком экране. */
+@media (max-width:820px){
+  .axo-shell{ grid-template-columns:1fr }
+  .axo-shell-sidebar{
+    position:fixed; inset:0 auto 0 0; width:min(310px,88vw); transform:translateX(-105%);
+    transition:transform .25s ease; box-shadow:24px 0 70px rgba(0,0,0,.45); z-index:60;
+  }
+  .axo-shell-sidebar.is-open{ transform:translateX(0) }
+  .axo-topbar{ padding:0 16px }
+  .axo-shell-content{ padding:24px 16px 56px }
+}
+@media (prefers-reduced-motion: reduce){
+  .axo-card, .axo-dialog, .axo-toast, .axo-progress-fill, .axo-skeleton::after{
+    animation-duration:.001ms !important;
+  }
+  .axo-btn, .axo-switch, .axo-card.is-interactive{ transition-duration:.001ms !important }
+}
