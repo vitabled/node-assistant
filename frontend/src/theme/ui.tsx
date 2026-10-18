@@ -22,8 +22,10 @@ export function PageHeader({ icon, title, subtitle, actions }: {
   icon?: ReactNode; title: ReactNode; subtitle?: ReactNode; actions?: ReactNode;
 }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, marginBottom: 18 }}>
-      <div style={{ minWidth: 0 }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 14, marginBottom: 18 }}>
+      {/* basis 220px: при нехватке места actions уходят на новую строку,
+          а не сжимают заголовок в столбик. */}
+      <div style={{ minWidth: 0, flex: "1 1 220px" }}>
         <h1 className="h1" style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {/* .ni-pageicon — хук для тайла иконки под скином nodeflow; на
               остальных скинах стилей не имеет и ничего не меняет. */}
@@ -32,7 +34,7 @@ export function PageHeader({ icon, title, subtitle, actions }: {
         </h1>
         {subtitle && <p className="sub">{subtitle}</p>}
       </div>
-      {actions && <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>{actions}</div>}
+      {actions && <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{actions}</div>}
     </div>
   );
 }

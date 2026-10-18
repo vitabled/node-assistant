@@ -428,7 +428,7 @@ export function AutoTemplate() {
 
           {/* ── dns ── */}
           <Section title="DNS">
-            <div className="grid grid-cols-[1fr_220px] gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_220px] gap-2">
               <div>
                 <label className="label">servers (по строке)</label>
                 <Lines value={dns.servers || []} rows={3} onChange={v => set("dns.servers", v)} />
